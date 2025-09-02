@@ -1,0 +1,46 @@
+# Typography
+font.family: serif
+font.serif: Computer Modern Roman, Times New Roman, DejaVu Serif
+font.size: 12
+axes.labelsize: 12
+axes.titlesize: 12
+legend.fontsize: 10
+mathtext.fontset: stix
+text.usetex: True # set True if LaTeX is installed
+
+# Figure / saving
+figure.figsize: 6.4, 4.0
+figure.dpi: 120
+savefig.dpi: 300
+figure.autolayout: True
+savefig.bbox: tight
+savefig.pad_inches: 0.02
+savefig.transparent: False
+
+# Axes and lines
+axes.linewidth: 1.0
+axes.grid: True
+grid.color: 0.5
+grid.alpha: 0.3
+grid.linestyle: --
+lines.linewidth: 2.0
+lines.markersize: 6
+errorbar.capsize: 3
+
+# Spines
+axes.spines.top: False
+axes.spines.right: False
+
+# Ticks
+xtick.direction: in
+ytick.direction: in
+xtick.minor.visible: True
+ytick.minor.visible: True
+xtick.major.size: 6
+ytick.major.size: 6
+xtick.minor.size: 3
+ytick.minor.size: 3
+xtick.major.width: 1
+ytick.major.width: 1
+
+axes.prop_cycle: cycler('color', ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan']) + cycler('linestyle', ['-', '--', '-.', ':', '-', '--', '-.', ':', '-', '--'])
