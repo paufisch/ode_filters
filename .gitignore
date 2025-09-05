@@ -1,3 +1,6 @@
 *pde_venv
 *DS_Store
 *posterior_updates
+
+smoother_imgs/*
+filter_imgs/*

@@ -4,7 +4,7 @@ font.serif: Computer Modern Roman, Times New Roman, DejaVu Serif
 font.size: 12
 axes.labelsize: 12
 axes.titlesize: 12
-legend.fontsize: 10
+legend.fontsize: 12
 mathtext.fontset: stix
 text.usetex: True # set True if LaTeX is installed
 
@@ -14,12 +14,12 @@ figure.dpi: 120
 savefig.dpi: 300
 figure.autolayout: True
 savefig.bbox: tight
-savefig.pad_inches: 0.02
+savefig.pad_inches: 0.06
 savefig.transparent: False
 
 # Axes and lines
-axes.linewidth: 1.0
-axes.grid: True
+axes.linewidth: 1.5
+axes.grid: False
 grid.color: 0.5
 grid.alpha: 0.3
 grid.linestyle: --
@@ -28,19 +28,34 @@ lines.markersize: 6
 errorbar.capsize: 3
 
 # Spines
-axes.spines.top: False
-axes.spines.right: False
+axes.spines.top: True
+axes.spines.right: True
 
 # Ticks
 xtick.direction: in
 ytick.direction: in
-xtick.minor.visible: True
-ytick.minor.visible: True
+xtick.top: True
+ytick.right: True
+xtick.major.pad: 6
+ytick.major.pad: 6
+xtick.minor.visible: False
+ytick.minor.visible: False
 xtick.major.size: 6
 ytick.major.size: 6
 xtick.minor.size: 3
 ytick.minor.size: 3
-xtick.major.width: 1
-ytick.major.width: 1
+xtick.major.width: 1.25
+ytick.major.width: 1.25
 
-axes.prop_cycle: cycler('color', ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan']) + cycler('linestyle', ['-', '--', '-.', ':', '-', '--', '-.', ':', '-', '--'])
+# Extra margins and label padding for visual breathing room
+axes.xmargin: 0.05
+axes.ymargin: 0.05
+axes.labelpad: 6
+
+axes.prop_cycle: cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'])
+
+# Legend frame to match LaTeX-style boxed legend
+legend.frameon: True
+legend.fancybox: False
+legend.framealpha: 1.0
+legend.edgecolor: black
