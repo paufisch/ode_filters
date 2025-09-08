@@ -4,3 +4,5 @@
 
 smoother_imgs/*
 filter_imgs/*
+
+*/__pycache__
