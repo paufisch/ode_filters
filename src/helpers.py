@@ -193,7 +193,7 @@ def extended_kalman_filter(t, t_max, mu_0, Sigma_0, A, Q, R, z_sequence, g, jaco
     return m_projected, P_projected, m_future_projected, P_future_projected
 
 
-def plot_kalman_filter(t, ts, m_projected, P_projected, m_future_projected, P_future_projected, x_sequence=None, z_sequence=None, savefig=False, path="filter_imgs", x_lim=None, y_lim=None):
+def plot_kalman_filter(t, ts, m_projected, P_projected, m_future_projected, P_future_projected, x_sequence=None, z_sequence=None, savefig=False, path="filter_imgs", x_lim=None, y_lim=None, loc_pos='upper right'):
 
     plt.figure(figsize=(8, 4))
     # plot the ground truth if given
@@ -222,7 +222,7 @@ def plot_kalman_filter(t, ts, m_projected, P_projected, m_future_projected, P_fu
 
     plt.xlabel('Time')
     plt.ylabel('State')
-    plt.legend(loc='upper right')
+    plt.legend(loc=loc_pos)
     plt.grid(True)
     if savefig:
         plt.savefig(path + f'/kalman_filter_{t}.png')
