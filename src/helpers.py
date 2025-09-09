@@ -193,12 +193,12 @@ def extended_kalman_filter(t, t_max, mu_0, Sigma_0, A, Q, R, z_sequence, g, jaco
     return m_projected, P_projected, m_future_projected, P_future_projected
 
 
-def plot_kalman_filter(t, ts, m_projected, P_projected, m_future_projected, P_future_projected, x_sequence=None, z_sequence=None, savefig=False, path="filter_imgs"):
+def plot_kalman_filter(t, ts, m_projected, P_projected, m_future_projected, P_future_projected, x_sequence=None, z_sequence=None, savefig=False, path="filter_imgs", x_lim=None, y_lim=None):
 
     plt.figure(figsize=(8, 4))
     # plot the ground truth if given
     if x_sequence is not None:
-        plt.plot(x_sequence, label='ground truth', color='black', linestyle='--')
+        plt.plot(ts, x_sequence, label='ground truth', color='black', linestyle='--')
     # plot the observed data if given
     if z_sequence is not None:
         plt.scatter(ts[1:], z_sequence, color='black', s=20, alpha=0.3)
@@ -214,8 +214,11 @@ def plot_kalman_filter(t, ts, m_projected, P_projected, m_future_projected, P_fu
 
     #plt.axvline(x=t, color='black', alpha=0.3, label='current time')
     #plt.yticks(np.arange(-8, 2, 1))
-    plt.ylim(-5, 1)
-    plt.xlim(0, 100)
+    if x_lim != None:
+        plt.xlim(x_lim)
+    if y_lim != None:
+        plt.ylim(y_lim)
+    
 
     plt.xlabel('Time')
     plt.ylabel('State')
