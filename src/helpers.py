@@ -193,6 +193,42 @@ def extended_kalman_filter(t, t_max, mu_0, Sigma_0, A, Q, R, z_sequence, g, jaco
     return m_projected, P_projected, m_future_projected, P_future_projected
 
 
+#instead of returning only the projected prediciton of the first computation this full filter iterator returns the full predicitons for the full state variable
+def extended_kalman_filter_full(t, t_max, mu_0, Sigma_0, A, Q, R, z_sequence, g, jacobian_g):
+
+    m_sequence = [mu_0]
+    P_sequence = [Sigma_0] 
+
+    for i in range(t):
+        linearization_point = m_sequence[-1]
+        H = jacobian_g(linearization_point).reshape(1,-1)
+        c = g(linearization_point) - H @ linearization_point
+
+        m_prime, P_prime = filter_light_affine(m_sequence[-1], P_sequence[-1], A, Q, H, c, R, z_sequence[i])
+        m_sequence.append(m_prime)
+        P_sequence.append(P_prime)
+
+    m_future = [m_sequence[-1]]
+    P_future = [P_sequence[-1]]
+        
+    for i in range(t+1, t_max):
+        m_next, P_next = future_prediction(m_future[-1], P_future[-1], A, Q)
+        m_future.append(m_next)
+        P_future.append(P_next)
+
+    m_projected = np.array(m_sequence)
+    P_projected = np.array(P_sequence)
+    m_projected = m_projected.squeeze()
+    P_projected = P_projected.squeeze()
+
+    m_future_projected = np.array(m_future)
+    P_future_projected = np.array(P_future)
+    m_future_projected = m_future_projected.squeeze()
+    P_future_projected = P_future_projected.squeeze()
+
+    return m_projected, P_projected, m_future_projected, P_future_projected
+
+
 def plot_kalman_filter(t, ts, m_projected, P_projected, m_future_projected, P_future_projected, x_sequence=None, z_sequence=None, savefig=False, path="filter_imgs", x_lim=None, y_lim=None, loc_pos='upper right'):
 
     plt.figure(figsize=(8, 4))
@@ -206,11 +242,22 @@ def plot_kalman_filter(t, ts, m_projected, P_projected, m_future_projected, P_fu
 
     # plot the filtered estimate projeced to one dimesnion
     plt.plot(ts[:t+1], m_projected, color='red', alpha=0.7, label='filtered estimate')
-    plt.fill_between(ts[:t+1], m_projected - np.sqrt(P_projected), m_projected + np.sqrt(P_projected), color='red', alpha=0.2)
-
+    
+    # Ensure variance is non-negative and calculate bounds safely
+    P_safe = np.maximum(P_projected, 0)  # Clip negative variances to 0
+    std_dev = np.sqrt(P_safe)
+    lower_bound = m_projected - std_dev
+    upper_bound = m_projected + std_dev
+    plt.fill_between(ts[:t+1], lower_bound, upper_bound, color='red', alpha=0.2)
 
     plt.plot(ts[t:], m_future_projected, color='black', alpha=0.3, label='predicted future')
-    plt.fill_between(ts[t:], m_future_projected - np.sqrt(P_future_projected), m_future_projected + np.sqrt(P_future_projected), color='black', alpha=0.2)
+    
+    # Ensure variance is non-negative and calculate bounds safely for future predictions
+    P_future_safe = np.maximum(P_future_projected, 0)  # Clip negative variances to 0
+    std_dev_future = np.sqrt(P_future_safe)
+    lower_bound_future = m_future_projected - std_dev_future
+    upper_bound_future = m_future_projected + std_dev_future
+    plt.fill_between(ts[t:], lower_bound_future, upper_bound_future, color='black', alpha=0.2)
 
     #plt.axvline(x=t, color='black', alpha=0.3, label='current time')
     #plt.yticks(np.arange(-8, 2, 1))
