@@ -4,5 +4,6 @@
 
 smoother_imgs/*
 filter_imgs/*
+logistic_imgs/*
 
 */__pycache__
