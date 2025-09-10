@@ -528,3 +528,204 @@ def plot_smoothed_estimate(
     else:
         plt.show()
         plt.close()
+
+
+def plot_generator_kalman_filter(
+    t,
+    ts,
+    m_projected,
+    P_projected,
+    m_future_projected,
+    P_future_projected,
+    x_sequence=None,
+    z_sequence=None,
+    savefig=False,
+    path="filter_imgs",
+    x_lim=None,
+    y_lim=None,
+    loc_pos='upper right',
+    ax=None,
+):
+    """
+    Plot Kalman filter results on a provided axis or a new one.
+    Mirrors the notebook utility but with safe fill_between handling.
+    """
+
+    created_fig = False
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        created_fig = True
+
+    # ground truth
+    if x_sequence is not None:
+        ax.plot(ts, x_sequence, label='ground truth', color='black', linestyle='--')
+
+    # observations
+    if z_sequence is not None:
+        ax.scatter(ts[1:], z_sequence, color='black', s=20, alpha=0.3)
+        ax.scatter(ts[1:t+1], z_sequence[:t], s=20, alpha=1.0, label='observed data')
+
+    # filtered
+    ax.plot(ts[:t+1], m_projected, color='red', alpha=0.7, label='filtered estimate')
+    P_safe = np.maximum(P_projected, 0)
+    std_f = np.sqrt(P_safe)
+    lb_f = m_projected - std_f
+    ub_f = m_projected + std_f
+    fill_lower_f = np.minimum(lb_f, ub_f)
+    fill_upper_f = np.maximum(lb_f, ub_f)
+    ax.fill_between(ts[:t+1], fill_lower_f, fill_upper_f, color='red', alpha=0.2)
+
+    # future prediction
+    ax.plot(ts[t:], m_future_projected, color='black', alpha=0.3, label='predicted future')
+    P_future_safe = np.maximum(P_future_projected, 0)
+    std_fp = np.sqrt(P_future_safe)
+    lb_fp = m_future_projected - std_fp
+    ub_fp = m_future_projected + std_fp
+    fill_lower_fp = np.minimum(lb_fp, ub_fp)
+    fill_upper_fp = np.maximum(lb_fp, ub_fp)
+    ax.fill_between(ts[t:], fill_lower_fp, fill_upper_fp, color='black', alpha=0.2)
+
+    if x_lim is not None:
+        ax.set_xlim(x_lim)
+    if y_lim is not None:
+        ax.set_ylim(y_lim)
+
+    ax.set_xlabel('Time')
+    ax.set_ylabel('State')
+    if loc_pos is not None:
+        ax.legend(loc=loc_pos)
+    ax.grid(True)
+
+    if savefig and created_fig:
+        fig.savefig(path + f'/kalman_filter_{t}.png')
+        plt.close(fig)
+    elif created_fig:
+        plt.show()
+        plt.close(fig)
+
+    return ax
+
+
+def plot_kalman_filter_subplots(
+    step,
+    ts,
+    N,
+    mu_0,
+    Sigma_0,
+    A,
+    Q,
+    R,
+    z_sequence,
+    g,
+    jacobian_g,
+    exact_solutions,  # list of callables [x_exact, x_prime_exact, x_prime_prime_exact]
+    *,
+    savefig: bool = False,
+    img_path: str = "logistic_imgs",
+):
+    """
+    Create a 4x1 subplot figure of EKF results for the first three Taylor modes
+    and the residual measurement g(X) using the helper plot_generator_kalman_filter.
+
+    Args:
+        step: current filtering step (int)
+        ts: time array (1D)
+        N: total number of steps (int)
+        mu_0, Sigma_0, A, Q, R: model parameters
+        z_sequence: observation array length N (or N-1 depending on convention)
+        g, jacobian_g: measurement function and its jacobian
+        exact_solutions: list of callables evaluated on ts for ground truth
+        savefig: whether to save the figure
+        img_path: directory to save images to
+    """
+    # Run EKF to get full state sequences
+    m_filtered, P_filtered, m_predicted, P_predicted = extended_kalman_filter_full(
+        step, N, mu_0, Sigma_0, A, Q, R, z_sequence, g, jacobian_g
+    )
+
+    # Handle edge shapes for step=0 and step=N-1
+    if step == 0:
+        m_filtered = m_filtered.reshape(1, -1)
+        P_filtered = P_filtered.reshape(1, *P_filtered.shape)
+    if step == N - 1:
+        m_predicted = m_predicted.reshape(1, -1)
+        P_predicted = P_predicted.reshape(1, *P_predicted.shape)
+
+    # Build figure
+    fig, axs = plt.subplots(4, 1, figsize=(8, 12))
+
+    # First three components vs exact solutions
+    for i in range(3):
+        x_seq = exact_solutions[i](ts) if exact_solutions is not None else None
+        plot_generator_kalman_filter(
+            step,
+            ts,
+            m_filtered[:, i],
+            P_filtered[:, i, i],
+            m_predicted[:, i],
+            P_predicted[:, i, i],
+            x_sequence=x_seq,
+            x_lim=[0, 10],
+            y_lim=[0, 1],
+            loc_pos=None,
+            ax=axs[i],
+        )
+        axs[i].set_ylabel(f'$X^{{({i})}}(t)$')
+        # ticks/labels
+        axs[i].set_xticks([0, 10])
+        axs[i].set_xticklabels([])
+        axs[i].set_xlabel('')
+        axs[i].grid(False)
+
+    # z values and uncertainties
+    z_filtered = m_filtered[:, 1] - m_filtered[:, 0] * (1 - m_filtered[:, 0])
+    z_pred = m_predicted[:, 1] - m_predicted[:, 0] * (1 - m_predicted[:, 0])
+
+    z_filtered_uncertainty = []
+    for i in range(len(m_filtered)):
+        J = jacobian_g(m_filtered[i, :])
+        z_filtered_uncertainty.append(J @ P_filtered[i, :] @ J.T)
+    z_filtered_uncertainty = np.array(z_filtered_uncertainty)
+
+    z_pred_uncertainty = []
+    for i in range(len(m_predicted)):
+        Jp = jacobian_g(m_predicted[i, :])
+        z_pred_uncertainty.append(Jp @ P_predicted[i, :] @ Jp.T)
+    z_pred_uncertainty = np.array(z_pred_uncertainty)
+
+    # Fourth subplot: residual g(X)
+    plot_generator_kalman_filter(
+        step,
+        ts,
+        z_filtered,
+        z_filtered_uncertainty,
+        z_pred,
+        z_pred_uncertainty,
+        x_sequence=np.zeros_like(ts),
+        z_sequence=z_sequence[1:],
+        x_lim=[0, 10],
+        y_lim=[-0.1, 0.1],
+        loc_pos='lower left',
+        ax=axs[3],
+    )
+    axs[3].set_ylabel('$g(X(t))$')
+    axs[3].set_xlabel('Time')
+    axs[3].grid(False)
+    axs[3].set_xticks([0, 10])
+    axs[3].set_yticks([-0.1, 0, 0.1])
+
+    # Custom y-lims/ticks for first three plots as in notebook
+    axs[0].set_ylim([0, 1])
+    axs[0].set_yticks([0, 1])
+    axs[1].set_ylim([0, 0.4])
+    axs[1].set_yticks([0, 0.4])
+    axs[2].set_ylim([-0.4, 0.4])
+    axs[2].set_yticks([-0.2, 0.2])
+
+    plt.tight_layout()
+    if savefig:
+        plt.savefig(f"{img_path}/img_{step}.png")
+        plt.close()
+    else:
+        plt.show()
+    return fig, axs
