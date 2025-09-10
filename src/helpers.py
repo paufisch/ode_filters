@@ -276,3 +276,255 @@ def plot_kalman_filter(t, ts, m_projected, P_projected, m_future_projected, P_fu
     else:
         plt.show()
     plt.close()
+
+
+def extended_kalman_smoother_full(mu_0, Sigma_0, A, Q, R, z_sequence, g, jacobian_g, projection_index: int = 0):
+    """
+    Run an Extended Kalman Filter (with affine linearization of the observation)
+    followed by Rauch–Tung–Striebel smoothing.
+
+    Args:
+        mu_0: Initial mean vector (shape [state_dim])
+        Sigma_0: Initial covariance matrix (shape [state_dim, state_dim])
+        A: State transition matrix (shape [state_dim, state_dim])
+        Q: Process noise covariance (shape [state_dim, state_dim])
+        R: Observation noise covariance (shape [1, 1] or compatible)
+        z_sequence: Observations array (shape [T] or [T, 1])
+        g: Nonlinear observation function, g(x) -> scalar
+        jacobian_g: Function that returns Jacobian of g at x (shape [state_dim])
+        projection_index: Index of state dimension for 1D projection (default 0)
+
+    Returns:
+        m_sequence, P_sequence: Filtered means/covariances for t=0..T (arrays)
+        m_smoothed, P_smoothed: Smoothed means/covariances for t=0..T (arrays)
+        m_projected, P_projected: Filtered projections to the selected state index
+        m_smoothed_projected, P_smoothed_projected: Smoothed projections
+    """
+
+    # Normalize observations
+    z_sequence = np.asarray(z_sequence).reshape(-1)
+    T = len(z_sequence)
+
+    # Forward EKF (affine observation)
+    m_sequence = [mu_0]
+    P_sequence = [Sigma_0]
+    m_sequence_predicted = [mu_0]
+    P_sequence_predicted = [Sigma_0]
+
+    for t in range(T):
+        linearization_point = m_sequence[-1]
+        H = jacobian_g(linearization_point).reshape(1, -1)
+        c = g(linearization_point) - H @ linearization_point
+
+        (m_t, P_t), (m_t_bar, P_t_bar) = filter_affine(
+            m_sequence[-1], P_sequence[-1], A, Q, H, c, R, z_sequence[t]
+        )
+
+        m_sequence.append(m_t)
+        P_sequence.append(P_t)
+        m_sequence_predicted.append(m_t_bar)
+        P_sequence_predicted.append(P_t_bar)
+
+    m_sequence = np.array(m_sequence)
+    P_sequence = np.array(P_sequence)
+    m_sequence_predicted = np.array(m_sequence_predicted)
+    P_sequence_predicted = np.array(P_sequence_predicted)
+
+    # RTS smoothing (backward)
+    m_smoothed = [m_sequence[-1]]
+    P_smoothed = [P_sequence[-1]]
+    for back in range(1, T + 1):
+        idx = T - back
+        m_prev_s, P_prev_s = smoother(
+            m_sequence[idx],
+            P_sequence[idx],
+            A,
+            m_sequence_predicted[idx + 1],
+            P_sequence_predicted[idx + 1],
+            m_smoothed[-1],
+            P_smoothed[-1],
+        )
+        m_smoothed.append(m_prev_s)
+        P_smoothed.append(P_prev_s)
+
+    # Reverse to chronological order
+    m_smoothed = m_smoothed[::-1]
+    P_smoothed = P_smoothed[::-1]
+
+    m_smoothed = np.array(m_smoothed)
+    P_smoothed = np.array(P_smoothed)
+
+    # Projections to 1D (selected state index)
+    m_projected = m_sequence[:, projection_index].squeeze()
+    P_projected = np.array(P_sequence)[:, projection_index, projection_index].squeeze()
+
+    m_smoothed_projected = m_smoothed[:, projection_index].squeeze()
+    P_smoothed_projected = np.array(P_smoothed)[:, projection_index, projection_index].squeeze()
+
+    return (
+        m_sequence,
+        P_sequence,
+        m_smoothed,
+        P_smoothed,
+        m_projected,
+        P_projected,
+        m_smoothed_projected,
+        P_smoothed_projected,
+    )
+
+
+def kalman_smoother_full(mu_0, Sigma_0, A, Q, H, R, z_sequence):
+    """
+    Linear Kalman filter forward pass followed by RTS smoothing.
+
+    Args:
+        mu_0: Initial mean (shape [state_dim])
+        Sigma_0: Initial covariance (shape [state_dim, state_dim])
+        A: State transition (shape [state_dim, state_dim])
+        Q: Process noise covariance (shape [state_dim, state_dim])
+        H: Observation matrix (shape [1, state_dim])
+        R: Observation noise covariance (shape [1, 1])
+        z_sequence: Observations array (shape [T] or [T, 1])
+
+    Returns:
+        m_sequence, P_sequence: Filtered means/covariances (arrays length T+1)
+        m_smoothed, P_smoothed: Smoothed means/covariances (arrays length T+1)
+        m_projected, P_projected: Filtered 1D projection via H
+        m_smoothed_projected, P_smoothed_projected: Smoothed 1D projection via H
+    """
+
+    z_sequence = np.asarray(z_sequence).reshape(-1)
+    T = len(z_sequence)
+
+    # Forward Kalman filter (linear)
+    m_sequence = [mu_0]
+    P_sequence = [Sigma_0]
+    m_sequence_predicted = [mu_0]
+    P_sequence_predicted = [Sigma_0]
+
+    for t in range(T):
+        (m_t, P_t), (m_t_bar, P_t_bar) = filter(
+            m_sequence[-1], P_sequence[-1], A, Q, H, R, z_sequence[t]
+        )
+        m_sequence.append(m_t)
+        P_sequence.append(P_t)
+        m_sequence_predicted.append(m_t_bar)
+        P_sequence_predicted.append(P_t_bar)
+
+    m_sequence = np.array(m_sequence)
+    P_sequence = np.array(P_sequence)
+    m_sequence_predicted = np.array(m_sequence_predicted)
+    P_sequence_predicted = np.array(P_sequence_predicted)
+
+    # RTS smoothing
+    m_smoothed = [m_sequence[-1]]
+    P_smoothed = [P_sequence[-1]]
+    for back in range(1, T + 1):
+        idx = T - back
+        m_prev_s, P_prev_s = smoother(
+            m_sequence[idx],
+            P_sequence[idx],
+            A,
+            m_sequence_predicted[idx + 1],
+            P_sequence_predicted[idx + 1],
+            m_smoothed[-1],
+            P_smoothed[-1],
+        )
+        m_smoothed.append(m_prev_s)
+        P_smoothed.append(P_prev_s)
+
+    m_smoothed = m_smoothed[::-1]
+    P_smoothed = P_smoothed[::-1]
+    m_smoothed = np.array(m_smoothed)
+    P_smoothed = np.array(P_smoothed)
+
+    # 1D projection using H
+    # Means: m @ H.T → shape (T+1, 1) → squeeze to (T+1,)
+    m_projected = (m_sequence @ H.T).squeeze()
+    m_smoothed_projected = (m_smoothed @ H.T).squeeze()
+
+    # Variances: H P H^T → shape (T+1, 1, 1) → squeeze
+    HP = np.einsum('ij,tjk->tik', H, P_sequence)
+    P_projected = np.einsum('tik,kj->ti', HP, H.T).squeeze()
+
+    HP_s = np.einsum('ij,tjk->tik', H, P_smoothed)
+    P_smoothed_projected = np.einsum('tik,kj->ti', HP_s, H.T).squeeze()
+
+    return (
+        m_sequence,
+        P_sequence,
+        m_smoothed,
+        P_smoothed,
+        m_projected,
+        P_projected,
+        m_smoothed_projected,
+        P_smoothed_projected,
+    )
+
+
+def plot_smoothed_estimate(
+    t,
+    ts,
+    x_sequence,
+    z_sequence,
+    m_projected,
+    P_projected,
+    m_smoothed_projected,
+    P_smoothed_projected,
+    *,
+    savefig: bool = False,
+    path: str = "smoother_imgs",
+    x_lim=None,
+    y_lim=None,
+    loc_pos: str = 'upper right',
+):
+    """
+    Plot filtered and smoothed 1D projections with safe uncertainty bands.
+
+    Args mirror the notebook version but live here for reuse.
+    """
+    plt.figure(figsize=(8, 4))
+
+    # ground truth and observations
+    if x_sequence is not None:
+        plt.plot(x_sequence, label='ground truth', color='black', linestyle='--')
+    if z_sequence is not None:
+        plt.scatter(ts[1:], z_sequence, s=20, alpha=0.7, label='observed data')
+
+    # filtered
+    plt.plot(ts[:t+1], m_projected[:t+1], color='red', alpha=0.7, label='filtered estimate')
+    P_f_safe = np.maximum(P_projected[:t+1], 0)
+    std_f = np.sqrt(P_f_safe)
+    lb_f = m_projected[:t+1] - std_f
+    ub_f = m_projected[:t+1] + std_f
+    fill_lower_f = np.minimum(lb_f, ub_f)
+    fill_upper_f = np.maximum(lb_f, ub_f)
+    plt.fill_between(ts[:t+1], fill_lower_f, fill_upper_f, color='red', alpha=0.2)
+
+    # smoothed
+    plt.plot(ts[t:], m_smoothed_projected[t:], color='blue', alpha=0.7, label='smoothed estimate')
+    P_s_safe = np.maximum(P_smoothed_projected[t:], 0)
+    std_s = np.sqrt(P_s_safe)
+    lb_s = m_smoothed_projected[t:] - std_s
+    ub_s = m_smoothed_projected[t:] + std_s
+    fill_lower_s = np.minimum(lb_s, ub_s)
+    fill_upper_s = np.maximum(lb_s, ub_s)
+    plt.fill_between(ts[t:], fill_lower_s, fill_upper_s, color='blue', alpha=0.2)
+
+    if y_lim is not None:
+        plt.ylim(y_lim)
+    if x_lim is not None:
+        plt.xlim(x_lim)
+
+    plt.xlabel('Time')
+    plt.ylabel('State')
+    if loc_pos is not None:
+        plt.legend(loc=loc_pos)
+    plt.grid(True)
+
+    if savefig:
+        plt.savefig(f'{path}/kalman_filter_{t}.png')
+        plt.close()
+    else:
+        plt.show()
+        plt.close()
