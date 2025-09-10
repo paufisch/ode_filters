@@ -729,3 +729,252 @@ def plot_kalman_filter_subplots(
     else:
         plt.show()
     return fig, axs
+
+
+def plot_smoothed_estimate_subplots(
+    t,
+    ts,
+    m_filtered,
+    P_filtered,
+    m_smoothed,
+    P_smoothed,
+    *,
+    exact_solutions=None,  # list of callables for ground truth per component
+    g=None,
+    jacobian_g=None,
+    z_sequence=None,
+    savefig: bool = False,
+    img_path: str = "smoother_imgs",
+):
+    """
+    Create a 4x1 subplot figure for smoother results:
+    - First three subplots: component-wise filtered (up to t) and smoothed (from t onward)
+    - Fourth subplot: residual g(X) with uncertainties (requires g and jacobian_g)
+
+    Args:
+        t: split index between filtered and smoothed display
+        ts: time array (1D)
+        m_filtered, P_filtered: arrays of shape [T+1, d], [T+1, d, d]
+        m_smoothed, P_smoothed: arrays of shape [T+1, d], [T+1, d, d]
+        exact_solutions: list of callables [x_exact, x_prime_exact, x_prime_prime_exact]
+        g, jacobian_g: functions for residual plot and uncertainty
+        z_sequence: optional observations for residual subplot
+    """
+    d = m_filtered.shape[1]
+    fig, axs = plt.subplots(4, 1, figsize=(8, 12))
+
+    # First three components
+    for i in range(min(3, d)):
+        # Ground truth if available
+        if exact_solutions is not None:
+            try:
+                axs[i].plot(ts, exact_solutions[i](ts), label='ground truth', color='black', linestyle='--')
+            except Exception:
+                pass
+
+        # Filtered up to t
+        # Align lengths for filtered segment (0..t)
+        n_fx = min(t + 1, len(ts))
+        n_fy = min(t + 1, m_filtered.shape[0])
+        n_f = min(n_fx, n_fy)
+        axs[i].plot(ts[:n_f], m_filtered[:n_f, i], color='red', alpha=0.7, label='filtered')
+        Pf_safe = np.maximum(P_filtered[:n_f, i, i], 0)
+        stdf = np.sqrt(Pf_safe)
+        lb_f = m_filtered[:n_f, i] - stdf
+        ub_f = m_filtered[:n_f, i] + stdf
+        fill_lower_f = np.minimum(lb_f, ub_f)
+        fill_upper_f = np.maximum(lb_f, ub_f)
+        axs[i].fill_between(ts[:n_f], fill_lower_f, fill_upper_f, color='red', alpha=0.2)
+
+        # Smoothed from t onward
+        # Align lengths for smoothed segment (t..end)
+        n_sx = max(len(ts) - t, 0)
+        n_sy = max(m_smoothed.shape[0] - t, 0)
+        n_s = min(n_sx, n_sy)
+        if n_s > 0:
+            axs[i].plot(ts[t:t+n_s], m_smoothed[t:t+n_s, i], color='blue', alpha=0.7, label='smoothed')
+            Ps_safe = np.maximum(P_smoothed[t:t+n_s, i, i], 0)
+            stds = np.sqrt(Ps_safe)
+            lb_s = m_smoothed[t:t+n_s, i] - stds
+            ub_s = m_smoothed[t:t+n_s, i] + stds
+            fill_lower_s = np.minimum(lb_s, ub_s)
+            fill_upper_s = np.maximum(lb_s, ub_s)
+            axs[i].fill_between(ts[t:t+n_s], fill_lower_s, fill_upper_s, color='blue', alpha=0.2)
+
+        # Styling to match other helper
+        axs[i].set_ylabel(f'$X^{{({i})}}(t)$')
+        axs[i].set_xticks([ts[0], ts[-1]])
+        axs[i].set_xticklabels([])
+        axs[i].set_xlabel('')
+        axs[i].grid(False)
+
+    # Residual subplot (requires g and jacobian)
+    if g is not None and jacobian_g is not None:
+        # Residuals from means
+        z_filt = m_filtered[:, 1] - m_filtered[:, 0] * (1 - m_filtered[:, 0]) if g is not None else None
+        z_smooth = m_smoothed[:, 1] - m_smoothed[:, 0] * (1 - m_smoothed[:, 0]) if g is not None else None
+
+        # Uncertainty via linearization
+        zf_var = []
+        for k in range(m_filtered.shape[0]):
+            Jk = jacobian_g(m_filtered[k, :])
+            zf_var.append(Jk @ P_filtered[k, :] @ Jk.T)
+        zf_var = np.maximum(np.array(zf_var).reshape(-1), 0)
+
+        zs_var = []
+        for k in range(m_smoothed.shape[0]):
+            Jk = jacobian_g(m_smoothed[k, :])
+            zs_var.append(Jk @ P_smoothed[k, :] @ Jk.T)
+        zs_var = np.maximum(np.array(zs_var).reshape(-1), 0)
+
+        # Filtered up to t
+        # Filtered residual segment alignment
+        n_zfx = min(t + 1, len(ts))
+        n_zfy = min(t + 1, z_filt.shape[0])
+        n_zf = min(n_zfx, n_zfy)
+        axs[3].plot(ts[:n_zf], z_filt[:n_zf], color='red', alpha=0.7, label='filtered residual')
+        std_zf = np.sqrt(zf_var[:n_zf])
+        lb_zf = z_filt[:n_zf] - std_zf
+        ub_zf = z_filt[:n_zf] + std_zf
+        axs[3].fill_between(ts[:n_zf], np.minimum(lb_zf, ub_zf), np.maximum(lb_zf, ub_zf), color='red', alpha=0.2)
+
+        # Smoothed from t onward
+        # Smoothed residual segment alignment
+        n_zsx = max(len(ts) - t, 0)
+        n_zsy = max(z_smooth.shape[0] - t, 0)
+        n_zs = min(n_zsx, n_zsy)
+        if n_zs > 0:
+            axs[3].plot(ts[t:t+n_zs], z_smooth[t:t+n_zs], color='blue', alpha=0.7, label='smoothed residual')
+            std_zs = np.sqrt(zs_var[t:t+n_zs])
+            lb_zs = z_smooth[t:t+n_zs] - std_zs
+            ub_zs = z_smooth[t:t+n_zs] + std_zs
+            axs[3].fill_between(ts[t:t+n_zs], np.minimum(lb_zs, ub_zs), np.maximum(lb_zs, ub_zs), color='blue', alpha=0.2)
+
+        if z_sequence is not None:
+            axs[3].scatter(ts[1:], z_sequence, s=20, alpha=0.7, label='observed data')
+
+        axs[3].set_ylabel('$g(X(t))$')
+        axs[3].set_xlabel('Time')
+        axs[3].grid(False)
+        axs[3].set_xticks([ts[0], ts[-1]])
+    else:
+        axs[3].axis('off')
+
+    # Example compact y-lims similar to filter subplots (optional; caller can adjust after)
+    # Leave as-is to avoid over-constraining; users can set via returned axes.
+
+    plt.tight_layout()
+    if savefig:
+        plt.savefig(f"{img_path}/smoother_{t}.png")
+        plt.close()
+    else:
+        plt.show()
+    return fig, axs
+
+
+def plot_filtered_smoothed_subplots_full(
+    ts,
+    m_filtered,
+    P_filtered,
+    m_smoothed,
+    P_smoothed,
+    *,
+    exact_solutions=None,
+    g=None,
+    jacobian_g=None,
+    z_sequence=None,
+    savefig: bool = False,
+    img_path: str = "smoother_imgs",
+    fname: str = "filtered_smoothed_full.png",
+):
+    """
+    Plot filtered and smoothed results over the FULL time range in 4 subplots.
+
+    - Subplots 1–3: each state component with filtered (red) and smoothed (blue)
+      curves and their safe uncertainty bands across the full timeline.
+    - Subplot 4: residual g(X) (if g and jacobian_g provided) with uncertainty.
+    """
+    T = m_filtered.shape[0]
+    d = m_filtered.shape[1]
+
+    fig, axs = plt.subplots(4, 1, figsize=(8, 12))
+
+    for i in range(min(3, d)):
+        # Ground truth
+        if exact_solutions is not None:
+            try:
+                axs[i].plot(ts, exact_solutions[i](ts), label='ground truth', color='black', linestyle='--')
+            except Exception:
+                pass
+
+        # Align lengths
+        n = min(len(ts), T)
+
+        # Filtered full
+        axs[i].plot(ts[:n], m_filtered[:n, i], color='red', alpha=0.7, label='filtered')
+        Pf_safe = np.maximum(P_filtered[:n, i, i], 0)
+        stdf = np.sqrt(Pf_safe)
+        lb_f = m_filtered[:n, i] - stdf
+        ub_f = m_filtered[:n, i] + stdf
+        axs[i].fill_between(ts[:n], np.minimum(lb_f, ub_f), np.maximum(lb_f, ub_f), color='red', alpha=0.2)
+
+        # Smoothed full
+        axs[i].plot(ts[:n], m_smoothed[:n, i], color='blue', alpha=0.7, label='smoothed')
+        Ps_safe = np.maximum(P_smoothed[:n, i, i], 0)
+        stds = np.sqrt(Ps_safe)
+        lb_s = m_smoothed[:n, i] - stds
+        ub_s = m_smoothed[:n, i] + stds
+        axs[i].fill_between(ts[:n], np.minimum(lb_s, ub_s), np.maximum(lb_s, ub_s), color='blue', alpha=0.2)
+
+        axs[i].set_ylabel(f'$X^{{({i})}}(t)$')
+        axs[i].set_xticks([ts[0], ts[-1]])
+        axs[i].set_xticklabels([])
+        axs[i].grid(False)
+
+    # Residual subplot
+    if g is not None and jacobian_g is not None:
+        n = min(len(ts), T)
+        # Residual means
+        z_filt = m_filtered[:n, 1] - m_filtered[:n, 0] * (1 - m_filtered[:n, 0])
+        z_smooth = m_smoothed[:n, 1] - m_smoothed[:n, 0] * (1 - m_smoothed[:n, 0])
+
+        # Variances via linearization
+        zf_var = []
+        zs_var = []
+        for k in range(n):
+            Jf = jacobian_g(m_filtered[k, :])
+            zf_var.append(Jf @ P_filtered[k, :] @ Jf.T)
+            Js = jacobian_g(m_smoothed[k, :])
+            zs_var.append(Js @ P_smoothed[k, :] @ Js.T)
+        zf_var = np.maximum(np.array(zf_var).reshape(-1), 0)
+        zs_var = np.maximum(np.array(zs_var).reshape(-1), 0)
+
+        axs[3].plot(ts[:n], z_filt, color='red', alpha=0.7, label='filtered residual')
+        std_zf = np.sqrt(zf_var)
+        lb_zf = z_filt - std_zf
+        ub_zf = z_filt + std_zf
+        axs[3].fill_between(ts[:n], np.minimum(lb_zf, ub_zf), np.maximum(lb_zf, ub_zf), color='red', alpha=0.2)
+
+        axs[3].plot(ts[:n], z_smooth, color='blue', alpha=0.7, label='smoothed residual')
+        std_zs = np.sqrt(zs_var)
+        lb_zs = z_smooth - std_zs
+        ub_zs = z_smooth + std_zs
+        axs[3].fill_between(ts[:n], np.minimum(lb_zs, ub_zs), np.maximum(lb_zs, ub_zs), color='blue', alpha=0.2)
+
+        if z_sequence is not None:
+            axs[3].scatter(ts[1:n], z_sequence[:max(n-1,0)], s=20, alpha=0.7, label='observed data')
+
+        axs[3].set_ylabel('$g(X(t))$')
+        axs[3].set_xlabel('Time')
+        axs[3].set_xticks([ts[0], ts[-1]])
+        axs[3].grid(False)
+    else:
+        axs[3].axis('off')
+
+    plt.tight_layout()
+    if savefig:
+        plt.savefig(f"{img_path}/{fname}")
+        plt.close()
+    else:
+        plt.show()
+    return fig, axs
