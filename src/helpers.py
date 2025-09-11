@@ -164,7 +164,8 @@ def extended_kalman_filter(t, t_max, mu_0, Sigma_0, A, Q, R, z_sequence, g, jaco
     P_sequence = [Sigma_0] 
 
     for i in range(t):
-        linearization_point = m_sequence[-1]
+        linearization_point, _ = future_prediction(m_sequence[-1], P_sequence[-1], A, Q)
+        #linearization_point = m_sequence[-1]
         H = jacobian_g(linearization_point).reshape(1,-1)
         c = g(linearization_point) - H @ linearization_point
 
