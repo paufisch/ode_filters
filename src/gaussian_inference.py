@@ -17,7 +17,6 @@ def marginalization(A, b, Q, mu, Sigma):
 def inversion(A, b, Q, mu, Sigma, z):
 
     mu_z, Sigma_z = marginalization(A, b, Q, mu, Sigma)
-
     Sigma_z_2d = np.atleast_2d(Sigma_z)
     #G = Sigma @ A.T @ np.linalg.inv(Sigma_z_2d) 
     #instead of the naive inverse computation more efficiently:
