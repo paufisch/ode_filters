@@ -1,7 +1,5 @@
 import numpy as np
 
-from scipy.linalg import cho_factor, cho_solve
-
 def conditioning(A, x, b, Q):
 
     return A @ x + b, Q

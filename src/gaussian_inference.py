@@ -26,8 +26,8 @@ def inversion(A, b, Q, mu, Sigma, z):
     
     
     d = mu - G @ mu_z
-    #Lambda = Sigma - G @ Sigma_z @ G.T
-    B = np.eye((G@A).shape[0]) - G@A
-    Lambda = B @ Sigma @ B.T + G @ Q @ G.T #Josephson Form
+    Lambda = Sigma - G @ Sigma_z @ G.T
+    #B = np.eye((G@A).shape[0]) - G@A
+    #Lambda = B @ Sigma @ B.T + G @ Q @ G.T #Josephson Form
     return conditioning(G, z, d, Lambda)
 
