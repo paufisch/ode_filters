@@ -9,6 +9,8 @@ def conditioning(A, x, b, Q):
 def sqr_marginalization(A, b, Q_sqr, mu, Sigma_sqr):
 
     mu_z = A @ mu + b
+    print((A @ Sigma_sqr).shape)
+    print((Q_sqr.shape))
     C = np.concatenate([A @ Sigma_sqr, Q_sqr], axis=0)
     _, Sigma_z_sqr = np.linalg.qr(C)
 
@@ -27,5 +29,5 @@ def sqr_inversion(A, b, Q_sqr, mu, Sigma_sqr, z):
     C = np.concatenate([Sigma_sqr @ B.T, Q_sqr @ G.T])
     _, Lambda_sqr = np.linalg.qr(C)
     
-    return G, d, Lambda_sqr
+    return conditioning(G, z, d, Lambda_sqr)
 
