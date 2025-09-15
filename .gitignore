@@ -3,8 +3,10 @@ probnum_venv/*
 *DS_Store
 *posterior_updates
 
+#image folders
 smoother_imgs/*
 filter_imgs/*
 logistic_imgs/*
+ODE_filter_imgs/*
 
 */__pycache__
