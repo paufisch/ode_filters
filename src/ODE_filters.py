@@ -110,5 +110,29 @@ def compute_kalman_forward_stable(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian
     return m_sequence, P_sequence, m_predictions, P_predictions
 
 
-def kf_smoother_step():
-    return 0
+def kf_smoother_step(m_t, P_t, A, m_pred, P_pred, m_smooth, P_smooth):
+    
+    #G = P_t @ A.T @ np.linalg.inv(P_pred)
+    #instead of the naive inverse computation more efficiently:
+    L, lower = cho_factor(P_pred, lower=True, check_finite=False)
+    Y = cho_solve((L, lower), (P_t @ A.T).T, check_finite=False)
+    G = Y.T
+    m_t_s = m_t + G @ (m_smooth - m_pred)
+    P_t_s = P_t + G @ (P_smooth - P_pred) @ G.T
+
+    return m_t_s, P_t_s
+
+
+def compute_kalman_backward(m_seq, P_seq, m_pred, P_pred, A_h, N):
+    m_smoothed = [m_seq[-1]]
+    P_smoothed = [P_seq[-1,...]]
+
+    for i in range(1,N+1):
+        m_t_s, P_t_s = kf_smoother_step(m_seq[N-i], P_seq[N-i,...], A_h, m_pred[-i], P_pred[-i,...], m_smoothed[-1], P_smoothed[-1])
+        m_smoothed.append(m_t_s)
+        P_smoothed.append(P_t_s)
+
+    m_smoothed = np.array(m_smoothed)[::-1]
+    P_smoothed = np.array(P_smoothed)[::-1]
+
+    return m_smoothed, P_smoothed
