@@ -1,0 +1,114 @@
+#single step of a kalman filter
+from src.gaussian_inference import *
+from src.sqr_gaussian_inference import *
+
+
+
+def ekf1_filter_step(A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_observed):
+
+    m_pred, P_pred = marginalization(A_t, b_t, Q_t, mu_t, Sigma_t)
+
+    #linearize the observation model
+    H_t = jacobian_g(m_pred)
+    c_t = g(m_pred) - H_t @ m_pred
+
+    # predict/estimate the next observationm: p(z_n|x_n)
+    #z_expected, S_sqr = sqr_marginalization(H_n, c, R_h, m_next, P_next_sqr)
+
+    #compute backward transition: p(z_n|x_n)
+    #this actually implicitly first computes the observation estimate which is why the above line is commented
+
+    #observe z:
+    m_updated, P_updated = inversion(H_t, c_t, R_t, m_pred, P_pred, z_observed)
+    
+    return (m_pred, P_pred), (m_updated, P_updated)
+
+
+#single step of a kalman filter
+def ekf1_filter_step_stable(A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_observed):
+
+    m_pred, P_pred = sqr_marginalization(A_t, b_t, Q_t, mu_t, Sigma_t)
+
+    #linearize the observation model
+    H_t = jacobian_g(m_pred)
+    c_t = g(m_pred) - H_t @ m_pred
+
+    # predict/estimate the next observationm: p(z_n|x_n)
+    #z_expected, S_sqr = sqr_marginalization(H_n, c, R_h, m_next, P_next_sqr)
+
+    #compute backward transition: p(z_n|x_n)
+    #this actually implicitly first computes the observation estimate which is why the above line is commented
+
+    #observe z:
+    m_updated, P_updated = sqr_inversion(H_t, c_t, R_t, m_pred, P_pred, z_observed)
+    
+    return (m_pred, P_pred), (m_updated, P_updated)
+
+
+def compute_kalman_forward(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N):
+    #complete forward kalman filtering pass:
+    m_sequence = [mu_0]
+    P_sequence = [Sigma_0] 
+    m_predictions = []
+    P_predictions = []
+
+    for i in range(N):
+        #this index correspnds to the timestep 
+        #print(ts[i+1])
+        #h = ts[i+1]-ts[i]
+        (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i,:])
+        m_sequence.append(m_nxt)
+        P_sequence.append(P_nxt)
+        m_predictions.append(m_pred_nxt)
+        P_predictions.append(P_pred_nxt)
+
+
+    m_sequence = np.array(m_sequence)
+    P_sequence = np.array(P_sequence)
+    m_predictions = np.array(m_predictions)
+    P_predictions = np.array(P_predictions)
+
+    return m_sequence, P_sequence, m_predictions, P_predictions
+
+
+def compute_kalman_forward_stable(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N):
+    #complete forward kalman filtering pass:
+    Q_h = np.linalg.cholesky(Q_h).T
+    #R_h = np.linalg.cholesky(R_h).T
+    #Sigma_0 = np.linalg.cholesky(Sigma_0).T
+    
+    
+    m_sequence = [mu_0]
+    P_sequence = [Sigma_0] 
+    m_predictions = []
+    P_predictions = []
+
+    for i in range(N):
+        #this index correspnds to the timestep 
+        #print(ts[i+1])
+        #h = ts[i+1]-ts[i]
+        (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step_stable(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i,:])
+        m_sequence.append(m_nxt)
+        P_sequence.append(P_nxt)
+        m_predictions.append(m_pred_nxt)
+        P_predictions.append(P_pred_nxt)
+
+
+    m_sequence = np.array(m_sequence)
+    P_sequence = np.array(P_sequence)
+    m_predictions = np.array(m_predictions)
+    P_predictions = np.array(P_predictions)
+
+        # Important: square covariances 
+    for i in range(P_sequence.shape[0]):
+        P_sequence[i,...] = P_sequence[i,...].T @ P_sequence[i,...]
+
+        # Important: square covariances 
+    for i in range(P_predictions.shape[0]):
+        P_predictions[i,...] = P_predictions[i,...].T @ P_predictions[i,...]
+
+    return m_sequence, P_sequence, m_predictions, P_predictions
+
+
+def kf_smoother_step():
+    return 0
