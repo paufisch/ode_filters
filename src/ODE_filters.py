@@ -136,3 +136,22 @@ def compute_kalman_backward(m_seq, P_seq, m_pred, P_pred, A_h, N):
     P_smoothed = np.array(P_smoothed)[::-1]
 
     return m_smoothed, P_smoothed
+
+
+def backward_transitions(m_seq, P_seq, m_pred, P_pred, A_h, N):
+
+    Gs, ds, Lambdas = [], [], []
+    for i in range(1,N+1):
+        G_nxt, d_nxt, Lambda_nxt = inversion2(A_h, m_seq[N-i], P_seq[N-i,...], m_pred[-i], P_pred[-i,...])
+        Gs.append(G_nxt)
+        ds.append(d_nxt)
+        Lambdas.append(Lambda_nxt)
+
+    Gs = np.array(Gs)
+    ds = np.array(ds)
+    Lambdas = np.array(Lambdas)
+    
+    return Gs, ds, Lambdas
+
+
+
