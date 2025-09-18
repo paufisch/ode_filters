@@ -154,4 +154,33 @@ def backward_transitions(m_seq, P_seq, m_pred, P_pred, A_h, N):
     return Gs, ds, Lambdas
 
 
+def backward_sample_paths(num_samples, m_sequence, P_sequence, Gs, ds, Lambdas, N):
+    """
+    Perform backward sampling for a given number of samples.
+
+    Args:
+        num_samples (int): Number of sample paths to generate.
+        m_sequence (np.ndarray): Sequence of means from the smoother (T+1, d).
+        P_sequence (np.ndarray): Sequence of covariances from the smoother (T+1, d, d).
+        Gs (np.ndarray): Backward transition matrices (N, d, d).
+        ds (np.ndarray): Backward transition offsets (N, d).
+        Lambdas (np.ndarray): Backward transition covariances (N, d, d).
+        N (int): Number of time steps (T).
+
+    Returns:
+        np.ndarray: Sampled paths of shape (num_samples, N+1, d).
+    """
+    X_s_samples = []
+    for _ in range(num_samples):
+        X_T = np.random.multivariate_normal(m_sequence[-1], P_sequence[-1])
+        X_s = [X_T]
+        for i in range(N):
+            X_nxt = np.random.multivariate_normal(Gs[i] @ X_s[-1] + ds[i], Lambdas[i])
+            X_s.append(X_nxt)
+        X_s = np.array(X_s)[::-1]
+        X_s_samples.append(X_s)
+    X_s_samples = np.array(X_s_samples)  # shape: (num_samples, N+1, d)
+    return X_s_samples
+
+
 
