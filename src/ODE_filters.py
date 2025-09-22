@@ -154,7 +154,7 @@ def backward_transitions(m_seq, P_seq, m_pred, P_pred, A_h, N):
     return Gs, ds, Lambdas
 
 
-def backward_sample_paths(num_samples, m_sequence, P_sequence, Gs, ds, Lambdas, N):
+def backward_sample_paths(num_samples, m_sequence, P_sequence, Gs, ds, Lambdas, N, seed=42):
     """
     Perform backward sampling for a given number of samples.
 
@@ -170,6 +170,8 @@ def backward_sample_paths(num_samples, m_sequence, P_sequence, Gs, ds, Lambdas, 
     Returns:
         np.ndarray: Sampled paths of shape (num_samples, N+1, d).
     """
+
+    np.random.seed(seed)
     X_s_samples = []
     for _ in range(num_samples):
         X_T = np.random.multivariate_normal(m_sequence[-1], P_sequence[-1])
