@@ -185,4 +185,35 @@ def backward_sample_paths(num_samples, m_sequence, P_sequence, Gs, ds, Lambdas, 
     return X_s_samples
 
 
+def compute_kalman_forward_with_backward_transitions(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N):
+    #complete forward kalman filtering pass:
+    m_sequence = [mu_0]
+    P_sequence = [Sigma_0] 
+    m_predictions = []
+    P_predictions = []
+    Gs, ds, Lambdas = [], [], []
+
+    for i in range(N):
+        #this index correspnds to the timestep 
+        #print(ts[i+1])
+        #h = ts[i+1]-ts[i]
+        (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i,:])
+        G_nxt, d_nxt, Lambda_nxt = inversion2(A_h, m_sequence[-1], P_sequence[-1], m_pred_nxt, P_pred_nxt)
+        m_sequence.append(m_nxt)
+        P_sequence.append(P_nxt)
+        m_predictions.append(m_pred_nxt)
+        P_predictions.append(P_pred_nxt)
+        Gs.append(G_nxt)
+        ds.append(d_nxt)
+        Lambdas.append(Lambda_nxt)
+
+    m_sequence = np.array(m_sequence)
+    P_sequence = np.array(P_sequence)
+    m_predictions = np.array(m_predictions)
+    P_predictions = np.array(P_predictions)
+    Gs = np.array(Gs)
+    ds = np.array(ds)
+    Lambdas = np.array(Lambdas)
+
+    return m_sequence, P_sequence, m_predictions, P_predictions, Gs, ds, Lambdas
 
