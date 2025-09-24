@@ -217,3 +217,22 @@ def compute_kalman_forward_with_backward_transitions(mu_0, Sigma_0, A_h, b_h, Q_
 
     return m_sequence, P_sequence, m_predictions, P_predictions, Gs, ds, Lambdas
 
+
+def future_prediction(m_t_minus, P_t_minus, A, Q):
+    m_t_minus = A @ m_t_minus
+    P_t_minus = A @ P_t_minus @ A.T + Q
+    return m_t_minus, P_t_minus
+
+
+def predict_future(k, m_sequence, P_sequence, A_h, Q_h, N):
+    m_future = [m_sequence[k,:]]
+    P_future = [P_sequence[k,...]]
+    for l in range(N-k):
+        m_nxt, P_nxt = future_prediction(m_future[-1], P_future[-1], A_h, Q_h)
+        m_future.append(m_nxt)
+        P_future.append(P_nxt)
+
+    m_future = np.array(m_future)
+    P_future = np.array(P_future)
+    return m_future, P_future
+
