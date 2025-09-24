@@ -218,6 +218,44 @@ def compute_kalman_forward_with_backward_transitions(mu_0, Sigma_0, A_h, b_h, Q_
     return m_sequence, P_sequence, m_predictions, P_predictions, Gs, ds, Lambdas
 
 
+def compute_kalman_forward_with_backward_transitions_intermediate(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N, M):
+    #complete forward kalman filtering pass:
+    m_sequence = [mu_0]
+    P_sequence = [Sigma_0] 
+    m_predictions = []
+    P_predictions = []
+    Gs, ds, Lambdas = [], [], []
+
+    I = M//N
+    for i in range(1,M+1):
+        
+        if i%I == 0:
+            (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i//I - 1,:])
+
+        else:
+            m_pred_nxt, P_pred_nxt = future_prediction(m_sequence[-1], P_sequence[-1], A_h, Q_h)
+            m_nxt, P_nxt = m_pred_nxt, P_pred_nxt
+
+        G_nxt, d_nxt, Lambda_nxt = inversion2(A_h, m_sequence[-1], P_sequence[-1], m_pred_nxt, P_pred_nxt)
+        m_sequence.append(m_nxt)
+        P_sequence.append(P_nxt)
+        m_predictions.append(m_pred_nxt)
+        P_predictions.append(P_pred_nxt)
+        Gs.append(G_nxt)
+        ds.append(d_nxt)
+        Lambdas.append(Lambda_nxt)
+
+    m_sequence = np.array(m_sequence)
+    P_sequence = np.array(P_sequence)
+    m_predictions = np.array(m_predictions)
+    P_predictions = np.array(P_predictions)
+    Gs = np.array(Gs)
+    ds = np.array(ds)
+    Lambdas = np.array(Lambdas)
+
+    return m_sequence, P_sequence, m_predictions, P_predictions, Gs, ds, Lambdas
+
+
 def future_prediction(m_t_minus, P_t_minus, A, Q):
     m_t_minus = A @ m_t_minus
     P_t_minus = A @ P_t_minus @ A.T + Q
