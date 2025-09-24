@@ -222,8 +222,8 @@ def compute_kalman_forward_with_backward_transitions_intermediate(mu_0, Sigma_0,
     #complete forward kalman filtering pass:
     m_sequence = [mu_0]
     P_sequence = [Sigma_0] 
-    m_predictions = []
-    P_predictions = []
+    m_predictions = [mu_0]
+    P_predictions = [Sigma_0]
     Gs, ds, Lambdas = [], [], []
 
     I = M//N
@@ -262,10 +262,10 @@ def future_prediction(m_t_minus, P_t_minus, A, Q):
     return m_t_minus, P_t_minus
 
 
-def predict_future(k, m_sequence, P_sequence, A_h, Q_h, N):
-    m_future = [m_sequence[k,:]]
-    P_future = [P_sequence[k,...]]
-    for l in range(N-k):
+def predict_future(k, m_start, P_start, A_h, Q_h, N):
+    m_future = [m_start]
+    P_future = [P_start]
+    for _ in range(N-k):
         m_nxt, P_nxt = future_prediction(m_future[-1], P_future[-1], A_h, Q_h)
         m_future.append(m_nxt)
         P_future.append(P_nxt)
