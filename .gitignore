@@ -2,6 +2,7 @@
 probnum_venv/*
 *DS_Store
 *posterior_updates
+*.svg
 
 #image folders
 smoother_imgs/*
