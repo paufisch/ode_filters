@@ -108,27 +108,28 @@ def run_filter(beta_0, gamma, std_beta_0, std_beta_0_prime, std_beta_0_prime_pri
     plt.show()
 
 
-# Create widgets
-st = {'description_width': '80px'}
+# Create widgets with compact layout
+st = {'description_width': '70px'}
+lay = widgets.Layout(width='220px')
 
 w1 = widgets.FloatSlider(value=DEF['beta_0'], min=0.05, max=0.5, step=0.01,
-                          description='β₀', style=st, continuous_update=False)
+                          description='β₀', style=st, layout=lay, continuous_update=False)
 w2 = widgets.FloatSlider(value=DEF['gamma'], min=0.01, max=0.2, step=0.01,
-                          description='γ', style=st, continuous_update=False)
+                          description='γ', style=st, layout=lay, continuous_update=False)
 w3 = widgets.FloatLogSlider(value=DEF['std_beta_0'], min=-4, max=-1, step=0.1,
-                             description='σ(β₀)', style=st, continuous_update=False)
+                             description='σ(β₀)', style=st, layout=lay, continuous_update=False)
 w4 = widgets.FloatLogSlider(value=DEF['std_beta_0_prime'], min=-4, max=-1, step=0.1,
-                             description="σ(β₀')", style=st, continuous_update=False)
+                             description="σ(β₀')", style=st, layout=lay, continuous_update=False)
 w5 = widgets.FloatLogSlider(value=DEF['std_beta_0_prime_prime'], min=-4, max=-1, step=0.1,
-                             description="σ(β₀'')", style=st, continuous_update=False)
+                             description="σ(β₀'')", style=st, layout=lay, continuous_update=False)
 w6 = widgets.FloatLogSlider(value=DEF['sigma_x'], min=-7, max=-3, step=0.1,
-                             description='σₓ', style=st, continuous_update=False)
+                             description='σₓ', style=st, layout=lay, continuous_update=False)
 w7 = widgets.FloatLogSlider(value=DEF['sigma_beta'], min=-5, max=-2, step=0.1,
-                             description='σᵦ', style=st, continuous_update=False)
+                             description='σᵦ', style=st, layout=lay, continuous_update=False)
 w8 = widgets.FloatLogSlider(value=DEF['std_R_I'], min=-5, max=-2, step=0.1,
-                             description='σ_obs(PDE)', style=st, continuous_update=False)
+                             description='σ_PDE', style=st, layout=lay, continuous_update=False)
 w9 = widgets.FloatLogSlider(value=DEF['std_R_x'], min=-7, max=-3, step=0.1,
-                             description='σ_obs(I)', style=st, continuous_update=False)
+                             description='σ_I', style=st, layout=lay, continuous_update=False)
 
 # Reset button
 def reset_all(b):
@@ -146,14 +147,18 @@ btn = widgets.Button(description='Reset', button_style='info',
                       layout=widgets.Layout(width='100px'))
 btn.on_click(reset_all)
 
-# Layout
-c1 = widgets.VBox([widgets.HTML("<b>Model</b>"), w1, w2])
-c2 = widgets.VBox([widgets.HTML("<b>Init Unc.</b>"), w3, w4, w5])
-c3 = widgets.VBox([widgets.HTML("<b>Proc Noise</b>"), w6, w7])
-c4 = widgets.VBox([widgets.HTML("<b>Obs Noise</b>"), w8, w9])
+# Layout with compact spacing
+c1 = widgets.VBox([widgets.HTML("<b style='font-size:10px'>Model</b>"), w1, w2], 
+                   layout=widgets.Layout(width='230px'))
+c2 = widgets.VBox([widgets.HTML("<b style='font-size:10px'>Init Unc.</b>"), w3, w4, w5],
+                   layout=widgets.Layout(width='230px'))
+c3 = widgets.VBox([widgets.HTML("<b style='font-size:10px'>Proc Noise</b>"), w6, w7],
+                   layout=widgets.Layout(width='230px'))
+c4 = widgets.VBox([widgets.HTML("<b style='font-size:10px'>Obs Noise</b>"), w8, w9],
+                   layout=widgets.Layout(width='230px'))
 
 ui = widgets.VBox([
-    widgets.HBox([c1, c2, c3, c4]),
+    widgets.HBox([c1, c2, c3, c4], layout=widgets.Layout(width='100%')),
     widgets.HBox([btn], layout=widgets.Layout(justify_content='center'))
 ])
 
