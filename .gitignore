@@ -13,4 +13,21 @@ logistic_imgs/*
 ODE_filter_imgs/*
 ODE_smoother_imgs/*
 
-*/__pycache__
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore virtual environments
+.venv/
+
+# Ignore build artifacts
+dist/
+build/
+*.egg-info/
+
+# Keep dependency management files
+!pyproject.toml
+!uv.lock
+
+# ignore python version
+.python-version
