@@ -1,6 +1,6 @@
 #single step of a kalman filter
-from src.gaussian_inference import *
-from src.sqr_gaussian_inference import *
+from ode_filters.gaussian_inference import *
+from ode_filters.sqr_gaussian_inference import *
 
 
 
