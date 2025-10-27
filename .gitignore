@@ -27,7 +27,9 @@ build/
 
 # Keep dependency management files
 !pyproject.toml
-!uv.lock
+
+# remove uv.lock
+uv.lock
 
 # ignore python version
 .python-version
