@@ -1,55 +1,13 @@
 #single step of a kalman filter
-from ode_filters.gaussian_inference import *
-from ode_filters.sqr_gaussian_inference import *
+from .gaussian_inference import *
+from .sqr_gaussian_inference import *
 
 
 
-def ekf1_filter_step(A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_observed):
-    """One step of the Extended Kalman Filter (EKF) with nonlinear observations.
-
-    Performs prediction and update steps. Prediction applies linear dynamics;
-    update linearizes the nonlinear observation model and updates using inversion.
-
-    Args:
-        A_t: State transition matrix (shape [n_state, n_state]).
-        b_t: State transition offset (shape [n_state]).
-        Q_t: Process noise covariance (shape [n_state, n_state]).
-        R_t: Observation noise covariance (shape [1, 1] or scalar).
-        mu_t: Current state mean (shape [n_state]).
-        Sigma_t: Current state covariance (shape [n_state, n_state]).
-        g: Nonlinear observation function.
-        jacobian_g: Jacobian of g at linearization point.
-        z_observed: Observed measurement value.
-
-    Returns:
-        (m_pred, P_pred): Predicted mean and covariance.
-        (m_updated, P_updated): Updated (filtered) mean and covariance.
-    """
-
-    m_pred, P_pred = marginalization(A_t, b_t, Q_t, mu_t, Sigma_t)
-
-    #linearize the observation model
-    H_t = jacobian_g(m_pred)
-    c_t = g(m_pred) - H_t @ m_pred
-
-    # predict/estimate the next observationm: p(z_n|x_n)
-    #z_expected, S_sqr = sqr_marginalization(H_n, c, R_h, m_next, P_next_sqr)
-
-    #compute backward transition: p(z_n|x_n)
-    #this actually implicitly first computes the observation estimate which is why the above line is commented
-
-    #observe z:
-    m_updated, P_updated = inversion(H_t, c_t, R_t, m_pred, P_pred, z_observed)
-    
-    return (m_pred, P_pred), (m_updated, P_updated)
-
-
-#single step of a kalman filter
 def ekf1_filter_step_stable(A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_observed):
     """Numerically stable EKF step using square-root covariance representation.
 
-    Uses Cholesky factors for improved numerical stability compared to
-    ekf1_filter_step. Otherwise functionally equivalent.
+    Uses Cholesky factors for improved numerical stability.
 
     Args:
         A_t: State transition matrix (shape [n_state, n_state]).
@@ -72,12 +30,6 @@ def ekf1_filter_step_stable(A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_
     #linearize the observation model
     H_t = jacobian_g(m_pred)
     c_t = g(m_pred) - H_t @ m_pred
-
-    # predict/estimate the next observationm: p(z_n|x_n)
-    #z_expected, S_sqr = sqr_marginalization(H_n, c, R_h, m_next, P_next_sqr)
-
-    #compute backward transition: p(z_n|x_n)
-    #this actually implicitly first computes the observation estimate which is why the above line is commented
 
     #observe z:
     m_updated, P_updated = sqr_inversion(H_t, c_t, R_t, m_pred, P_pred, z_observed)
@@ -116,7 +68,7 @@ def compute_kalman_forward(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_s
         #this index correspnds to the timestep 
         #print(ts[i+1])
         #h = ts[i+1]-ts[i]
-        (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i,:])
+        (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step_stable(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i,:])
         m_sequence.append(m_nxt)
         P_sequence.append(P_nxt)
         m_predictions.append(m_pred_nxt)
@@ -356,7 +308,7 @@ def compute_kalman_forward_with_backward_transitions(mu_0, Sigma_0, A_h, b_h, Q_
         #this index correspnds to the timestep 
         #print(ts[i+1])
         #h = ts[i+1]-ts[i]
-        (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i,:])
+        (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step_stable(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i,:])
         G_nxt, d_nxt, Lambda_nxt = inversion2(A_h, m_sequence[-1], P_sequence[-1], m_pred_nxt, P_pred_nxt)
         m_sequence.append(m_nxt)
         P_sequence.append(P_nxt)
@@ -413,7 +365,7 @@ def compute_kalman_forward_with_backward_transitions_intermediate(mu_0, Sigma_0,
     for i in range(1,M+1):
         
         if i%I == 0:
-            (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i//I - 1,:])
+            (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step_stable(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i//I - 1,:])
 
         else:
             m_pred_nxt, P_pred_nxt = future_prediction(m_sequence[-1], P_sequence[-1], A_h, Q_h)
