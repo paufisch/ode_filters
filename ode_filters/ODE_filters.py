@@ -3,7 +3,6 @@ from .gaussian_inference import *
 from .sqr_gaussian_inference import *
 
 
-
 def ekf1_filter_step_stable(A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_observed):
     """Numerically stable EKF step using square-root covariance representation.
 
@@ -35,52 +34,6 @@ def ekf1_filter_step_stable(A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_
     m_updated, P_updated = sqr_inversion(H_t, c_t, R_t, m_pred, P_pred, z_observed)
     
     return (m_pred, P_pred), (m_updated, P_updated)
-
-
-def compute_kalman_forward(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N):
-    """Forward EKF pass over full observation sequence.
-
-    Iterates ekf1_filter_step over N observations, accumulating filtered and
-    predicted state sequences.
-
-    Args:
-        mu_0: Initial state mean (shape [n_state]).
-        Sigma_0: Initial state covariance (shape [n_state, n_state]).
-        A_h, b_h, Q_h, R_h: System dynamics and noise parameters.
-        g: Observation function.
-        jacobian_g: Jacobian of g.
-        z_sequence: Observations array (shape [N, n_obs]).
-        N: Number of time steps.
-
-    Returns:
-        m_sequence: Filtered means, shape [N+1, n_state].
-        P_sequence: Filtered covariances, shape [N+1, n_state, n_state].
-        m_predictions: Predicted means, shape [N, n_state].
-        P_predictions: Predicted covariances, shape [N, n_state, n_state].
-    """
-    #complete forward kalman filtering pass:
-    m_sequence = [mu_0]
-    P_sequence = [Sigma_0] 
-    m_predictions = []
-    P_predictions = []
-
-    for i in range(N):
-        #this index correspnds to the timestep 
-        #print(ts[i+1])
-        #h = ts[i+1]-ts[i]
-        (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step_stable(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i,:])
-        m_sequence.append(m_nxt)
-        P_sequence.append(P_nxt)
-        m_predictions.append(m_pred_nxt)
-        P_predictions.append(P_pred_nxt)
-
-
-    m_sequence = np.array(m_sequence)
-    P_sequence = np.array(P_sequence)
-    m_predictions = np.array(m_predictions)
-    P_predictions = np.array(P_predictions)
-
-    return m_sequence, P_sequence, m_predictions, P_predictions
 
 
 def compute_kalman_forward_stable(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N):
