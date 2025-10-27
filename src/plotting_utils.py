@@ -1,8 +1,8 @@
-"""
-Generalized plotting utilities for ODE filter notebooks.
+"""Plotting utilities for ODE filter analysis and visualization.
 
-This module consolidates common plotting functions used across multiple notebooks
-to reduce code duplication and improve maintainability.
+Provides functions for visualizing Kalman filter estimates, sample paths,
+and posterior inference results with confidence bands and residual plots.
+Consolidates plotting functionality to reduce code duplication across notebooks.
 """
 
 import numpy as np
@@ -12,16 +12,18 @@ from typing import Optional, List, Callable, Tuple, Union
 
 
 def safe_variance_bands(mean: np.ndarray, variance: np.ndarray, n_sigma: float = 2.0) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Calculate safe confidence bands from mean and variance arrays.
+    """Calculate safe confidence bands from mean and variance arrays.
+    
+    Handles potential numerical issues by clipping variance to non-negative values.
     
     Args:
-        mean: Mean values
-        variance: Variance values (will be clipped to non-negative)
-        n_sigma: Number of standard deviations for the bands
+        mean: Mean values (shape [n]).
+        variance: Variance values (shape [n]).
+        n_sigma: Number of standard deviations for the bands (default 2.0).
         
     Returns:
-        lower_bound, upper_bound: Confidence band boundaries
+        lower_bound: Lower confidence band (shape [n]).
+        upper_bound: Upper confidence band (shape [n]).
     """
     safe_var = np.maximum(variance, 1e-12)  # Avoid numerical issues
     margin = n_sigma * np.sqrt(safe_var)
@@ -42,24 +44,24 @@ def plot_single_trajectory(
     y_lim: Optional[Tuple[float, float]] = None,
     n_sigma: float = 2.0
 ) -> plt.Axes:
-    """
-    Plot a single trajectory with confidence bands.
+    """Plot a single trajectory with confidence bands.
     
     Args:
-        ts: Time points for the estimate
-        mean: Mean trajectory
-        variance: Variance trajectory
-        t_fine: Fine time grid for exact solution (optional)
-        exact_solution: Exact solution values (optional)
-        ax: Matplotlib axis to plot on (creates new if None)
-        color: Color for the estimate
-        label: Label for the estimate
-        show_points: Whether to show scatter points
-        x_lim, y_lim: Axis limits
-        n_sigma: Number of standard deviations for confidence bands
+        ts: Time points for the estimate (shape [n_time]).
+        mean: Mean trajectory (shape [n_time]).
+        variance: Variance trajectory (shape [n_time]).
+        t_fine: Fine time grid for exact solution (optional, shape [n_fine]).
+        exact_solution: Exact solution values (optional, shape [n_fine]).
+        ax: Matplotlib axis to plot on (creates new if None).
+        color: Color for the estimate line.
+        label: Label for the estimate.
+        show_points: Whether to show scatter points at time points.
+        x_lim: X-axis limits (tuple or None).
+        y_lim: Y-axis limits (tuple or None).
+        n_sigma: Number of standard deviations for confidence bands.
         
     Returns:
-        The matplotlib axis used for plotting
+        ax: The matplotlib axis used for plotting.
     """
     if ax is None:
         fig, ax = plt.subplots()
@@ -94,20 +96,23 @@ def plot_sample_paths(
     colors: Optional[List[str]] = None,
     figsize: Tuple[float, float] = (8, 10)
 ) -> Tuple[plt.Figure, List[plt.Axes]]:
-    """
-    Plot multiple sample paths from posterior distribution.
+    """Plot multiple sample paths from posterior distribution.
+    
+    Creates subplots for each state component, optionally including a residual
+    plot if residual_func is provided.
     
     Args:
-        ts: Time points
-        samples: Sample paths [n_samples, n_time, n_components]
-        component_labels: Labels for each component
-        residual_func: Function to compute residuals from samples
-        observations: Observed data for residual plot
-        colors: Color list
-        figsize: Figure size
+        ts: Time points (shape [n_time]).
+        samples: Sample paths [n_samples, n_time, n_components].
+        component_labels: Labels for each component (length n_components).
+        residual_func: Function to compute residuals from samples (optional).
+        observations: Observed data for residual plot (optional).
+        colors: Color list for components.
+        figsize: Figure size (width, height).
         
     Returns:
-        fig, axes: The created figure and axes
+        fig: The created figure.
+        axes: List of axes for each component (and residual if present).
     """
     n_samples, n_time, n_components = samples.shape
     has_residual = residual_func is not None
@@ -173,7 +178,11 @@ def plot_sample_paths(
 
 
 def setup_plot_style():
-    """Set up consistent plotting style across notebooks."""
+    """Set up consistent plotting style across notebooks.
+    
+    Attempts to use tueplots for publication-quality plots, falls back to
+    default settings if not available.
+    """
     try:
         from tueplots import axes, figsizes
         plt.rcParams.update(axes.lines())
@@ -192,23 +201,30 @@ def setup_plot_style():
 
 
 def get_default_colors():
-    """Get the default color cycle."""
+    """Get the default color cycle from matplotlib rcParams.
+    
+    Returns:
+        List of color strings from the current color cycle.
+    """
     color_cycler = plt.rcParams['axes.prop_cycle']
     return color_cycler.by_key()['color']
 
 
 def fix_sample_plotting_dimensions(ts, observations, samples, residual_func):
-    """
-    Helper function to fix dimension mismatches in sample plotting.
+    """Helper function to fix dimension mismatches in sample plotting.
+    
+    Normalizes observation shapes and computes residual samples with
+    error handling.
     
     Args:
-        ts: Time points array
-        observations: Observation data (may be 1D or 2D)
-        samples: Sample paths
-        residual_func: Function to compute residuals
+        ts: Time points array (shape [n_time]).
+        observations: Observation data (may be 1D or 2D, optional).
+        samples: Sample paths [n_samples, n_time, ...].
+        residual_func: Function to compute residuals from samples.
         
     Returns:
-        Fixed observations array and residual samples
+        obs_fixed: Fixed observations array or None.
+        residual_samples: List of residual arrays (one per sample).
     """
     # Handle observations
     if observations is not None:

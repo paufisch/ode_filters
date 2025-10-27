@@ -5,6 +5,26 @@ from src.sqr_gaussian_inference import *
 
 
 def ekf1_filter_step(A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_observed):
+    """One step of the Extended Kalman Filter (EKF) with nonlinear observations.
+
+    Performs prediction and update steps. Prediction applies linear dynamics;
+    update linearizes the nonlinear observation model and updates using inversion.
+
+    Args:
+        A_t: State transition matrix (shape [n_state, n_state]).
+        b_t: State transition offset (shape [n_state]).
+        Q_t: Process noise covariance (shape [n_state, n_state]).
+        R_t: Observation noise covariance (shape [1, 1] or scalar).
+        mu_t: Current state mean (shape [n_state]).
+        Sigma_t: Current state covariance (shape [n_state, n_state]).
+        g: Nonlinear observation function.
+        jacobian_g: Jacobian of g at linearization point.
+        z_observed: Observed measurement value.
+
+    Returns:
+        (m_pred, P_pred): Predicted mean and covariance.
+        (m_updated, P_updated): Updated (filtered) mean and covariance.
+    """
 
     m_pred, P_pred = marginalization(A_t, b_t, Q_t, mu_t, Sigma_t)
 
@@ -26,6 +46,26 @@ def ekf1_filter_step(A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_observe
 
 #single step of a kalman filter
 def ekf1_filter_step_stable(A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_observed):
+    """Numerically stable EKF step using square-root covariance representation.
+
+    Uses Cholesky factors for improved numerical stability compared to
+    ekf1_filter_step. Otherwise functionally equivalent.
+
+    Args:
+        A_t: State transition matrix (shape [n_state, n_state]).
+        b_t: State transition offset (shape [n_state]).
+        Q_t: Process noise Cholesky factor (shape [n_state, n_state]).
+        R_t: Observation noise Cholesky factor (shape [1, 1] or scalar).
+        mu_t: Current state mean (shape [n_state]).
+        Sigma_t: Current state Cholesky factor (shape [n_state, n_state]).
+        g: Nonlinear observation function.
+        jacobian_g: Jacobian of g.
+        z_observed: Observed measurement.
+
+    Returns:
+        (m_pred, P_pred): Predicted mean and Cholesky factor.
+        (m_updated, P_updated): Updated mean and Cholesky factor.
+    """
 
     m_pred, P_pred = sqr_marginalization(A_t, b_t, Q_t, mu_t, Sigma_t)
 
@@ -46,6 +86,26 @@ def ekf1_filter_step_stable(A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_
 
 
 def compute_kalman_forward(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N):
+    """Forward EKF pass over full observation sequence.
+
+    Iterates ekf1_filter_step over N observations, accumulating filtered and
+    predicted state sequences.
+
+    Args:
+        mu_0: Initial state mean (shape [n_state]).
+        Sigma_0: Initial state covariance (shape [n_state, n_state]).
+        A_h, b_h, Q_h, R_h: System dynamics and noise parameters.
+        g: Observation function.
+        jacobian_g: Jacobian of g.
+        z_sequence: Observations array (shape [N, n_obs]).
+        N: Number of time steps.
+
+    Returns:
+        m_sequence: Filtered means, shape [N+1, n_state].
+        P_sequence: Filtered covariances, shape [N+1, n_state, n_state].
+        m_predictions: Predicted means, shape [N, n_state].
+        P_predictions: Predicted covariances, shape [N, n_state, n_state].
+    """
     #complete forward kalman filtering pass:
     m_sequence = [mu_0]
     P_sequence = [Sigma_0] 
@@ -72,6 +132,26 @@ def compute_kalman_forward(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_s
 
 
 def compute_kalman_forward_stable(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N):
+    """Numerically stable forward EKF pass using square-root covariances.
+
+    Like compute_kalman_forward but uses ekf1_filter_step_stable. Takes
+    Q_h as a Cholesky factor and reconstructs full covariances at the end.
+
+    Args:
+        mu_0: Initial state mean (shape [n_state]).
+        Sigma_0: Initial state Cholesky factor (shape [n_state, n_state]).
+        A_h, b_h, Q_h, R_h: System parameters (Q_h should be Cholesky).
+        g: Observation function.
+        jacobian_g: Jacobian of g.
+        z_sequence: Observations array (shape [N, n_obs]).
+        N: Number of time steps.
+
+    Returns:
+        m_sequence: Filtered means, shape [N+1, n_state].
+        P_sequence: Filtered full covariances, shape [N+1, n_state, n_state].
+        m_predictions: Predicted means, shape [N, n_state].
+        P_predictions: Predicted full covariances, shape [N, n_state, n_state].
+    """
     #complete forward kalman filtering pass:
     Q_h = np.linalg.cholesky(Q_h).T
     #R_h = np.linalg.cholesky(R_h).T
@@ -111,6 +191,24 @@ def compute_kalman_forward_stable(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian
 
 
 def kf_smoother_step(m_t, P_t, A, m_pred, P_pred, m_smooth, P_smooth):
+    """One backward step of Rauch–Tung–Striebel (RTS) smoothing.
+
+    Updates the smoothed estimate at time t using the filtered estimate and
+    the smoothed estimate from time t+1 via the Kalman smoother gain.
+
+    Args:
+        m_t: Filtered mean at time t (shape [n_state]).
+        P_t: Filtered covariance at time t (shape [n_state, n_state]).
+        A: State transition matrix (shape [n_state, n_state]).
+        m_pred: Predicted mean at time t+1 (shape [n_state]).
+        P_pred: Predicted covariance at time t+1 (shape [n_state, n_state]).
+        m_smooth: Smoothed mean at time t+1 (shape [n_state]).
+        P_smooth: Smoothed covariance at time t+1 (shape [n_state, n_state]).
+
+    Returns:
+        m_t_s: Smoothed mean at time t (shape [n_state]).
+        P_t_s: Smoothed covariance at time t (shape [n_state, n_state]).
+    """
     
     #G = P_t @ A.T @ np.linalg.inv(P_pred)
     #instead of the naive inverse computation more efficiently:
@@ -124,6 +222,23 @@ def kf_smoother_step(m_t, P_t, A, m_pred, P_pred, m_smooth, P_smooth):
 
 
 def compute_kalman_backward(m_seq, P_seq, m_pred, P_pred, A_h, N):
+    """Backward RTS smoothing pass.
+
+    Applies kf_smoother_step iteratively backward in time to produce smoothed
+    state estimates given filtered and predicted sequences.
+
+    Args:
+        m_seq: Filtered means (shape [N+1, n_state]).
+        P_seq: Filtered covariances (shape [N+1, n_state, n_state]).
+        m_pred: Predicted means (shape [N, n_state]).
+        P_pred: Predicted covariances (shape [N, n_state, n_state]).
+        A_h: State transition matrix (shape [n_state, n_state]).
+        N: Number of time steps.
+
+    Returns:
+        m_smoothed: Smoothed means (shape [N+1, n_state]).
+        P_smoothed: Smoothed covariances (shape [N+1, n_state, n_state]).
+    """
     m_smoothed = [m_seq[-1]]
     P_smoothed = [P_seq[-1,...]]
 
@@ -139,6 +254,24 @@ def compute_kalman_backward(m_seq, P_seq, m_pred, P_pred, A_h, N):
 
 
 def backward_transitions(m_seq, P_seq, m_pred, P_pred, A_h, N):
+    """Compute backward transition parameters for sampling.
+
+    Computes the linear transition parameters (G, d, Lambda) needed for
+    backward sampling through the state sequence.
+
+    Args:
+        m_seq: Filtered means (shape [N+1, n_state]).
+        P_seq: Filtered covariances (shape [N+1, n_state, n_state]).
+        m_pred: Predicted means (shape [N, n_state]).
+        P_pred: Predicted covariances (shape [N, n_state, n_state]).
+        A_h: State transition matrix (shape [n_state, n_state]).
+        N: Number of time steps.
+
+    Returns:
+        Gs: Backward gain matrices, shape [N, n_state, n_state].
+        ds: Backward offsets, shape [N, n_state].
+        Lambdas: Backward covariances, shape [N, n_state, n_state].
+    """
 
     Gs, ds, Lambdas = [], [], []
     for i in range(1,N+1):
@@ -155,20 +288,23 @@ def backward_transitions(m_seq, P_seq, m_pred, P_pred, A_h, N):
 
 
 def backward_sample_paths(num_samples, m_sequence, P_sequence, Gs, ds, Lambdas, N, seed=42):
-    """
-    Perform backward sampling for a given number of samples.
+    """Generate sample paths by backward sampling from the posterior.
+
+    Samples from the joint distribution of state trajectories conditioned on
+    all observations using the backward transition parameters.
 
     Args:
-        num_samples (int): Number of sample paths to generate.
-        m_sequence (np.ndarray): Sequence of means from the smoother (T+1, d).
-        P_sequence (np.ndarray): Sequence of covariances from the smoother (T+1, d, d).
-        Gs (np.ndarray): Backward transition matrices (N, d, d).
-        ds (np.ndarray): Backward transition offsets (N, d).
-        Lambdas (np.ndarray): Backward transition covariances (N, d, d).
-        N (int): Number of time steps (T).
+        num_samples: Number of trajectory samples to generate.
+        m_sequence: Smoothed means from filter (shape [N+1, n_state]).
+        P_sequence: Smoothed covariances (shape [N+1, n_state, n_state]).
+        Gs: Backward gain matrices (shape [N, n_state, n_state]).
+        ds: Backward offsets (shape [N, n_state]).
+        Lambdas: Backward transition covariances (shape [N, n_state, n_state]).
+        N: Number of time steps.
+        seed: Random seed for reproducibility.
 
     Returns:
-        np.ndarray: Sampled paths of shape (num_samples, N+1, d).
+        X_s_samples: Sample paths, shape [num_samples, N+1, n_state].
     """
 
     np.random.seed(seed)
@@ -186,6 +322,29 @@ def backward_sample_paths(num_samples, m_sequence, P_sequence, Gs, ds, Lambdas, 
 
 
 def compute_kalman_forward_with_backward_transitions(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N):
+    """Forward EKF pass with precomputed backward transition parameters.
+
+    Combines forward filtering with computation of backward transition
+    parameters in a single pass for efficiency.
+
+    Args:
+        mu_0: Initial state mean (shape [n_state]).
+        Sigma_0: Initial state covariance (shape [n_state, n_state]).
+        A_h, b_h, Q_h, R_h: System parameters.
+        g: Observation function.
+        jacobian_g: Jacobian of g.
+        z_sequence: Observations array (shape [N, n_obs]).
+        N: Number of time steps.
+
+    Returns:
+        m_sequence: Filtered means, shape [N+1, n_state].
+        P_sequence: Filtered covariances, shape [N+1, n_state, n_state].
+        m_predictions: Predicted means, shape [N, n_state].
+        P_predictions: Predicted covariances, shape [N, n_state, n_state].
+        Gs: Backward gains, shape [N, n_state, n_state].
+        ds: Backward offsets, shape [N, n_state].
+        Lambdas: Backward covariances, shape [N, n_state, n_state].
+    """
     #complete forward kalman filtering pass:
     m_sequence = [mu_0]
     P_sequence = [Sigma_0] 
@@ -219,6 +378,30 @@ def compute_kalman_forward_with_backward_transitions(mu_0, Sigma_0, A_h, b_h, Q_
 
 
 def compute_kalman_forward_with_backward_transitions_intermediate(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N, M):
+    """Forward pass with intermediate prediction steps and backward transitions.
+
+    Like compute_kalman_forward_with_backward_transitions but includes M total
+    steps (with N observations). Intermediate steps only predict without updating.
+
+    Args:
+        mu_0: Initial state mean (shape [n_state]).
+        Sigma_0: Initial state covariance (shape [n_state, n_state]).
+        A_h, b_h, Q_h, R_h: System parameters.
+        g: Observation function.
+        jacobian_g: Jacobian of g.
+        z_sequence: Observations array (shape [N, n_obs]).
+        N: Number of observations.
+        M: Total number of time steps (must be a multiple of N).
+
+    Returns:
+        m_sequence: State means, shape [M+1, n_state].
+        P_sequence: State covariances, shape [M+1, n_state, n_state].
+        m_predictions: Predicted means, shape [M, n_state].
+        P_predictions: Predicted covariances, shape [M, n_state, n_state].
+        Gs: Backward gains, shape [M, n_state, n_state].
+        ds: Backward offsets, shape [M, n_state].
+        Lambdas: Backward covariances, shape [M, n_state, n_state].
+    """
     #complete forward kalman filtering pass:
     m_sequence = [mu_0]
     P_sequence = [Sigma_0] 
@@ -257,12 +440,44 @@ def compute_kalman_forward_with_backward_transitions_intermediate(mu_0, Sigma_0,
 
 
 def future_prediction(m_t_minus, P_t_minus, A, Q):
+    """Predict state distribution one step forward without observation.
+
+    Applies the linear state transition and process noise to predict the
+    state distribution at the next time step.
+
+    Args:
+        m_t_minus: Current state mean (shape [n_state]).
+        P_t_minus: Current state covariance (shape [n_state, n_state]).
+        A: State transition matrix (shape [n_state, n_state]).
+        Q: Process noise covariance (shape [n_state, n_state]).
+
+    Returns:
+        m_t_minus: Next state mean (shape [n_state]).
+        P_t_minus: Next state covariance (shape [n_state, n_state]).
+    """
     m_t_minus = A @ m_t_minus
     P_t_minus = A @ P_t_minus @ A.T + Q
     return m_t_minus, P_t_minus
 
 
 def predict_future(k, m_start, P_start, A_h, Q_h, N):
+    """Predict future state distributions for N-k steps ahead.
+
+    Iterates future_prediction to obtain the distribution at all future
+    time points from step k to step N.
+
+    Args:
+        k: Current time step index.
+        m_start: Current state mean (shape [n_state]).
+        P_start: Current state covariance (shape [n_state, n_state]).
+        A_h: State transition matrix (shape [n_state, n_state]).
+        Q_h: Process noise covariance (shape [n_state, n_state]).
+        N: Total number of time steps.
+
+    Returns:
+        m_future: Future means, shape [N-k+1, n_state].
+        P_future: Future covariances, shape [N-k+1, n_state, n_state].
+    """
     m_future = [m_start]
     P_future = [P_start]
     for _ in range(N-k):
