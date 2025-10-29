@@ -26,6 +26,7 @@ def marginalization(A, b, Q, mu, Sigma):
     return mu_z, Sigma_z
 
 
+# this is a full bayesian update including the marginalization first
 def inversion(A, b, Q, mu, Sigma, z):
     """Compute the posterior of x given observation z using Bayesian inversion.
 
@@ -56,6 +57,7 @@ def inversion(A, b, Q, mu, Sigma, z):
     return K @ z + d, Lambda
 
 
+# in contrast to inversion1 above, this invertes the marginalizes distribution
 def inversion2(A, mu, Sigma, mu_z, Sigma_z):
     """Compute posterior parameters without explicit observation value.
 
