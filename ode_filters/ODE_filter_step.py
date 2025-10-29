@@ -1,9 +1,7 @@
 from ode_filters.gaussian_inference import inversion, marginalization
 
 
-def ekf1_filter_step_raw(
-    A_t, b_t, Q_t, m_prev, P_prev, g, jacobian_g, z_observed_t, R_t
-):
+def ekf1_filter_step(A_t, b_t, Q_t, m_prev, P_prev, g, jacobian_g, z_observed_t, R_t):
     """One Filter step"""
 
     m_pred, P_pred = marginalization(A_t, b_t, Q_t, m_prev, P_prev)
