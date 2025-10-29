@@ -8,7 +8,6 @@ dependencies = [
     "autograd>=1.8.0",
     "matplotlib>=3.10.7",
     "numpy>=2.3.4",
-    "pre-commit>=4.3.0",
     "pytest>=8.4.2",
     "scikit-learn>=1.7.2",
     "tqdm>=4.67.1",
