@@ -56,8 +56,8 @@ def marginalization(
 
 
 # this is a full bayesian update including the marginalization first
-def inversion(A, b, Q, mu, Sigma, z):
-    """Compute the posterior of x given observation z using Bayesian inversion.
+def bayesian_update(A, b, Q, mu, Sigma, z):
+    """Compute the posterior of x given observation z using Bayesian bayesian_update.
 
     Given p(x) ~ N(mu, Sigma), p(z|x) ~ N(Ax + b, Q), and an observation z,
     computes p(x|z) ~ N(G@z + d, Lambda) efficiently using Cholesky decomposition.
@@ -86,11 +86,11 @@ def inversion(A, b, Q, mu, Sigma, z):
     return K @ z + d, Lambda
 
 
-# in contrast to inversion1 above, this invertes the marginalizes distribution
-def inversion2(A, mu, Sigma, mu_z, Sigma_z):
+# in contrast to bayesian_update1 above, this invertes the marginalizes distribution
+def inversion(A, mu, Sigma, mu_z, Sigma_z):
     """Compute posterior parameters without explicit observation value.
 
-    Variant of inversion that returns the gain matrix G, offset d, and posterior
+    Variant of bayesian_update that returns the gain matrix G, offset d, and posterior
     covariance Lambda separately, given pre-computed marginal parameters.
 
     Args:

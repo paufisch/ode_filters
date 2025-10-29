@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def sqr_marginalization(A, b, Q_sqr, mu, Sigma_sqr):
     """Marginalize using square-root (Cholesky) covariance representation.
 
@@ -26,10 +27,10 @@ def sqr_marginalization(A, b, Q_sqr, mu, Sigma_sqr):
     return mu_z, Sigma_z_sqr
 
 
-def sqr_inversion(A, b, Q_sqr, mu, Sigma_sqr, z):
+def sqr_bayesian_update(A, b, Q_sqr, mu, Sigma_sqr, z):
     """Inversion using square-root covariance representation for stability.
 
-    Numerically stable Bayesian inversion using Cholesky factors and QR
+    Numerically stable Bayesian bayesian_update using Cholesky factors and QR
     decomposition. Returns the posterior mean and Cholesky factor.
 
     Args:
@@ -51,10 +52,9 @@ def sqr_inversion(A, b, Q_sqr, mu, Sigma_sqr, z):
     Sigma_z_2d = np.atleast_2d(Sigma_z)
     G = Sigma @ A.T @ np.linalg.inv(Sigma_z_2d)
     d = mu - G @ mu_z
-    
-    B = np.eye((G@A).shape[0]) - G@A
+
+    B = np.eye((G @ A).shape[0]) - G @ A
     C = np.concatenate([Sigma_sqr @ B.T, Q_sqr @ G.T], axis=0)
     _, Lambda_sqr = np.linalg.qr(C)
-    
-    return G@z+d, Lambda_sqr
 
+    return G @ z + d, Lambda_sqr
