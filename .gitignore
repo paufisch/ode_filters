@@ -36,3 +36,11 @@ uv.lock
 
 # jupter notebooks
 *.ipynb_checkpoints
+
+# code coverage
+*.coverage
+*coverage*
+
+
+# pytest
+*.pytest_cache/

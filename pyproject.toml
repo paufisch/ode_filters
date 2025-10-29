@@ -8,9 +8,19 @@ dependencies = [
     "autograd>=1.8.0",
     "matplotlib>=3.10.7",
     "numpy>=2.3.4",
-    "pre-commit>=4.3.0",
-    "pytest>=8.4.2",
     "scikit-learn>=1.7.2",
     "tqdm>=4.67.1",
     "tueplots>=0.2.1",
 ]
+
+[dependency-groups]
+dev = [
+    "coverage>=7.11.0",
+    "pre-commit>=4.3.0",
+    "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+addopts = "--cov=ode_filters --cov-report=term-missing"
