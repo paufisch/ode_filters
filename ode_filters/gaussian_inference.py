@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.linalg import cho_factor, cho_solve
 
 
 def marginalization(A, b, Q, mu, Sigma):
@@ -7,6 +6,7 @@ def marginalization(A, b, Q, mu, Sigma):
 
     Computes the marginal distribution of z = Ax + b given p(x) ~ N(mu, Sigma)
     and p(z|x) ~ N(Ax + b, Q).
+    The result is p(z) = N(mu_z, Sigma_z) with mu_z = A(mu)+b, Sigma_z = A(Sigma)A.T+Q
 
     Args:
         A: Linear transformation matrix (shape [n_obs, n_state]).
@@ -26,6 +26,7 @@ def marginalization(A, b, Q, mu, Sigma):
     return mu_z, Sigma_z
 
 
+# this is a full bayesian update including the marginalization first
 def inversion(A, b, Q, mu, Sigma, z):
     """Compute the posterior of x given observation z using Bayesian inversion.
 
@@ -47,17 +48,16 @@ def inversion(A, b, Q, mu, Sigma, z):
 
     mu_z, Sigma_z = marginalization(A, b, Q, mu, Sigma)
     Sigma_z_2d = np.atleast_2d(Sigma_z)
-    # Efficient inverse via Cholesky decomposition instead of np.linalg.inv
-    L, lower = cho_factor(Sigma_z_2d, lower=True, check_finite=False)
-    Y = cho_solve((L, lower), (Sigma @ A.T).T, check_finite=False)
-    G = Y.T
-    
-    
-    d = mu - G @ mu_z
-    Lambda = Sigma - G @ Sigma_z @ G.T
-    return G@z+d, Lambda
+    # Solve linear system instead of computing inverse explicitly
+    # K = np.linalg.solve(Sigma_z_2d, (Sigma @ A.T).T).T
+    K = np.linalg.solve(Sigma_z_2d, (A @ Sigma)).T
+
+    d = mu - K @ mu_z
+    Lambda = Sigma - K @ Sigma_z @ K.T  # == Sigma - K@A@Sigma
+    return K @ z + d, Lambda
 
 
+# in contrast to inversion1 above, this invertes the marginalizes distribution
 def inversion2(A, mu, Sigma, mu_z, Sigma_z):
     """Compute posterior parameters without explicit observation value.
 
@@ -78,13 +78,10 @@ def inversion2(A, mu, Sigma, mu_z, Sigma_z):
     """
 
     Sigma_z_2d = np.atleast_2d(Sigma_z)
-    # Efficient inverse via Cholesky decomposition
-    L, lower = cho_factor(Sigma_z_2d, lower=True, check_finite=False)
-    Y = cho_solve((L, lower), (Sigma @ A.T).T, check_finite=False)
-    G = Y.T
-    
-    
-    d = mu - G @ mu_z
-    Lambda = Sigma - G @ Sigma_z @ G.T
-    return G, d, Lambda
+    # Solve linear system instead of computing inverse explicitly
+    # K = np.linalg.solve(Sigma_z_2d, (Sigma @ A.T).T).T
+    K = np.linalg.solve(Sigma_z_2d, (A @ Sigma)).T
 
+    d = mu - K @ mu_z
+    Lambda = Sigma - K @ Sigma_z @ K.T  # == Sigma - K@A@Sigma
+    return K, d, Lambda
