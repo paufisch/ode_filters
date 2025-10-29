@@ -1,9 +1,14 @@
-#single step of a kalman filter
-from .gaussian_inference import *
-from .sqr_gaussian_inference import *
+# single step of a kalman filter
+import numpy as np
+from scipy import cho_factor, cho_solve
+
+from ode_filters.gaussian_inference import inversion
+from ode_filters.sqr_gaussian_inference import sqr_bayesian_update, sqr_marginalization
 
 
-def ekf1_filter_step_stable(A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_observed):
+def ekf1_filter_step_stable(
+    A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_observed
+):
     """Numerically stable EKF step using square-root covariance representation.
 
     Uses Cholesky factors for improved numerical stability.
@@ -26,17 +31,21 @@ def ekf1_filter_step_stable(A_t, b_t, Q_t, R_t, mu_t, Sigma_t, g, jacobian_g, z_
 
     m_pred, P_pred = sqr_marginalization(A_t, b_t, Q_t, mu_t, Sigma_t)
 
-    #linearize the observation model
+    # linearize the observation model
     H_t = jacobian_g(m_pred)
     c_t = g(m_pred) - H_t @ m_pred
 
-    #observe z:
-    m_updated, P_updated = sqr_inversion(H_t, c_t, R_t, m_pred, P_pred, z_observed)
-    
+    # observe z:
+    m_updated, P_updated = sqr_bayesian_update(
+        H_t, c_t, R_t, m_pred, P_pred, z_observed
+    )
+
     return (m_pred, P_pred), (m_updated, P_updated)
 
 
-def compute_kalman_forward_stable(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N):
+def compute_kalman_forward_stable(
+    mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N
+):
     """Numerically stable forward EKF pass using square-root covariances.
 
     Like compute_kalman_forward but uses ekf1_filter_step_stable. Takes
@@ -57,40 +66,48 @@ def compute_kalman_forward_stable(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian
         m_predictions: Predicted means, shape [N, n_state].
         P_predictions: Predicted full covariances, shape [N, n_state, n_state].
     """
-    #complete forward kalman filtering pass:
+    # complete forward kalman filtering pass:
     Q_h = np.linalg.cholesky(Q_h).T
-    #R_h = np.linalg.cholesky(R_h).T
-    #Sigma_0 = np.linalg.cholesky(Sigma_0).T
-    
-    
+    # R_h = np.linalg.cholesky(R_h).T
+    # Sigma_0 = np.linalg.cholesky(Sigma_0).T
+
     m_sequence = [mu_0]
-    P_sequence = [Sigma_0] 
+    P_sequence = [Sigma_0]
     m_predictions = []
     P_predictions = []
 
     for i in range(N):
-        #this index correspnds to the timestep 
-        #print(ts[i+1])
-        #h = ts[i+1]-ts[i]
-        (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step_stable(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i,:])
+        # this index correspnds to the timestep
+        # print(ts[i+1])
+        # h = ts[i+1]-ts[i]
+        (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step_stable(
+            A_h,
+            b_h,
+            Q_h,
+            R_h,
+            m_sequence[-1],
+            P_sequence[-1],
+            g,
+            jacobian_g,
+            z_sequence[i, :],
+        )
         m_sequence.append(m_nxt)
         P_sequence.append(P_nxt)
         m_predictions.append(m_pred_nxt)
         P_predictions.append(P_pred_nxt)
-
 
     m_sequence = np.array(m_sequence)
     P_sequence = np.array(P_sequence)
     m_predictions = np.array(m_predictions)
     P_predictions = np.array(P_predictions)
 
-        # Important: square covariances 
+    # Important: square covariances
     for i in range(P_sequence.shape[0]):
-        P_sequence[i,...] = P_sequence[i,...].T @ P_sequence[i,...]
+        P_sequence[i, ...] = P_sequence[i, ...].T @ P_sequence[i, ...]
 
-        # Important: square covariances 
+        # Important: square covariances
     for i in range(P_predictions.shape[0]):
-        P_predictions[i,...] = P_predictions[i,...].T @ P_predictions[i,...]
+        P_predictions[i, ...] = P_predictions[i, ...].T @ P_predictions[i, ...]
 
     return m_sequence, P_sequence, m_predictions, P_predictions
 
@@ -114,9 +131,9 @@ def kf_smoother_step(m_t, P_t, A, m_pred, P_pred, m_smooth, P_smooth):
         m_t_s: Smoothed mean at time t (shape [n_state]).
         P_t_s: Smoothed covariance at time t (shape [n_state, n_state]).
     """
-    
-    #G = P_t @ A.T @ np.linalg.inv(P_pred)
-    #instead of the naive inverse computation more efficiently:
+
+    # G = P_t @ A.T @ np.linalg.inv(P_pred)
+    # instead of the naive inverse computation more efficiently:
     L, lower = cho_factor(P_pred, lower=True, check_finite=False)
     Y = cho_solve((L, lower), (P_t @ A.T).T, check_finite=False)
     G = Y.T
@@ -145,10 +162,18 @@ def compute_kalman_backward(m_seq, P_seq, m_pred, P_pred, A_h, N):
         P_smoothed: Smoothed covariances (shape [N+1, n_state, n_state]).
     """
     m_smoothed = [m_seq[-1]]
-    P_smoothed = [P_seq[-1,...]]
+    P_smoothed = [P_seq[-1, ...]]
 
-    for i in range(1,N+1):
-        m_t_s, P_t_s = kf_smoother_step(m_seq[N-i], P_seq[N-i,...], A_h, m_pred[-i], P_pred[-i,...], m_smoothed[-1], P_smoothed[-1])
+    for i in range(1, N + 1):
+        m_t_s, P_t_s = kf_smoother_step(
+            m_seq[N - i],
+            P_seq[N - i, ...],
+            A_h,
+            m_pred[-i],
+            P_pred[-i, ...],
+            m_smoothed[-1],
+            P_smoothed[-1],
+        )
         m_smoothed.append(m_t_s)
         P_smoothed.append(P_t_s)
 
@@ -179,8 +204,10 @@ def backward_transitions(m_seq, P_seq, m_pred, P_pred, A_h, N):
     """
 
     Gs, ds, Lambdas = [], [], []
-    for i in range(1,N+1):
-        G_nxt, d_nxt, Lambda_nxt = inversion2(A_h, m_seq[N-i], P_seq[N-i,...], m_pred[-i], P_pred[-i,...])
+    for i in range(1, N + 1):
+        G_nxt, d_nxt, Lambda_nxt = inversion(
+            A_h, m_seq[N - i], P_seq[N - i, ...], m_pred[-i], P_pred[-i, ...]
+        )
         Gs.append(G_nxt)
         ds.append(d_nxt)
         Lambdas.append(Lambda_nxt)
@@ -188,11 +215,13 @@ def backward_transitions(m_seq, P_seq, m_pred, P_pred, A_h, N):
     Gs = np.array(Gs)
     ds = np.array(ds)
     Lambdas = np.array(Lambdas)
-    
+
     return Gs, ds, Lambdas
 
 
-def backward_sample_paths(num_samples, m_sequence, P_sequence, Gs, ds, Lambdas, N, seed=42):
+def backward_sample_paths(
+    num_samples, m_sequence, P_sequence, Gs, ds, Lambdas, N, seed=42
+):
     """Generate sample paths by backward sampling from the posterior.
 
     Samples from the joint distribution of state trajectories conditioned on
@@ -226,7 +255,9 @@ def backward_sample_paths(num_samples, m_sequence, P_sequence, Gs, ds, Lambdas, 
     return X_s_samples
 
 
-def compute_kalman_forward_with_backward_transitions(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N):
+def compute_kalman_forward_with_backward_transitions(
+    mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N
+):
     """Forward EKF pass with precomputed backward transition parameters.
 
     Combines forward filtering with computation of backward transition
@@ -250,19 +281,31 @@ def compute_kalman_forward_with_backward_transitions(mu_0, Sigma_0, A_h, b_h, Q_
         ds: Backward offsets, shape [N, n_state].
         Lambdas: Backward covariances, shape [N, n_state, n_state].
     """
-    #complete forward kalman filtering pass:
+    # complete forward kalman filtering pass:
     m_sequence = [mu_0]
-    P_sequence = [Sigma_0] 
+    P_sequence = [Sigma_0]
     m_predictions = []
     P_predictions = []
     Gs, ds, Lambdas = [], [], []
 
     for i in range(N):
-        #this index correspnds to the timestep 
-        #print(ts[i+1])
-        #h = ts[i+1]-ts[i]
-        (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step_stable(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i,:])
-        G_nxt, d_nxt, Lambda_nxt = inversion2(A_h, m_sequence[-1], P_sequence[-1], m_pred_nxt, P_pred_nxt)
+        # this index correspnds to the timestep
+        # print(ts[i+1])
+        # h = ts[i+1]-ts[i]
+        (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step_stable(
+            A_h,
+            b_h,
+            Q_h,
+            R_h,
+            m_sequence[-1],
+            P_sequence[-1],
+            g,
+            jacobian_g,
+            z_sequence[i, :],
+        )
+        G_nxt, d_nxt, Lambda_nxt = inversion(
+            A_h, m_sequence[-1], P_sequence[-1], m_pred_nxt, P_pred_nxt
+        )
         m_sequence.append(m_nxt)
         P_sequence.append(P_nxt)
         m_predictions.append(m_pred_nxt)
@@ -282,7 +325,9 @@ def compute_kalman_forward_with_backward_transitions(mu_0, Sigma_0, A_h, b_h, Q_
     return m_sequence, P_sequence, m_predictions, P_predictions, Gs, ds, Lambdas
 
 
-def compute_kalman_forward_with_backward_transitions_intermediate(mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N, M):
+def compute_kalman_forward_with_backward_transitions_intermediate(
+    mu_0, Sigma_0, A_h, b_h, Q_h, R_h, g, jacobian_g, z_sequence, N, M
+):
     """Forward pass with intermediate prediction steps and backward transitions.
 
     Like compute_kalman_forward_with_backward_transitions but includes M total
@@ -307,24 +352,37 @@ def compute_kalman_forward_with_backward_transitions_intermediate(mu_0, Sigma_0,
         ds: Backward offsets, shape [M, n_state].
         Lambdas: Backward covariances, shape [M, n_state, n_state].
     """
-    #complete forward kalman filtering pass:
+    # complete forward kalman filtering pass:
     m_sequence = [mu_0]
-    P_sequence = [Sigma_0] 
+    P_sequence = [Sigma_0]
     m_predictions = [mu_0]
     P_predictions = [Sigma_0]
     Gs, ds, Lambdas = [], [], []
 
-    I = M//N
-    for i in range(1,M+1):
-        
-        if i%I == 0:
-            (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step_stable(A_h, b_h, Q_h, R_h, m_sequence[-1], P_sequence[-1], g, jacobian_g, z_sequence[i//I - 1,:])
+    dist = M // N
+    for i in range(1, M + 1):
+        if i % dist == 0:
+            (m_pred_nxt, P_pred_nxt), (m_nxt, P_nxt) = ekf1_filter_step_stable(
+                A_h,
+                b_h,
+                Q_h,
+                R_h,
+                m_sequence[-1],
+                P_sequence[-1],
+                g,
+                jacobian_g,
+                z_sequence[i // dist - 1, :],
+            )
 
         else:
-            m_pred_nxt, P_pred_nxt = future_prediction(m_sequence[-1], P_sequence[-1], A_h, Q_h)
+            m_pred_nxt, P_pred_nxt = future_prediction(
+                m_sequence[-1], P_sequence[-1], A_h, Q_h
+            )
             m_nxt, P_nxt = m_pred_nxt, P_pred_nxt
 
-        G_nxt, d_nxt, Lambda_nxt = inversion2(A_h, m_sequence[-1], P_sequence[-1], m_pred_nxt, P_pred_nxt)
+        G_nxt, d_nxt, Lambda_nxt = inversion(
+            A_h, m_sequence[-1], P_sequence[-1], m_pred_nxt, P_pred_nxt
+        )
         m_sequence.append(m_nxt)
         P_sequence.append(P_nxt)
         m_predictions.append(m_pred_nxt)
@@ -385,7 +443,7 @@ def predict_future(k, m_start, P_start, A_h, Q_h, N):
     """
     m_future = [m_start]
     P_future = [P_start]
-    for _ in range(N-k):
+    for _ in range(N - k):
         m_nxt, P_nxt = future_prediction(m_future[-1], P_future[-1], A_h, Q_h)
         m_future.append(m_nxt)
         P_future.append(P_nxt)
@@ -393,4 +451,3 @@ def predict_future(k, m_start, P_start, A_h, Q_h, N):
     m_future = np.array(m_future)
     P_future = np.array(P_future)
     return m_future, P_future
-
