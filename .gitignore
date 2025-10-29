@@ -40,3 +40,7 @@ uv.lock
 # code coverage
 *.coverage
 *coverage*
+
+
+# pytest
+*.pytest_cache/
