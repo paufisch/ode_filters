@@ -33,3 +33,6 @@ uv.lock
 
 # ignore python version
 .python-version
+
+# jupter notebooks
+*.ipynb_checkpoints
