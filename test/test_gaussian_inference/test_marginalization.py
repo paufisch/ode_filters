@@ -18,10 +18,10 @@ def test_marginalization_simple_2d_to_1d():
 
     mu_z, Sigma_z = marginalization(A, b, Q, mu, Sigma)
 
-    # Expected: mu_z = A @ mu + b = [1, 0] @ [1, 2] + 0 = [1]
-    # Expected: Sigma_z = A @ Sigma @ A.T + Q = [1, 0] @ I @ [1; 0] + 0.1 = [[1.1]]
-    assert mu_z == pytest.approx([1.0])
-    assert Sigma_z == pytest.approx(np.array([[1.1]]))
+    assert mu_z == pytest.approx([1.0]), "mu_z = A @ mu + b = [1, 0] @ [1, 2] + 0 = [1]"
+    assert Sigma_z == pytest.approx(np.array([[1.1]])), (
+        "Expected: Sigma_z = A @ Sigma @ A.T + Q = [1, 0] @ I @ [1; 0] + 0.1 = [[1.1]]"
+    )
 
 
 def test_marginalization_3d_to_2d():
