@@ -33,6 +33,7 @@ def sqr_marginalization(
 
     """
     Q_sqr = np.atleast_2d(Q_sqr)
+    Sigma_sqr = np.atleast_2d(Sigma_sqr)
 
     if A.shape[0] != b.shape[0]:
         raise ValueError(
@@ -45,9 +46,19 @@ def sqr_marginalization(
             f"Shape mismatch: Q is expected to be of square shape but has shape {Q_sqr.shape}"
         )
 
+    if Sigma_sqr.shape[0] != Sigma_sqr.shape[1]:
+        raise ValueError(
+            f"Shape mismatch: Sigma_sqr is expected to be of square shape but has shape {Sigma_sqr.shape}"
+        )
+
+    if A.shape[1] != Sigma_sqr.shape[0]:
+        raise ValueError(
+            f"Shape mismatch: A and Sigma_sqr should have matching first shapes, but have shape A={A.shape}, Sigma_sqr={Sigma_sqr.shape}"
+        )
+
     # Compute marginal statistics
     mu_z = A @ mu + b
-    C = np.concatenate([A @ Sigma_sqr, Q_sqr], axis=0)
+    C = np.concatenate([Sigma_sqr @ A.T, Q_sqr], axis=0)
     _, Sigma_z_sqr = np.linalg.qr(C)
 
     return mu_z, Sigma_z_sqr
@@ -59,6 +70,7 @@ def sqr_inversion(
     Sigma_sqr: np.ndarray,
     mu_z: np.ndarray,
     Sigma_z_sqr: np.ndarray,
+    Q_sqr: np.ndarray = None,  # this is needed here because of josephson form computation
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Inversion using square-root covariance representation for stability.
 
@@ -76,14 +88,17 @@ def sqr_inversion(
         d: Posterior offset (shape [n_state]).
         Lambda_sqr: Posterior covariance (shape [n_state, n_state]).
     """
+    if Q_sqr is None:
+        Q_sqr = np.zeros_like(Sigma_z_sqr)
 
-    Sigma_z_2d_sqr = np.atleast_2d(Sigma_z_sqr)
-    Sigma_z_2d = Sigma_z_2d_sqr @ Sigma_z_2d_sqr.T
-    Sigma = Sigma_sqr @ Sigma_sqr.T
+    Sigma_z_sqr = np.atleast_2d(Sigma_z_sqr)
+    Sigma_z = Sigma_z_sqr.T @ Sigma_z_sqr
+    Sigma = Sigma_sqr.T @ Sigma_sqr
 
-    K = np.linalg.solve(Sigma_z_2d, (A @ Sigma)).T
+    K = np.linalg.solve(Sigma_z, A @ Sigma).T
     d = mu - K @ mu_z
-    C = np.concatenate([-K @ Sigma_z_sqr, Sigma_sqr], axis=0)
+    B = np.eye((K @ A).shape[0]) - K @ A
+    C = np.concatenate([Sigma_sqr @ B.T, Q_sqr @ K.T], axis=0)
     _, Lambda_sqr = np.linalg.qr(C)
 
     return K, d, Lambda_sqr
