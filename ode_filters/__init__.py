@@ -5,7 +5,7 @@ smoothers, and related utilities for inference in ordinary differential equation
 (ODE) systems. Includes:
 
 Modules:
-    gaussian_inference: Bayesian inference operations (marginalization, inversion).
+    gaussian_inference: Bayesian inference operations (marginalization, bayesian_update).
     sqr_gaussian_inference: Numerically stable square-root (Cholesky) formulations.
     ODE_filters: Extended Kalman Filter implementation with backward sampling.
     helpers: Core Kalman filter and smoother implementations.
