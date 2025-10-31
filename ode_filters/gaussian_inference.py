@@ -43,6 +43,12 @@ def marginalization(
             "b must have the same number of elements as A has rows."
         )
 
+    if A.shape[1] != mu.shape[0]:
+        raise ValueError(
+            f"Shape mismatch: A has {A.shape[1]} columns but mu has shape {mu.shape[0]}. "
+            "mu must have the same number of elements as A has columns."
+        )
+
     if Q.shape[0] != Q.shape[1]:
         raise ValueError(
             f"Shape mismatch: Q is expected to be of square shape but has shape {Q.shape}"
