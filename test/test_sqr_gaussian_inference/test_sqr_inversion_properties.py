@@ -144,8 +144,8 @@ def test_sqr_inversion_property_square_root_reconstruction(inputs):
 
     G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
 
-    # Reconstruct posterior covariance from square-root: Lambda @ Lambda.T
-    Lambda_reconstructed = Lambda @ Lambda.T
+    # Reconstruct posterior covariance from square-root: Lambda.T @ Lambda
+    Lambda_reconstructed = Lambda.T @ Lambda
 
     # Reconstructed should be symmetric
     assert np.allclose(
@@ -267,7 +267,7 @@ def test_sqr_inversion_property_reconstruction(inputs):
     G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
 
     # Reconstruct covariance from Cholesky factor
-    Lambda_reconstructed = Lambda @ Lambda.T
+    Lambda_reconstructed = Lambda.T @ Lambda
 
     # Reconstructed covariance should be positive definite
     eigenvalues = np.linalg.eigvalsh(Lambda_reconstructed)
@@ -296,7 +296,7 @@ def test_sqr_inversion_property_cholesky_consistency(inputs):
 
     # Verify that the square-root factors reconstruct to positive definite matrices
     Sigma_reconstructed = Sigma @ Sigma.T
-    Lambda_reconstructed = Lambda @ Lambda.T
+    Lambda_reconstructed = Lambda.T @ Lambda
 
     # Both should be positive definite and symmetric
     eigenvalues_Sigma = np.linalg.eigvalsh(Sigma_reconstructed)
