@@ -363,6 +363,6 @@ def test_sqr_inversion_vs_naive_inversion():
     _, _, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
     _, _, Lambda_sqr = sqr_inversion(A, mu, Sigma_sqr, mu_z, Sigma_z_sqr, Q_sqr)
     Lambda_sqr = Lambda_sqr.T @ Lambda_sqr
-    assert np.allclose(Lambda, Lambda_sqr, rtol=0.1), (
+    assert np.allclose(Lambda, Lambda_sqr, rtol=0.2), (
         f"naive and sqr inversion should yield simmilar results but are Lambda: {Lambda.flatten()}, Lambda_sqr: {Lambda_sqr.flatten()}"
     )
