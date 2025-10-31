@@ -26,7 +26,7 @@ from ode_filters.sqr_gaussian_inference import sqr_marginalization
 def generate_positive_definite_matrix(n):
     """Generate a random positive definite matrix of size n x n."""
     A = np.random.randn(n, n)
-    return A @ A.T + np.eye(n) * 0.1
+    return A.T @ A + np.eye(n) * 0.1
 
 
 @st.composite
@@ -60,7 +60,7 @@ def valid_sqr_marginalization_inputs(
     # Generate Q and convert to Cholesky form
     Q_temp = generate_positive_definite_matrix(n_obs)
     Q_temp = Q_temp / np.max(np.abs(Q_temp)) * 10
-    Q = cholesky(Q_temp)
+    Q = cholesky(Q_temp, upper=True)
 
     # Generate mu
     mu_flat = draw(
@@ -75,7 +75,7 @@ def valid_sqr_marginalization_inputs(
     # Generate Sigma and convert to Cholesky form
     Sigma_temp = generate_positive_definite_matrix(n_state)
     Sigma_temp = Sigma_temp / np.max(np.abs(Sigma_temp)) * 10
-    Sigma = cholesky(Sigma_temp)
+    Sigma = cholesky(Sigma_temp, upper=True)
 
     return A, b, Q, mu, Sigma
 
@@ -180,7 +180,7 @@ def test_sqr_marginalization_property_reconstruction(inputs):
     mu_z, Sigma_z_sqr = sqr_marginalization(A, b, Q, mu, Sigma)
 
     # Reconstruct covariance from Cholesky factor
-    Sigma_z_reconstructed = Sigma_z_sqr @ Sigma_z_sqr.T
+    Sigma_z_reconstructed = Sigma_z_sqr.T @ Sigma_z_sqr
 
     # Reconstructed covariance should be positive definite
     eigenvalues = np.linalg.eigvalsh(Sigma_z_reconstructed)
@@ -219,8 +219,8 @@ def test_sqr_marginalization_property_square_root_reconstruction(inputs):
 
     mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
 
-    # Reconstruct covariance from square-root: Sigma_z @ Sigma_z.T should equal the covariance
-    Sigma_z_reconstructed = Sigma_z @ Sigma_z.T
+    # Reconstruct covariance from square-root: Sigma_z.T @ Sigma_z should equal the covariance
+    Sigma_z_reconstructed = Sigma_z.T @ Sigma_z
 
     # Reconstructed should be symmetric
     assert np.allclose(
