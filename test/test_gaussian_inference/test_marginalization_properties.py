@@ -26,9 +26,8 @@ from ode_filters.gaussian_inference import marginalization
 
 def generate_positive_definite_matrix(n):
     """Generate a random positive definite matrix of size n x n."""
-    # Generate a random matrix and compute its Gram matrix
     A = np.random.randn(n, n)
-    return A @ A.T + np.eye(n) * 0.1  # Add small diagonal for stability
+    return A.T @ A + np.eye(n) * 0.1  # Add small diagonal for stability
 
 
 @st.composite

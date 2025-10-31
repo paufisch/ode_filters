@@ -30,7 +30,7 @@ from test.test_sqr_gaussian_inference.test_sqr_marginalization_properties import
 def generate_positive_definite_matrix(n):
     """Generate a random positive definite matrix of size n x n."""
     A = np.random.randn(n, n)
-    return A @ A.T + np.eye(n) * 0.1
+    return A.T @ A + np.eye(n) * 0.1
 
 
 @st.composite
@@ -64,7 +64,7 @@ def valid_sqr_inversion_inputs(
     # Generate Sigma and convert to Cholesky form
     Sigma_temp = generate_positive_definite_matrix(n_state)
     Sigma_temp = Sigma_temp / np.max(np.abs(Sigma_temp)) * 10
-    Sigma = cholesky(Sigma_temp)
+    Sigma = cholesky(Sigma_temp, upper=True)
 
     # Generate mu_z
     mu_z_flat = draw(
@@ -79,7 +79,7 @@ def valid_sqr_inversion_inputs(
     # Generate Sigma_z and convert to Cholesky form
     Sigma_z_temp = generate_positive_definite_matrix(n_obs)
     Sigma_z_temp = Sigma_z_temp / np.max(np.abs(Sigma_z_temp)) * 10
-    Sigma_z = cholesky(Sigma_z_temp)
+    Sigma_z = cholesky(Sigma_z_temp, upper=True)
 
     return A, mu, Sigma, mu_z, Sigma_z
 
@@ -193,14 +193,14 @@ def test_sqr_inversion_property_reduces_uncertainty(inputs):
     mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
 
     # Step 2: Reconstruct prior covariance
-    Sigma_full = Sigma @ Sigma.T
+    Sigma_full = Sigma.T @ Sigma
     prior_trace = np.trace(Sigma_full)
 
     # Step 3: Perform inversion on marginalization outputs
     G, _, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
 
     # Step 4: Reconstruct posterior covariance and verify it reduces uncertainty
-    Lambda_full = Lambda.T @ Lambda
+    Lambda_full = Lambda @ Lambda.T
 
     # Verify posterior is symmetric
     assert np.allclose(Lambda_full, Lambda_full.T, rtol=1e-10, atol=1e-12), (

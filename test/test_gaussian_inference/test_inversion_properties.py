@@ -23,7 +23,7 @@ from ode_filters.gaussian_inference import inversion
 def generate_positive_definite_matrix(n):
     """Generate a random positive definite matrix of size n x n."""
     A = np.random.randn(n, n)
-    return A @ A.T + np.eye(n) * 0.1
+    return A.T @ A + np.eye(n) * 0.1
 
 
 @st.composite
