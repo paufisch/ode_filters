@@ -3,7 +3,8 @@ import pytest
 from numpy.linalg import cholesky
 from pytest_cases import parametrize_with_cases
 
-from ode_filters.sqr_gaussian_inference import sqr_inversion
+from ode_filters.gaussian_inference import inversion
+from ode_filters.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
 from test.test_gaussian_inference.test_inversion_cases import (
     case_2d_state_1d_observation,
     case_3d_state_2d_observation,
@@ -122,7 +123,7 @@ def test_sqr_inversion_posterior_covariance_symmetry(A, mu, Sigma, mu_z, Sigma_z
     Sigma = cholesky(Sigma)
     Sigma_z = cholesky(Sigma_z)
     _, _, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
-    Lambda = Lambda @ Lambda.T
+    Lambda = Lambda.T @ Lambda
     assert np.allclose(Lambda, Lambda.T), "Posterior covariance must be symmetric"
 
 
@@ -137,7 +138,7 @@ def test_sqr_inversion_posterior_covariance_positive_definite(
     Sigma = cholesky(Sigma)
     Sigma_z = cholesky(Sigma_z)
     _, _, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
-    Lambda = Lambda @ Lambda.T
+    Lambda = Lambda.T @ Lambda
     eigenvalues = np.linalg.eigvalsh(Lambda)
     assert np.all(eigenvalues > -1e-10), (
         "Posterior covariance must be positive definite"
@@ -154,7 +155,7 @@ def test_sqr_inversion_reduces_uncertainty(A, mu, Sigma, mu_z, Sigma_z):
     Sigma = cholesky(Sigma)
     Sigma_z = cholesky(Sigma_z)
     _, _, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
-    Lambda = Lambda @ Lambda.T
+    Lambda = Lambda.T @ Lambda
 
     # Check that posterior covariance trace is smaller than or equal to prior
     # (observation should reduce uncertainty)
@@ -184,7 +185,7 @@ def test_sqr_inversion_edge_cases(A, mu, Sigma, mu_z, Sigma_z):
     Sigma = cholesky(Sigma)
     Sigma_z = cholesky(Sigma_z)
     G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
-    Lambda = Lambda @ Lambda.T
+    Lambda = Lambda.T @ Lambda
 
     # Verify outputs exist and have correct types
     assert isinstance(G, np.ndarray)
@@ -205,7 +206,7 @@ def test_sqr_inversion_high_confidence_observation(A, mu, Sigma, mu_z, Sigma_z):
     Sigma = cholesky(Sigma)
     Sigma_z = cholesky(Sigma_z)
     G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
-    Lambda = Lambda @ Lambda.T
+    Lambda = Lambda.T @ Lambda
 
     # With high confidence in observation, Kalman gain should be larger
     # (we trust the measurement more)
@@ -221,7 +222,7 @@ def test_sqr_inversion_low_confidence_observation(A, mu, Sigma, mu_z, Sigma_z):
     Sigma = cholesky(Sigma)
     Sigma_z = cholesky(Sigma_z)
     G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
-    Lambda = Lambda @ Lambda.T
+    Lambda = Lambda.T @ Lambda
 
     # With low confidence in observation, Kalman gain should be smaller
     # (we trust the prior more)
@@ -268,7 +269,7 @@ def test_sqr_inversion_simple_1d_manual():
     Sigma_z = cholesky(Sigma_z)
 
     G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
-    Lambda = Lambda @ Lambda.T
+    Lambda = Lambda.T @ Lambda
 
     # With this setup, verify reasonable outputs
     assert G.shape == (1, 1)
@@ -288,7 +289,7 @@ def test_sqr_inversion_gain_matrix_properties():
     Sigma_z = cholesky(Sigma_z)
 
     G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
-    Lambda = Lambda @ Lambda.T
+    Lambda = Lambda.T @ Lambda
 
     # Kalman gain dimensions: [n_state, n_obs]
     assert G.shape == (2, 2), "Gain matrix should be [n_state, n_obs]"
@@ -307,7 +308,7 @@ def test_sqr_inversion_posterior_mean_shift():
     Sigma = cholesky(Sigma)
     Sigma_z = cholesky(Sigma_z)
     G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
-    Lambda = Lambda @ Lambda.T
+    Lambda = Lambda.T @ Lambda
 
     # Posterior mean should be shifted towards the observation
     # d = mu - G @ mu_z
@@ -328,7 +329,7 @@ def test_sqr_inversion_preserves_covariance_properties():
     Sigma_z = cholesky(Sigma_z)
 
     G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
-    Lambda = Lambda @ Lambda.T
+    Lambda = Lambda.T @ Lambda
 
     # Lambda should be symmetric
     assert np.allclose(Lambda, Lambda.T), "Lambda should be symmetric"
@@ -340,4 +341,28 @@ def test_sqr_inversion_preserves_covariance_properties():
     # Lambda should be smaller than Sigma (observation reduces uncertainty)
     assert np.trace(Lambda) <= np.trace((Sigma.T @ Sigma)) + 1e-10, (
         "Posterior covariance trace should be <= prior covariance trace"
+    )
+
+
+def test_sqr_inversion_vs_naive_inversion():
+    # Define a 3x3 matrix A
+    A = np.array([[1.0, 0.2, 0.5], [0.2, 1.0, 0.3], [0.5, 0.3, 1.0]])
+    # 3x1 vector b
+    b = np.array([1.0, 2.0, 3.0])
+    # Positive definite 3x3 matrix Q
+    Q = np.array([[2.0, 0.5, 0.3], [0.5, 2.0, 0.4], [0.3, 0.4, 2.0]])
+    # 3D vector mu (3x1)
+    mu = np.array([0.5, -1.0, 2.0])
+    # Positive definite 3x3 matrix Sigma
+    Sigma = np.array([[1.5, 0.2, 0.1], [0.2, 1.4, 0.0], [0.1, 0.0, 1.3]])
+    # Cholesky factors for square-root forms
+    Sigma_sqr = cholesky(Sigma)
+    Q_sqr = cholesky(Q)
+    mu_z, Sigma_z_sqr = sqr_marginalization(A, b, Q_sqr, mu, Sigma_sqr)
+    Sigma_z = Sigma_z_sqr.T @ Sigma_z_sqr
+    _, _, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
+    _, _, Lambda_sqr = sqr_inversion(A, mu, Sigma_sqr, mu_z, Sigma_z_sqr, Q_sqr)
+    Lambda_sqr = Lambda_sqr.T @ Lambda_sqr
+    assert np.allclose(Lambda, Lambda_sqr, rtol=0.2), (
+        f"naive and sqr inversion should yield simmilar results but are Lambda: {Lambda.flatten()}, Lambda_sqr: {Lambda_sqr.flatten()}"
     )
