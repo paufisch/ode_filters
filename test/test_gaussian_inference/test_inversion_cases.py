@@ -296,6 +296,6 @@ def case_lambda_smaller_than_prior():
     mu = np.array([1.0, 2.0])
     Sigma = np.array([[1.0, 0.1], [0.1, 1.0]])
     mu_z = np.array([1.0])  # Observed value
-    Sigma_z = np.array([[0.1]])  # Small observation noise
+    Sigma_z = np.array([[1.1]])  # Small observation noise
 
     return A, mu, Sigma, mu_z, Sigma_z

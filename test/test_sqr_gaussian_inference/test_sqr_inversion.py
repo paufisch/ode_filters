@@ -1,8 +1,10 @@
 import numpy as np
 import pytest
+from numpy.linalg import cholesky
 from pytest_cases import parametrize_with_cases
 
 from ode_filters.gaussian_inference import inversion
+from ode_filters.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
 from test.test_gaussian_inference.test_inversion_cases import (
     case_2d_state_1d_observation,
     case_3d_state_2d_observation,
@@ -43,9 +45,11 @@ from test.test_gaussian_inference.test_inversion_cases import (
         case_full_rank_covariance,
     ],
 )
-def test_inversion_basic_functionality(A, mu, Sigma, mu_z, Sigma_z):
-    """Test that inversion function executes without errors for various inputs."""
-    G, d, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
+def test_sqr_inversion_basic_functionality(A, mu, Sigma, mu_z, Sigma_z):
+    """Test that sqr_inversion function executes without errors for various inputs."""
+    Sigma = cholesky(Sigma)
+    Sigma_z = cholesky(Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
 
     # Verify we get three outputs
     assert G is not None
@@ -61,7 +65,7 @@ def test_inversion_basic_functionality(A, mu, Sigma, mu_z, Sigma_z):
         case_output_shapes_3d,
     ],
 )
-def test_inversion_output_shapes(
+def test_sqr_inversion_output_shapes(
     A,
     mu,
     Sigma,
@@ -71,8 +75,10 @@ def test_inversion_output_shapes(
     expected_d_shape,
     expected_Lambda_shape,
 ):
-    """Test that inversion returns outputs with correct shapes."""
-    G, d, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
+    """Test that sqr_inversion returns outputs with correct shapes."""
+    Sigma = cholesky(Sigma)
+    Sigma_z = cholesky(Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
 
     assert G.shape == expected_G_shape, f"G shape {G.shape} != {expected_G_shape}"
     assert d.shape == expected_d_shape, f"d shape {d.shape} != {expected_d_shape}"
@@ -89,9 +95,11 @@ def test_inversion_output_shapes(
         case_3d_state_2d_observation,
     ],
 )
-def test_inversion_output_types(A, mu, Sigma, mu_z, Sigma_z):
-    """Test that inversion returns numpy arrays."""
-    G, d, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
+def test_sqr_inversion_output_types(A, mu, Sigma, mu_z, Sigma_z):
+    """Test that sqr_inversion returns numpy arrays."""
+    Sigma = cholesky(Sigma)
+    Sigma_z = cholesky(Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
 
     assert isinstance(G, np.ndarray), "G should be numpy array"
     assert isinstance(d, np.ndarray), "d should be numpy array"
@@ -110,10 +118,12 @@ def test_inversion_output_types(A, mu, Sigma, mu_z, Sigma_z):
         case_posterior_covariance_positive_definite,
     ],
 )
-def test_inversion_posterior_covariance_symmetry(A, mu, Sigma, mu_z, Sigma_z):
+def test_sqr_inversion_posterior_covariance_symmetry(A, mu, Sigma, mu_z, Sigma_z):
     """Test that posterior covariance Lambda is symmetric."""
-    _, _, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
-
+    Sigma = cholesky(Sigma)
+    Sigma_z = cholesky(Sigma_z)
+    _, _, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    Lambda = Lambda @ Lambda.T
     assert np.allclose(Lambda, Lambda.T), "Posterior covariance must be symmetric"
 
 
@@ -121,10 +131,14 @@ def test_inversion_posterior_covariance_symmetry(A, mu, Sigma, mu_z, Sigma_z):
     "A,mu,Sigma,mu_z,Sigma_z",
     cases=[case_posterior_covariance_positive_definite],
 )
-def test_inversion_posterior_covariance_positive_definite(A, mu, Sigma, mu_z, Sigma_z):
+def test_sqr_inversion_posterior_covariance_positive_definite(
+    A, mu, Sigma, mu_z, Sigma_z
+):
     """Test that posterior covariance Lambda is positive definite."""
-    _, _, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
-
+    Sigma = cholesky(Sigma)
+    Sigma_z = cholesky(Sigma_z)
+    _, _, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    Lambda = Lambda @ Lambda.T
     eigenvalues = np.linalg.eigvalsh(Lambda)
     assert np.all(eigenvalues > -1e-10), (
         "Posterior covariance must be positive definite"
@@ -135,13 +149,16 @@ def test_inversion_posterior_covariance_positive_definite(A, mu, Sigma, mu_z, Si
     "A,mu,Sigma,mu_z,Sigma_z",
     cases=[case_lambda_smaller_than_prior],
 )
-def test_inversion_reduces_uncertainty(A, mu, Sigma, mu_z, Sigma_z):
+def test_sqr_inversion_reduces_uncertainty(A, mu, Sigma, mu_z, Sigma_z):
     """Test that observation reduces uncertainty (Lambda <= Sigma)."""
-    _, _, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
+    prior_trace = np.trace(Sigma)
+    Sigma = cholesky(Sigma)
+    Sigma_z = cholesky(Sigma_z)
+    _, _, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    Lambda = Lambda @ Lambda.T
 
     # Check that posterior covariance trace is smaller than or equal to prior
     # (observation should reduce uncertainty)
-    prior_trace = np.trace(Sigma)
     posterior_trace = np.trace(Lambda)
     assert posterior_trace <= prior_trace + 1e-10, (
         f"Observation should reduce uncertainty: "
@@ -163,9 +180,12 @@ def test_inversion_reduces_uncertainty(A, mu, Sigma, mu_z, Sigma_z):
         case_large_observation_noise,
     ],
 )
-def test_inversion_edge_cases(A, mu, Sigma, mu_z, Sigma_z):
-    """Test inversion with edge case inputs."""
-    G, d, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
+def test_sqr_inversion_edge_cases(A, mu, Sigma, mu_z, Sigma_z):
+    """Test sqr_inversion with edge case inputs."""
+    Sigma = cholesky(Sigma)
+    Sigma_z = cholesky(Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    Lambda = Lambda @ Lambda.T
 
     # Verify outputs exist and have correct types
     assert isinstance(G, np.ndarray)
@@ -181,22 +201,28 @@ def test_inversion_edge_cases(A, mu, Sigma, mu_z, Sigma_z):
     "A,mu,Sigma,mu_z,Sigma_z",
     cases=[case_small_observation_noise],
 )
-def test_inversion_high_confidence_observation(A, mu, Sigma, mu_z, Sigma_z):
-    """Test inversion with very small observation noise (high confidence in measurement)."""
-    G, d, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
+def test_sqr_inversion_high_confidence_observation(A, mu, Sigma, mu_z, Sigma_z):
+    """Test sqr_inversion with very small observation noise (high confidence in measurement)."""
+    Sigma = cholesky(Sigma)
+    Sigma_z = cholesky(Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    Lambda = Lambda @ Lambda.T
 
     # With high confidence in observation, Kalman gain should be larger
     # (we trust the measurement more)
-    assert np.any(np.abs(G) > 0), "Kalman gain should be non-zero"
+    assert np.all(np.abs(G) > 0), "Kalman gain should be non-zero"
 
 
 @parametrize_with_cases(
     "A,mu,Sigma,mu_z,Sigma_z",
     cases=[case_large_observation_noise],
 )
-def test_inversion_low_confidence_observation(A, mu, Sigma, mu_z, Sigma_z):
-    """Test inversion with large observation noise (low confidence in measurement)."""
-    G, d, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
+def test_sqr_inversion_low_confidence_observation(A, mu, Sigma, mu_z, Sigma_z):
+    """Test sqr_inversion with large observation noise (low confidence in measurement)."""
+    Sigma = cholesky(Sigma)
+    Sigma_z = cholesky(Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    Lambda = Lambda @ Lambda.T
 
     # With low confidence in observation, Kalman gain should be smaller
     # (we trust the prior more)
@@ -218,10 +244,12 @@ def test_inversion_low_confidence_observation(A, mu, Sigma, mu_z, Sigma_z):
         case_singular_Sigma_z,
     ],
 )
-def test_inversion_raises_on_invalid_input(A, mu, Sigma, mu_z, Sigma_z):
-    """Test that inversion raises errors on invalid input dimensions."""
+def test_sqr_inversion_raises_on_invalid_input(A, mu, Sigma, mu_z, Sigma_z):
+    """Test that sqr_inversion raises errors on invalid input dimensions."""
+    # Sigma = cholesky(Sigma)
+    # Sigma_z = cholesky(Sigma_z)
     with pytest.raises((ValueError, np.linalg.LinAlgError)):
-        inversion(A, mu, Sigma, mu_z, Sigma_z)
+        sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
 
 
 # ==============================================================================
@@ -229,16 +257,19 @@ def test_inversion_raises_on_invalid_input(A, mu, Sigma, mu_z, Sigma_z):
 # ==============================================================================
 
 
-def test_inversion_simple_1d_manual():
-    """Manually verify a simple 1D inversion case."""
+def test_sqr_inversion_simple_1d_manual():
+    """Manually verify a simple 1D sqr_inversion case."""
     # Simple 1D case: scale by 2
-    A = np.array([[1.9]])
+    A = np.array([[2.0]])
     mu = np.array([0.0])
     Sigma = np.array([[1.0]])
     mu_z = np.array([2.0])
     Sigma_z = np.array([[1.0]])
+    Sigma = cholesky(Sigma)
+    Sigma_z = cholesky(Sigma_z)
 
-    G, d, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    Lambda = Lambda @ Lambda.T
 
     # With this setup, verify reasonable outputs
     assert G.shape == (1, 1)
@@ -247,15 +278,18 @@ def test_inversion_simple_1d_manual():
     assert Lambda[0, 0] > 0, "Posterior variance should be positive"
 
 
-def test_inversion_gain_matrix_properties():
+def test_sqr_inversion_gain_matrix_properties():
     """Test properties of the Kalman gain matrix."""
     A = np.array([[1.0, 0.0], [0.0, 1.0]])
     mu = np.array([0.0, 0.0])
     Sigma = np.eye(2)
     mu_z = np.array([1.0, 1.0])
-    Sigma_z = np.eye(2) * 0.1
+    Sigma_z = np.eye(2)
+    Sigma = cholesky(Sigma)
+    Sigma_z = cholesky(Sigma_z)
 
-    G, d, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    Lambda = Lambda @ Lambda.T
 
     # Kalman gain dimensions: [n_state, n_obs]
     assert G.shape == (2, 2), "Gain matrix should be [n_state, n_obs]"
@@ -264,15 +298,17 @@ def test_inversion_gain_matrix_properties():
     assert np.any(np.abs(G) > 0), "Gain matrix should have non-zero elements"
 
 
-def test_inversion_posterior_mean_shift():
+def test_sqr_inversion_posterior_mean_shift():
     """Test that posterior mean is shifted towards observation."""
     A = np.array([[1.0]])  # Identity observation
     mu = np.array([0.0])  # Prior mean at 0
     Sigma = np.array([[1.0]])  # Prior covariance
     mu_z = np.array([10.0])  # Observation at 10
     Sigma_z = np.array([[0.1]])  # Very confident observation
-
-    G, d, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
+    Sigma = cholesky(Sigma)
+    Sigma_z = cholesky(Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    Lambda = Lambda @ Lambda.T
 
     # Posterior mean should be shifted towards the observation
     # d = mu - G @ mu_z
@@ -282,15 +318,18 @@ def test_inversion_posterior_mean_shift():
     assert d.size == 1, "d should be 1D for this case"
 
 
-def test_inversion_preserves_covariance_properties():
-    """Test that inversion preserves covariance matrix properties."""
+def test_sqr_inversion_preserves_covariance_properties():
+    """Test that sqr_inversion preserves covariance matrix properties."""
     A = np.array([[1.0, 0.5]])
     mu = np.array([1.0, 2.0])
-    Sigma = np.array([[2.0, 0.5], [0.5, 1.5]])  # Positive definite, symmetric
+    Sigma = np.array([[1.0, 0.1], [0.1, 1.1]])  # Positive definite, symmetric
     mu_z = np.array([2.0])
     Sigma_z = np.array([[1.0]])
+    Sigma = cholesky(Sigma)
+    Sigma_z = cholesky(Sigma_z)
 
-    G, d, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    Lambda = Lambda @ Lambda.T
 
     # Lambda should be symmetric
     assert np.allclose(Lambda, Lambda.T), "Lambda should be symmetric"
@@ -300,6 +339,30 @@ def test_inversion_preserves_covariance_properties():
     assert np.all(eigenvalues > -1e-10), "Lambda should be positive definite"
 
     # Lambda should be smaller than Sigma (observation reduces uncertainty)
-    assert np.trace(Lambda) <= np.trace(Sigma) + 1e-10, (
+    assert np.trace(Lambda) <= np.trace((Sigma.T @ Sigma)) + 1e-10, (
         "Posterior covariance trace should be <= prior covariance trace"
+    )
+
+
+def test_sqr_inversion_vs_naive_inversion():
+    # Define a 3x3 matrix A
+    A = np.array([[1.0, 0.2, 0.5], [0.2, 1.0, 0.3], [0.5, 0.3, 1.0]])
+    # 3x1 vector b
+    b = np.array([1.0, 2.0, 3.0])
+    # Positive definite 3x3 matrix Q
+    Q = np.array([[2.0, 0.5, 0.3], [0.5, 2.0, 0.4], [0.3, 0.4, 2.0]])
+    # 3D vector mu (3x1)
+    mu = np.array([0.5, -1.0, 2.0])
+    # Positive definite 3x3 matrix Sigma
+    Sigma = np.array([[1.5, 0.2, 0.1], [0.2, 1.4, 0.0], [0.1, 0.0, 1.3]])
+    # Cholesky factors for square-root forms
+    Sigma_sqr = cholesky(Sigma)
+    Q_sqr = cholesky(Q)
+    mu_z, Sigma_z_sqr = sqr_marginalization(A, b, Q_sqr, mu, Sigma_sqr)
+    Sigma_z = Sigma_z_sqr.T @ Sigma_z_sqr
+    _, _, Lambda = inversion(A, mu, Sigma, mu_z, Sigma_z)
+    _, _, Lambda_sqr = sqr_inversion(A, mu, Sigma_sqr, mu_z, Sigma_z_sqr, Q_sqr)
+    Lambda_sqr = Lambda_sqr.T @ Lambda_sqr
+    assert np.allclose(Lambda, Lambda_sqr, rtol=0.1), (
+        f"naive and sqr inversion should yield simmilar results but are Lambda: {Lambda.flatten()}, Lambda_sqr: {Lambda_sqr.flatten()}"
     )

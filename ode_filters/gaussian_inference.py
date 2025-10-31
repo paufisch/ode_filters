@@ -55,8 +55,13 @@ def marginalization(
     return mu_z, Sigma_z
 
 
-# in contrast to bayesian_update1 above, this invertes the marginalizes distribution
-def inversion(A, mu, Sigma, mu_z, Sigma_z):
+def inversion(
+    A: np.ndarray,
+    mu: np.ndarray,
+    Sigma: np.ndarray,
+    mu_z: np.ndarray,
+    Sigma_z: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute posterior parameters without explicit observation value.
 
     Variant of bayesian_update that returns the gain matrix G, offset d, and posterior
