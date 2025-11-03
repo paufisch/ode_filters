@@ -42,9 +42,9 @@ def test_ekf1_sqr_filter_step_matches_dense_linear_case():
         A, b, Q, m_prev, P_prev, g, jacobian, z_observed, R
     )
 
-    P_prev_sqr = np.linalg.cholesky(P_prev).T
-    Q_sqr = np.linalg.cholesky(Q).T
-    R_sqr = np.linalg.cholesky(R).T
+    P_prev_sqr = np.linalg.cholesky(P_prev, upper=True)
+    Q_sqr = np.linalg.cholesky(Q, upper=True)
+    R_sqr = np.linalg.cholesky(R, upper=True)
 
     sqr_pred, sqr_back, sqr_obs, sqr_post = ekf1_sqr_filter_step(
         A, b, Q_sqr, m_prev, P_prev_sqr, g, jacobian, z_observed, R_sqr

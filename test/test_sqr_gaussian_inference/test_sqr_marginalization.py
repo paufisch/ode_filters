@@ -188,6 +188,20 @@ def test_sqr_marginalization_raises_on_invalid_input(A, b, Q, mu, Sigma):
         sqr_marginalization(A, b, Q, mu, Sigma)
 
 
+def test_sqr_marginalization_raises_on_non_square_sigma_root():
+    """Sigma_sqr must be square; non-square factors are rejected."""
+    A = np.array([[1.0, 0.0]])
+    b = np.array([0.0])
+    Q = np.array([[0.1]])
+    mu = np.array([1.0, 2.0])
+
+    Q_sqr = cholesky(Q, upper=True)
+    Sigma_sqr = np.ones((2, 3))  # deliberately non-square
+
+    with pytest.raises(ValueError):
+        sqr_marginalization(A, b, Q_sqr, mu, Sigma_sqr)
+
+
 def test_sqr_marginalization_1d_covariance_as_array():
     """Test that 1D covariance Q can be passed as 1D array (edge case)."""
     # This test documents behavior when Q is passed as 1D instead of 2D
