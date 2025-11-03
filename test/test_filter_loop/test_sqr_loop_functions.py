@@ -2,9 +2,7 @@ import numpy as np
 import pytest
 
 from ode_filters.ODE_filter_loop import (
-    ekf1_loop,
     ekf1_sqr_loop,
-    rts_smoother_loop,
     rts_sqr_smoother_loop,
 )
 
@@ -21,6 +19,96 @@ def _linear_measurement(H, c):
 
 def _reconstruct_covariance_sequence(factors):
     return np.matmul(factors.transpose(0, 2, 1), factors)
+
+
+def _dense_filter_step(A, b, Q, m_prev, P_prev, g, jacobian_g, z_observed, R):
+    m_pred = A @ m_prev + b
+    P_pred = A @ P_prev @ A.T + Q
+
+    cross_cov = P_prev @ A.T
+    G_back = np.linalg.solve(P_pred, cross_cov.T).T
+    d_back = m_prev - G_back @ m_pred
+    P_back = P_prev - G_back @ P_pred @ G_back.T
+
+    H = jacobian_g(m_pred)
+    c = g(m_pred) - H @ m_pred
+
+    m_z = H @ m_pred + c
+    P_z = H @ P_pred @ H.T + R
+
+    innovation_cross = P_pred @ H.T
+    K = np.linalg.solve(P_z, innovation_cross.T).T
+    d = m_pred - K @ m_z
+    P_post = P_pred - K @ P_z @ K.T
+    m_post = K @ z_observed + d
+
+    return (m_pred, P_pred), (G_back, d_back, P_back), (m_z, P_z), (m_post, P_post)
+
+
+def ekf1_dense_loop(mu_0, Sigma_0, A, b, Q, R, g, jacobian_g, z_sequence, N):
+    state_dim = mu_0.shape[0]
+    obs_dim = z_sequence.shape[1]
+
+    m_seq = np.empty((N + 1, state_dim))
+    P_seq = np.empty((N + 1, state_dim, state_dim))
+    m_pred_seq = np.empty((N, state_dim))
+    P_pred_seq = np.empty((N, state_dim, state_dim))
+    G_back_seq = np.empty((N, state_dim, state_dim))
+    d_back_seq = np.empty((N, state_dim))
+    P_back_seq = np.empty((N, state_dim, state_dim))
+    mz_seq = np.empty((N, obs_dim))
+    Pz_seq = np.empty((N, obs_dim, obs_dim))
+
+    m_seq[0] = mu_0
+    P_seq[0] = Sigma_0
+
+    for i in range(N):
+        (
+            (m_pred_seq[i], P_pred_seq[i]),
+            (G_back_seq[i], d_back_seq[i], P_back_seq[i]),
+            (mz_seq[i], Pz_seq[i]),
+            (m_seq[i + 1], P_seq[i + 1]),
+        ) = _dense_filter_step(
+            A, b, Q, m_seq[i], P_seq[i], g, jacobian_g, z_sequence[i], R
+        )
+
+    return (
+        m_seq,
+        P_seq,
+        m_pred_seq,
+        P_pred_seq,
+        G_back_seq,
+        d_back_seq,
+        P_back_seq,
+        mz_seq,
+        Pz_seq,
+    )
+
+
+def _dense_smoother_step(G_back, d_back, P_back, m_s, P_s):
+    m_prev = G_back @ m_s + d_back
+    P_prev = G_back @ P_s @ G_back.T + P_back
+    return m_prev, P_prev
+
+
+def rts_dense_smoother_loop(m_N, P_N, G_back_seq, d_back_seq, P_back_seq, N):
+    state_dim = m_N.shape[0]
+
+    m_smooth = np.empty((N + 1, state_dim))
+    P_smooth = np.empty((N + 1, state_dim, state_dim))
+    m_smooth[-1] = m_N
+    P_smooth[-1] = P_N
+
+    for j in range(N - 1, -1, -1):
+        (m_smooth[j], P_smooth[j]) = _dense_smoother_step(
+            G_back_seq[j],
+            d_back_seq[j],
+            P_back_seq[j],
+            m_smooth[j + 1],
+            P_smooth[j + 1],
+        )
+
+    return m_smooth, P_smooth
 
 
 def test_ekf1_sqr_loop_matches_dense_linear_case():
@@ -40,7 +128,7 @@ def test_ekf1_sqr_loop_matches_dense_linear_case():
 
     g, jacobian = _linear_measurement(H, c)
 
-    dense_results = ekf1_loop(
+    dense_results = ekf1_dense_loop(
         mu_0, Sigma_0, A, b, Q, R, g, jacobian, z_sequence, num_steps
     )
 
@@ -115,7 +203,7 @@ def test_rts_sqr_smoother_loop_matches_dense_linear_case():
 
     g, jacobian = _linear_measurement(H, c)
 
-    dense_results = ekf1_loop(
+    dense_results = ekf1_dense_loop(
         mu_0, Sigma_0, A, b, Q, R, g, jacobian, z_sequence, num_steps
     )
 
@@ -151,7 +239,7 @@ def test_rts_sqr_smoother_loop_matches_dense_linear_case():
         _,
     ) = sqr_results
 
-    dense_m_smooth, dense_P_smooth = rts_smoother_loop(
+    dense_m_smooth, dense_P_smooth = rts_dense_smoother_loop(
         dense_m_seq[-1],
         dense_P_seq[-1],
         dense_G_back_seq,
