@@ -44,9 +44,9 @@ def test_ekf1_sqr_loop_matches_dense_linear_case():
         mu_0, Sigma_0, A, b, Q, R, g, jacobian, z_sequence, num_steps
     )
 
-    Sigma_0_sqr = np.linalg.cholesky(Sigma_0).T
-    Q_sqr = np.linalg.cholesky(Q).T
-    R_sqr = np.linalg.cholesky(R).T
+    Sigma_0_sqr = np.linalg.cholesky(Sigma_0, upper=True)
+    Q_sqr = np.linalg.cholesky(Q, upper=True)
+    R_sqr = np.linalg.cholesky(R, upper=True)
 
     sqr_results = ekf1_sqr_loop(
         mu_0, Sigma_0_sqr, A, b, Q_sqr, R_sqr, g, jacobian, z_sequence, num_steps
@@ -119,9 +119,9 @@ def test_rts_sqr_smoother_loop_matches_dense_linear_case():
         mu_0, Sigma_0, A, b, Q, R, g, jacobian, z_sequence, num_steps
     )
 
-    Sigma_0_sqr = np.linalg.cholesky(Sigma_0).T
-    Q_sqr = np.linalg.cholesky(Q).T
-    R_sqr = np.linalg.cholesky(R).T
+    Sigma_0_sqr = np.linalg.cholesky(Sigma_0, upper=True)
+    Q_sqr = np.linalg.cholesky(Q, upper=True)
+    R_sqr = np.linalg.cholesky(R, upper=True)
 
     sqr_results = ekf1_sqr_loop(
         mu_0, Sigma_0_sqr, A, b, Q_sqr, R_sqr, g, jacobian, z_sequence, num_steps
