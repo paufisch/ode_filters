@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from ode_filters.ODE_filter_step import (
     ekf1_filter_step,
@@ -41,33 +42,33 @@ def test_ekf1_sqr_filter_step_matches_dense_linear_case():
         A, b, Q, m_prev, P_prev, g, jacobian, z_observed, R
     )
 
-    P_prev_sqr = np.linalg.cholesky(P_prev, upper=True)
-    Q_sqr = np.linalg.cholesky(Q, upper=True)
-    R_sqr = np.linalg.cholesky(R, upper=True)
+    P_prev_sqr = np.linalg.cholesky(P_prev).T
+    Q_sqr = np.linalg.cholesky(Q).T
+    R_sqr = np.linalg.cholesky(R).T
 
     sqr_pred, sqr_back, sqr_obs, sqr_post = ekf1_sqr_filter_step(
         A, b, Q_sqr, m_prev, P_prev_sqr, g, jacobian, z_observed, R_sqr
     )
 
-    assert np.allclose(sqr_pred[0], dense_pred[0])
-    assert np.allclose(
-        _reconstruct_covariance(sqr_pred[1]), dense_pred[1], rtol=1e-12, atol=1e-12
+    assert sqr_pred[0] == pytest.approx(dense_pred[0], rel=1e-12, abs=1e-12)
+    assert _reconstruct_covariance(sqr_pred[1]) == pytest.approx(
+        dense_pred[1], rel=1e-12, abs=1e-12
     )
 
-    assert np.allclose(sqr_back[0], dense_back[0])
-    assert np.allclose(sqr_back[1], dense_back[1])
-    assert np.allclose(
-        _reconstruct_covariance(sqr_back[2]), dense_back[2], rtol=1e-12, atol=1e-12
+    assert sqr_back[0] == pytest.approx(dense_back[0], rel=1e-12, abs=1e-12)
+    assert sqr_back[1] == pytest.approx(dense_back[1], rel=1e-12, abs=1e-12)
+    assert _reconstruct_covariance(sqr_back[2]) == pytest.approx(
+        dense_back[2], rel=1e-12, abs=1e-12
     )
 
-    assert np.allclose(sqr_obs[0], dense_obs[0])
-    assert np.allclose(
-        _reconstruct_covariance(sqr_obs[1]), dense_obs[1], rtol=1e-12, atol=1e-12
+    assert sqr_obs[0] == pytest.approx(dense_obs[0], rel=1e-12, abs=1e-12)
+    assert _reconstruct_covariance(sqr_obs[1]) == pytest.approx(
+        dense_obs[1], rel=1e-12, abs=1e-12
     )
 
-    assert np.allclose(sqr_post[0], dense_post[0])
-    assert np.allclose(
-        _reconstruct_covariance(sqr_post[1]), dense_post[1], rtol=1e-12, atol=1e-12
+    assert sqr_post[0] == pytest.approx(dense_post[0], rel=1e-12, abs=1e-12)
+    assert _reconstruct_covariance(sqr_post[1]) == pytest.approx(
+        dense_post[1], rel=1e-12, abs=1e-12
     )
 
 
@@ -106,10 +107,9 @@ def test_rts_sqr_smoother_step_matches_dense_linear_case():
         sqr_back[0], sqr_back[1], sqr_back[2], sqr_post[0], sqr_post[1]
     )
 
-    assert np.allclose(sqr_smoothed_prev[0], dense_smoothed_prev[0])
-    assert np.allclose(
-        _reconstruct_covariance(sqr_smoothed_prev[1]),
-        dense_smoothed_prev[1],
-        rtol=1e-12,
-        atol=1e-12,
+    assert sqr_smoothed_prev[0] == pytest.approx(
+        dense_smoothed_prev[0], rel=1e-12, abs=1e-12
+    )
+    assert _reconstruct_covariance(sqr_smoothed_prev[1]) == pytest.approx(
+        dense_smoothed_prev[1], rel=1e-12, abs=1e-12
     )

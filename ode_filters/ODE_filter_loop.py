@@ -63,7 +63,7 @@ def rts_smoother_loop(m_N, P_N, G_back_seq, d_back_seq, P_back_seq, N):
     m_smooth[-1] = m_N
     P_smooth[-1] = P_N
 
-    for j in range(N, -1, -1):
+    for j in range(N - 1, -1, -1):
         (m_smooth[j], P_smooth[j]) = rts_smoother_step(
             G_back_seq[j],
             d_back_seq[j],
@@ -151,7 +151,7 @@ def rts_sqr_smoother_loop(m_N, P_N_sqr, G_back_seq, d_back_seq, P_back_seq_sqr, 
     m_smooth[-1] = m_N
     P_smooth_sqr[-1] = P_N_sqr
 
-    for j in range(N, -1, -1):
+    for j in range(N - 1, -1, -1):
         (m_smooth[j], P_smooth_sqr[j]) = rts_sqr_smoother_step(
             G_back_seq[j],
             d_back_seq[j],
