@@ -1,4 +1,5 @@
 from math import factorial
+from operator import index
 from typing import Optional
 
 import numpy as np
@@ -18,8 +19,7 @@ def _make_iwp_state_matrices(q: int):
         Functions A(h) and Q(h) that accept a positive scalar h and return
         square numpy arrays of shape (q + 1, q + 1).
     """
-    if not isinstance(q, int):
-        raise TypeError("q must be an integer.")
+    q = index(q)
     if q < 0:
         raise ValueError("q must be a non-negative integer.")
 
@@ -51,7 +51,7 @@ def _make_iwp_state_matrices(q: int):
 class IWP:
     """q-times integrated Wiener process prior for d-dimensional systems."""
 
-    def __init__(self, q: int, d: int, Sigma: Optional[np.ndarray] = None):
+    def __init__(self, q: int, d: int, Xi: Optional[np.ndarray] = None):
         if not isinstance(q, int):
             raise TypeError("q must be an integer.")
         if q < 0:
@@ -62,17 +62,15 @@ class IWP:
         if d <= 0:
             raise ValueError("d must be positive.")
 
-        sigma = (
-            np.eye(d, dtype=float) if Sigma is None else np.asarray(Sigma, dtype=float)
-        )
-        if sigma.shape != (d, d):
-            raise ValueError(f"Sigma must have shape ({d}, {d}), got {sigma.shape}.")
+        xi = np.eye(d, dtype=float) if Xi is None else np.asarray(Xi, dtype=float)
+        if xi.shape != (d, d):
+            raise ValueError(f"Xi must have shape ({d}, {d}), got {xi.shape}.")
 
         self._A, self._Q = _make_iwp_state_matrices(q)
         self.q = q
         self._dim = d
-        self.Sigma = sigma
-        self._id = np.eye(d, dtype=sigma.dtype)
+        self.xi = xi
+        self._id = np.eye(d, dtype=xi.dtype)
 
     def A(self, h: float) -> np.ndarray:
         """State transition matrix for step size h."""
@@ -80,7 +78,7 @@ class IWP:
 
     def Q(self, h: float) -> np.ndarray:
         """Process noise (diffusion) matrix for step size h."""
-        return np.kron(self._Q(self._validate_h(h)), self.Sigma)
+        return np.kron(self._Q(self._validate_h(h)), self.xi)
 
     @staticmethod
     def _validate_h(h: float) -> float:

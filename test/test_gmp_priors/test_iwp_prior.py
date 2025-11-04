@@ -52,7 +52,7 @@ def test_iwp_identity_sigma_matches_kron():
 
 def test_iwp_custom_sigma_and_validation():
     sigma = np.array([[2.0, 0.5], [0.5, 1.0]])
-    iwp = IWP(q=1, d=2, Sigma=sigma)
+    iwp = IWP(q=1, d=2, Xi=sigma)
     h = 0.25
     base_Q = _make_iwp_state_matrices(1)[1]
     expected_Q = np.kron(base_Q(h), sigma)
@@ -66,7 +66,7 @@ def test_iwp_custom_sigma_and_validation():
         IWP(q=1, d=0)
 
     with pytest.raises(ValueError):
-        IWP(q=1, d=2, Sigma=np.eye(3))
+        IWP(q=1, d=2, Xi=np.eye(3))
 
     with pytest.raises(ValueError):
         iwp.A(-0.2)
