@@ -1,7 +1,11 @@
+import array
 from math import factorial
 from operator import index
-from typing import Optional
+from typing import Callable, Optional
 
+import jax
+import jax.experimental.jet
+import jax.numpy as jnp
 import numpy as np
 
 
@@ -85,3 +89,40 @@ class IWP:
         if h < 0:
             raise ValueError("h must be non-negative.")
         return float(h)
+
+
+def taylor_mode_initialization(vf: Callable, inits: array, q: int) -> jnp.ndarray:
+    """Return flattened Taylor-mode coefficients produced via JAX Jet.
+
+    Parameters
+    ----------
+    vf : callable
+        Vector field whose Taylor coefficients are required.
+    inits : array-like
+        Initial value around which the expansion takes place.
+    q : int
+        Number of higher-order coefficients to compute.
+
+    Returns
+    -------
+    jnp.ndarray
+        Concatenated Taylor coefficients (including the initial value).
+    """
+    if not callable(vf):
+        raise TypeError("vf must be callable.")
+    q = index(q)
+    if q < 0:
+        raise ValueError("q must be a non-negative integer.")
+
+    coefficients = [inits, vf(inits)]
+
+    for _ in range(q - 1):
+        primals, higher_order = jax.experimental.jet.jet(
+            vf,
+            primals=inits,
+            series=[coefficients[1:]],
+        )
+        coefficients = [inits, primals, *higher_order]
+
+    leaves = jax.tree_util.tree_leaves(coefficients)
+    return jnp.concatenate([jnp.ravel(arr) for arr in leaves])
