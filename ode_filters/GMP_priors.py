@@ -92,7 +92,7 @@ class IWP:
 
 
 def taylor_mode_initialization(vf: Callable, inits: array, q: int) -> jnp.ndarray:
-    """Return flattened Taylor-mode coefficients produced via JAX Jet.
+    """Return flattened Taylor‑mode coefficients produced via JAX Jet.
 
     Parameters
     ----------
@@ -114,15 +114,22 @@ def taylor_mode_initialization(vf: Callable, inits: array, q: int) -> jnp.ndarra
     if q < 0:
         raise ValueError("q must be a non-negative integer.")
 
-    coefficients = [inits, vf(inits)]
+    base_state = jnp.asarray(inits)
+    coefficients: list[jnp.ndarray] = [base_state]
+    series_terms: list[jnp.ndarray] = []
 
-    for _ in range(q - 1):
-        primals, higher_order = jax.experimental.jet.jet(
+    for order in range(q):
+        primals_out, series_out = jax.experimental.jet.jet(
             vf,
-            primals=inits,
-            series=[coefficients[1:]],
+            primals=(base_state,),
+            series=(tuple(series_terms),),
         )
-        coefficients = [inits, primals, *higher_order]
+
+        updated_series = [jnp.asarray(primals_out)]
+        updated_series.extend(jnp.asarray(term) for term in series_out)
+        series_terms = updated_series
+
+        coefficients.append(series_terms[-1])
 
     leaves = jax.tree_util.tree_leaves(coefficients)
     return jnp.concatenate([jnp.ravel(arr) for arr in leaves])

@@ -3,7 +3,10 @@ from math import factorial
 import numpy as np
 import pytest
 
-from ode_filters.GMP_priors import IWP, _make_iwp_state_matrices
+from ode_filters.GMP_priors import (
+    IWP,
+    _make_iwp_state_matrices,
+)
 
 
 @pytest.mark.parametrize("q,h", [(0, 0.7), (1, 0.3)])
