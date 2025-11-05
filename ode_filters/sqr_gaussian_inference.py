@@ -91,14 +91,16 @@ def sqr_inversion(
     if Q_sqr is None:
         Q_sqr = np.zeros_like(Sigma_z_sqr)
 
+    n_state = A.shape[1]
+
     Sigma_z_sqr = np.atleast_2d(Sigma_z_sqr)
     Sigma_z = Sigma_z_sqr.T @ Sigma_z_sqr
     Sigma = Sigma_sqr.T @ Sigma_sqr
 
     K = np.linalg.solve(Sigma_z, A @ Sigma).T
     d = mu - K @ mu_z
-    B = np.eye((K @ A).shape[0]) - K @ A
-    C = np.concatenate([Sigma_sqr @ B.T, Q_sqr @ K.T], axis=0)
+    B = np.eye(n_state) - K @ A
+    C = np.concatenate([Sigma_sqr @ B.T, (Q_sqr @ K.T).reshape(-1, n_state)], axis=0)
     _, Lambda_sqr = np.linalg.qr(C)
 
     return K, d, Lambda_sqr
