@@ -100,7 +100,7 @@ def ekf1_sqr_loop_preconditioned(
     T_h,
     A_bar,
     b_bar,
-    Q_h_sqr_bar,
+    Q_sqr_bar,
     R_h_sqr,
     g,
     jacobian_g,
@@ -129,7 +129,7 @@ def ekf1_sqr_loop_preconditioned(
     P_seq_sqr[0] = Sigma_0_sqr
 
     m_seq_bar[0] = np.linalg.solve(T_h, mu_0)
-    P_seq_sqr_bar[0] = np.linalg.solve(T_h, P_seq_sqr.T).T
+    P_seq_sqr_bar[0] = np.linalg.solve(T_h, Sigma_0_sqr.T).T
 
     # Fill in the loop
     for i in range(N):
@@ -142,7 +142,7 @@ def ekf1_sqr_loop_preconditioned(
         ) = ekf1_sqr_filter_step_preconditioned(
             A_bar,
             b_bar,
-            Q_h_sqr_bar,
+            Q_sqr_bar,
             T_h,
             m_seq_bar[i],
             P_seq_sqr_bar[i],

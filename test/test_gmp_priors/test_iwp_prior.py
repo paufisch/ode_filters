@@ -5,6 +5,8 @@ import pytest
 
 from ode_filters.GMP_priors import (
     IWP,
+    IWP_precond,
+    _make_iwp_precond_state_matrices,
     _make_iwp_state_matrices,
 )
 
@@ -91,3 +93,44 @@ def test_iwp_rejects_float_q(q_float):
 def test_iwp_rejects_float_d(d_float):
     with pytest.raises(TypeError):
         IWP(q=1, d=d_float)
+
+
+def test_make_iwp_precond_state_matrices_rejects_negative_q():
+    with pytest.raises(ValueError, match="q must be a non-negative integer"):
+        _make_iwp_precond_state_matrices(-1)
+
+
+def test_preconditioner_T_rejects_negative_step():
+    _, _, T = _make_iwp_precond_state_matrices(1)
+    with pytest.raises(ValueError, match="h must be non-negative"):
+        T(-0.5)
+
+
+@pytest.mark.parametrize(
+    "args,expected_exception,match",
+    [
+        ((1.2, 1), TypeError, "q must be an integer"),
+        ((-1, 1), ValueError, "q must be non-negative"),
+        ((0, "1"), TypeError, "d must be an integer"),
+        ((0, 0), ValueError, "d must be positive"),
+    ],
+)
+def test_iwp_precond_constructor_rejects_invalid_q_and_d(
+    args, expected_exception, match
+):
+    with pytest.raises(expected_exception, match=match):
+        IWP_precond(*args)
+
+
+def test_iwp_precond_constructor_rejects_bad_xi_shape():
+    with pytest.raises(ValueError, match=r"Xi must have shape"):
+        IWP_precond(q=0, d=1, Xi=np.eye(2))
+
+
+def test_iwp_precond_validate_h_returns_float():
+    assert IWP_precond._validate_h(2) == 2.0
+
+
+def test_iwp_precond_validate_h_rejects_negative():
+    with pytest.raises(ValueError, match="h must be non-negative"):
+        IWP_precond._validate_h(-1.0)
