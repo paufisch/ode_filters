@@ -49,3 +49,8 @@ uv.lock
 
 # hypothesis
 *.hypothesis
+
+# specific notebooks
+intermediate_sampling.ipynb
+lotka-volterra.ipynb 
+SIR.ipynb 
