@@ -16,11 +16,6 @@ def ekf1_sqr_loop(
     state_dim = mu_0.shape[0]
     obs_dim = z_sequence.shape[1]
 
-    # compute the initial roots
-    # Sigma_0_sqr = cholesky(Sigma_0, upper=True)
-    # Q_h_sqr = cholesky(Q_h, upper=True)
-    # R_h_sqr = cholesky(R_h, upper=True)
-
     # Pre-allocate all arrays
     m_seq = np.empty((N + 1, state_dim))
     P_seq_sqr = np.empty((N + 1, state_dim, state_dim))
