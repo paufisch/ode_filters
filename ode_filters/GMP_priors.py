@@ -1,5 +1,5 @@
 import array
-from math import factorial
+from math import comb, factorial
 from operator import index
 from typing import Callable, Optional
 
@@ -133,3 +133,81 @@ def taylor_mode_initialization(vf: Callable, inits: array, q: int) -> jnp.ndarra
 
     leaves = jax.tree_util.tree_leaves(coefficients)
     return jnp.concatenate([jnp.ravel(arr) for arr in leaves])
+
+
+def _make_iwp_precond_state_matrices(q: int):
+    """Return callables producing the transition, diffusion, and scaling matrices."""
+    q = index(q)
+    if q < 0:
+        raise ValueError("q must be a non-negative integer.")
+
+    dim = q + 1
+
+    A_bar = np.zeros((dim, dim), dtype=float)
+    for i in range(dim):
+        for j in range(dim):
+            n = q - i
+            k = q - j
+            if 0 <= k <= n:
+                A_bar[i, j] = comb(n, k)
+
+    Q_bar = np.zeros((dim, dim), dtype=float)
+    for i in range(dim):
+        for j in range(dim):
+            Q_bar[i, j] = 1.0 / (2 * q + 1 - i - j)
+
+    factorials = np.array([float(factorial(q - idx)) for idx in range(dim)])
+
+    def T(h: float) -> np.ndarray:
+        if h < 0:
+            raise ValueError("h must be non-negative.")
+        h = float(h)
+        sqrt_h = np.sqrt(h)
+        powers = q - np.arange(dim)
+        diag_entries = sqrt_h * (h**powers) / factorials
+        return np.diag(diag_entries)
+
+    return A_bar, Q_bar, T
+
+
+class IWP_precond:
+    """q-times integrated Wiener process prior for d-dimensional systems."""
+
+    def __init__(self, q: int, d: int, Xi: Optional[np.ndarray] = None):
+        if not isinstance(q, int):
+            raise TypeError("q must be an integer.")
+        if q < 0:
+            raise ValueError("q must be non-negative.")
+
+        if not isinstance(d, int):
+            raise TypeError("d must be an integer.")
+        if d <= 0:
+            raise ValueError("d must be positive.")
+
+        xi = np.eye(d, dtype=float) if Xi is None else np.asarray(Xi, dtype=float)
+        if xi.shape != (d, d):
+            raise ValueError(f"Xi must have shape ({d}, {d}), got {xi.shape}.")
+
+        self._A_bar, self._Q_bar, self._T = _make_iwp_precond_state_matrices(q)
+        self.q = q
+        self._dim = d
+        self.xi = xi
+        self._id = np.eye(d, dtype=xi.dtype)
+
+    def A(self) -> np.ndarray:
+        """State transition matrix for step size h."""
+        return np.kron(self._A_bar, self._id)
+
+    def Q(self) -> np.ndarray:
+        """Process noise (diffusion) matrix for step size h."""
+        return np.kron(self._Q_bar, self.xi)
+
+    def T(self, h: float) -> np.ndarray:
+        """Scaling matrix for step size h."""
+        return np.kron(self._T(self._validate_h(h)), self._id)
+
+    @staticmethod
+    def _validate_h(h: float) -> float:
+        if h < 0:
+            raise ValueError("h must be non-negative.")
+        return float(h)
