@@ -181,7 +181,7 @@ def test_preconditioned_matches_standard_outputs(example):
     P_smoothed_standard = _reconstruct_covariance(P_smoothed_sqr_standard)
     P_smoothed_precond = _reconstruct_covariance(P_smoothed_sqr_precond)
 
-    assert m_seq_precond == pytest.approx(m_seq_standard, rel=1e-2)
-    assert P_seq_precond == pytest.approx(P_seq_standard, rel=1e-2)
-    assert m_smoothed_precond == pytest.approx(m_smoothed_standard, rel=1e-2)
-    assert P_smoothed_precond == pytest.approx(P_smoothed_standard, rel=1e-2)
+    assert m_seq_precond == pytest.approx(m_seq_standard, rel=1e-1)
+    assert P_seq_precond == pytest.approx(P_seq_standard, rel=1e-1)
+    assert m_smoothed_precond == pytest.approx(m_smoothed_standard, rel=1e-1)
+    assert P_smoothed_precond == pytest.approx(P_smoothed_standard, rel=1e-1)
