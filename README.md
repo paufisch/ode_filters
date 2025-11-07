@@ -1,57 +1,51 @@
 # ODE Filters
 
-## Testing
+Probabilistic filtering and smoothing algorithms for ordinary differential equation solvers.
 
-### Running Tests
+## Overview
 
-To run the test suite, use pytest:
+The package implements square-root Gaussian inference routines along with filter and smoother loops for probabilistic ODE solvers. It targets research-grade experimentation while staying close to practical applications.
 
-```bash
-uv run pytest test/ -v
-```
+## Installation
 
-Or for specific test file:
+1. Install [uv](https://github.com/astral-sh/uv) if you have not already:
 
-```bash
-uv run pytest test/test_gaussian_inference.py -v
-```
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
 
-### Test Suite for `marginalization` Function
+2. Sync the project dependencies (this installs the package in editable mode and pulls in development extras):
 
-The `test/test_gaussian_inference.py` file contains comprehensive tests for the `marginalization` function in `ode_filters/gaussian_inference.py`.
+   ```bash
+   uv sync --group dev
+   ```
 
-#### Test Coverage
+This creates a virtual environment under `.venv/` and makes the `uv run` command available for executing project tools.
 
-1. **test_marginalization_basic**: Tests basic functionality with a simple 2D case, verifying exact numerical results.
+## Quickstart
 
-2. **test_marginalization_shapes**: Validates that output shapes are correct across various input dimensions (1D→1D, 2D→1D, 3D→2D, 5D→3D).
+- Run the full test suite:
 
-3. **test_marginalization_zero_noise**: Tests the special case where observation noise Q = 0, verifying the simplified computation.
+  ```bash
+  uv run pytest --cov=ode_filters --cov-report=term-missing
+  ```
 
-4. **test_marginalization_identity_transform**: Tests with identity transformation (A = I, b = 0) to verify the additive property of covariances.
+- Execute a specific test module (for example, the logistic consistency checks):
 
-5. **test_marginalization_with_offset**: Isolates testing of the offset parameter b to ensure it's correctly applied to the mean.
+  ```bash
+  uv run pytest test/test_filter_loop/test_preconditioned_logistic_consistency.py -k consistency
+  ```
 
-6. **test_marginalization_covariance_is_positive_semidefinite**: Verifies that output covariances maintain the positive semi-definite property across 5 random test cases.
+- Launch the tutorial notebook showcased in the documentation:
 
-7. **test_marginalization_dimensional_reduction**: Tests dimension reduction scenarios where we observe fewer dimensions than the state space.
+  ```bash
+  uv run jupyter notebook examples.ipynb
+  ```
 
-8. **test_marginalization_linear_combination**: Tests observations that are linear combinations of state variables.
+## Documentation
 
-9. **test_marginalization_repeated_calls_consistency**: Ensures deterministic behavior - repeated calls with same inputs produce identical outputs.
+Lightweight documentation lives in `docs/`. Start with `docs/index.md` for an outline of available modules and concepts. The primary tutorial is the `examples.ipynb` notebook, which walks through the filtering workflow step by step.
 
-10. **test_marginalization_numerical_stability_small_values**: Tests numerical stability with very small values (1e-5 to 1e-10 range).
+## Contributing
 
-11. **test_marginalization_numerical_stability_large_values**: Tests numerical stability with very large values (1e5 to 1e10 range).
-
-#### Expected Behavior
-
-The `marginalization` function computes the marginal distribution of `z = Ax + b` given:
-
-- Prior: `p(x) ~ N(mu, Sigma)`
-- Likelihood: `p(z|x) ~ N(Ax + b, Q)`
-
-The function returns:
-
-- `mu_z = A @ mu + b` (marginal mean)
-- `Sigma_z = A @ Sigma @ A.T + Q` (marginal covariance)
+We welcome issues and pull requests. Please read `CONTRIBUTING.md` for guidance on local setup, coding standards, and pre-commit hooks. Running `uv run pre-commit run --all-files` before opening a pull request keeps the linters and notebook cleaner in sync with CI.

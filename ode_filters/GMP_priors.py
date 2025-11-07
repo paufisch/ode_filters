@@ -1,7 +1,7 @@
 import array
 from math import comb, factorial
 from operator import index
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import jax
 import jax.experimental.jet
@@ -55,7 +55,7 @@ def _make_iwp_state_matrices(q: int):
 class IWP:
     """q-times integrated Wiener process prior for d-dimensional systems."""
 
-    def __init__(self, q: int, d: int, Xi: Optional[np.ndarray] = None):
+    def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
         if not isinstance(q, int):
             raise TypeError("q must be an integer.")
         if q < 0:
@@ -175,7 +175,7 @@ def _make_iwp_precond_state_matrices(q: int):
 class IWP_precond:
     """q-times integrated Wiener process prior for d-dimensional systems."""
 
-    def __init__(self, q: int, d: int, Xi: Optional[np.ndarray] = None):
+    def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
         if not isinstance(q, int):
             raise TypeError("q must be an integer.")
         if q < 0:

@@ -52,5 +52,5 @@ uv.lock
 
 # specific notebooks
 intermediate_sampling.ipynb
-lotka-volterra.ipynb 
-SIR.ipynb 
+lotka-volterra.ipynb
+SIR.ipynb

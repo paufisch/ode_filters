@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import numpy as np
 
 
@@ -9,7 +7,7 @@ def sqr_marginalization(
     Q_sqr: np.ndarray,
     mu: np.ndarray,
     Sigma_sqr: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Marginalize out the linear transformation in a Gaussian model. Square root form to preserve positive definiteness.
 
     Computes the marginal distribution of z = Ax + b given p(x) ~ N(mu, Sigma)
@@ -71,7 +69,7 @@ def sqr_inversion(
     mu_z: np.ndarray,
     Sigma_z_sqr: np.ndarray,
     Q_sqr: np.ndarray = None,  # this is needed here because of josephson form computation
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Inversion using square-root covariance representation for stability.
 
     Numerically stable Bayesian bayesian_update using Cholesky factors and QR decomposition. Returns the posterior mean and Cholesky factor.

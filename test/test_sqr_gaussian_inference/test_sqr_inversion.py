@@ -338,6 +338,6 @@ def test_sqr_inversion_preserves_covariance_properties():
     assert np.all(eigenvalues > -1e-10), "Lambda should be positive definite"
 
     # Lambda should be smaller than Sigma (observation reduces uncertainty)
-    assert np.trace(Lambda) <= np.trace((Sigma.T @ Sigma)) + 1e-10, (
+    assert np.trace(Lambda) <= np.trace(Sigma.T @ Sigma) + 1e-10, (
         "Posterior covariance trace should be <= prior covariance trace"
     )
