@@ -132,7 +132,9 @@ def taylor_mode_initialization(vf: Callable, inits: array, q: int) -> jnp.ndarra
         coefficients.append(series_terms[-1])
 
     leaves = jax.tree_util.tree_leaves(coefficients)
-    return jnp.concatenate([jnp.ravel(arr) for arr in leaves])
+    init = jnp.concatenate([jnp.ravel(arr) for arr in leaves])
+    D = init.shape[0]
+    return init, np.zeros((D, D))
 
 
 def _make_iwp_precond_state_matrices(q: int):
