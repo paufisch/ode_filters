@@ -184,7 +184,7 @@ def _make_iwp_precond_state_matrices(
     return A_bar, Q_bar, T
 
 
-class IWP_precond:
+class PrecondIWP:
     """q-times integrated Wiener process prior for d-dimensional systems."""
 
     def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):

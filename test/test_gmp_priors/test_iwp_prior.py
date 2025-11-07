@@ -5,7 +5,7 @@ import pytest
 
 from ode_filters.GMP_priors import (
     IWP,
-    IWP_precond,
+    PrecondIWP,
     _make_iwp_precond_state_matrices,
     _make_iwp_state_matrices,
 )
@@ -119,18 +119,18 @@ def test_iwp_precond_constructor_rejects_invalid_q_and_d(
     args, expected_exception, match
 ):
     with pytest.raises(expected_exception, match=match):
-        IWP_precond(*args)
+        PrecondIWP(*args)
 
 
 def test_iwp_precond_constructor_rejects_bad_xi_shape():
     with pytest.raises(ValueError, match=r"Xi must have shape"):
-        IWP_precond(q=0, d=1, Xi=np.eye(2))
+        PrecondIWP(q=0, d=1, Xi=np.eye(2))
 
 
 def test_iwp_precond_validate_h_returns_float():
-    assert IWP_precond._validate_h(2) == 2.0
+    assert PrecondIWP._validate_h(2) == 2.0
 
 
 def test_iwp_precond_validate_h_rejects_negative():
     with pytest.raises(ValueError, match="h must be non-negative"):
-        IWP_precond._validate_h(-1.0)
+        PrecondIWP._validate_h(-1.0)

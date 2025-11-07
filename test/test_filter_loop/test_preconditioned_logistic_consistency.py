@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from ode_filters.GMP_priors import IWP, IWP_precond, taylor_mode_initialization
+from ode_filters.GMP_priors import IWP, PrecondIWP, taylor_mode_initialization
 from ode_filters.measurement_models import ODEInformation
 from ode_filters.ODE_filter_loop import (
     ekf1_sqr_loop,
@@ -93,7 +93,7 @@ def test_preconditioned_matches_standard_outputs(example):
     Q_h_sqr = _upper_cholesky(prior.Q(h))
     b_h = np.zeros(D)
 
-    prior_precond = IWP_precond(q, d, Xi=xi)
+    prior_precond = PrecondIWP(q, d, Xi=xi)
     A_bar = prior_precond.A()
     Q_sqr_bar = _upper_cholesky(prior_precond.Q())
     T_h = prior_precond.T(h)
