@@ -12,6 +12,9 @@ jobs:
   publish:
     name: Build and Publish to PyPI
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -30,10 +33,5 @@ jobs:
       - name: Build distribution artifacts
         run: uv build
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
-          skip-existing: false
-          verbose: true
+      - name: Publish to PyPI via Trusted Publisher
+        uses: pypa/gh-action-pypi-publish@v1.8.11
