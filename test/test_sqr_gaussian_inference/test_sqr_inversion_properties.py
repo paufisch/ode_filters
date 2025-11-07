@@ -81,7 +81,12 @@ def valid_sqr_inversion_inputs(
     Sigma_z_temp = Sigma_z_temp / np.max(np.abs(Sigma_z_temp)) * 10
     Sigma_z = cholesky(Sigma_z_temp, upper=True)
 
-    return A, mu, Sigma, mu_z, Sigma_z
+    # Generate Q (square root of observation noise covariance)
+    Q_temp = generate_positive_definite_matrix(n_obs)
+    Q_temp = Q_temp / np.max(np.abs(Q_temp)) * 10
+    Q = cholesky(Q_temp, upper=True)
+
+    return A, mu, Sigma, mu_z, Sigma_z, Q
 
 
 # ==============================================================================
@@ -93,11 +98,11 @@ def valid_sqr_inversion_inputs(
 @settings(max_examples=100)
 def test_sqr_inversion_property_output_shapes(inputs):
     """Property: Output shapes are always correct."""
-    A, mu, Sigma, mu_z, Sigma_z = inputs
+    A, mu, Sigma, mu_z, Sigma_z, Q = inputs
     n_state = A.shape[1]
     n_obs = A.shape[0]
 
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
 
     assert G.shape == (n_state, n_obs), f"G shape {G.shape} != ({n_state}, {n_obs})"
     assert d.shape == (n_state,), f"d shape {d.shape} != ({n_state},)"
@@ -110,9 +115,9 @@ def test_sqr_inversion_property_output_shapes(inputs):
 @settings(max_examples=100)
 def test_sqr_inversion_property_output_types(inputs):
     """Property: Outputs are always numpy arrays."""
-    A, mu, Sigma, mu_z, Sigma_z = inputs
+    A, mu, Sigma, mu_z, Sigma_z, Q = inputs
 
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
 
     assert isinstance(G, np.ndarray), f"G is {type(G)}, expected ndarray"
     assert isinstance(d, np.ndarray), f"d is {type(d)}, expected ndarray"
@@ -127,9 +132,9 @@ def test_sqr_inversion_property_output_types(inputs):
 @settings(max_examples=100)
 def test_sqr_inversion_property_no_nan_or_inf(inputs):
     """Property: Outputs never contain NaN or Inf."""
-    A, mu, Sigma, mu_z, Sigma_z = inputs
+    A, mu, Sigma, mu_z, Sigma_z, Q = inputs
 
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
 
     assert np.all(np.isfinite(G)), "G contains NaN or Inf"
     assert np.all(np.isfinite(d)), "d contains NaN or Inf"
@@ -140,9 +145,9 @@ def test_sqr_inversion_property_no_nan_or_inf(inputs):
 @settings(max_examples=50)
 def test_sqr_inversion_property_square_root_reconstruction(inputs):
     """Property: Lambda (square-root) reconstructs to posterior covariance."""
-    A, mu, Sigma, mu_z, Sigma_z = inputs
+    A, mu, Sigma, mu_z, Sigma_z, Q = inputs
 
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
 
     # Reconstruct posterior covariance from square-root: Lambda.T @ Lambda
     Lambda_reconstructed = Lambda.T @ Lambda
@@ -164,9 +169,9 @@ def test_sqr_inversion_property_square_root_reconstruction(inputs):
 @settings(max_examples=50)
 def test_sqr_inversion_property_no_singular_square_root(inputs):
     """Property: Square-root matrix Lambda is non-singular."""
-    A, mu, Sigma, mu_z, Sigma_z = inputs
+    A, mu, Sigma, mu_z, Sigma_z, Q = inputs
 
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
 
     # For a valid square-root, the matrix should be non-singular
     # This means diagonal elements should be non-zero
@@ -226,9 +231,9 @@ def test_sqr_inversion_property_reduces_uncertainty(inputs):
 @settings(max_examples=50)
 def test_sqr_inversion_property_numerical_stability_large_dimensions(inputs):
     """Property: Function remains numerically stable for larger dimensions."""
-    A, mu, Sigma, mu_z, Sigma_z = inputs
+    A, mu, Sigma, mu_z, Sigma_z, Q = inputs
 
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
 
     assert np.all(np.isfinite(G))
     assert np.all(np.isfinite(d))
@@ -239,9 +244,9 @@ def test_sqr_inversion_property_numerical_stability_large_dimensions(inputs):
 @settings(max_examples=50)
 def test_sqr_inversion_property_norm_bounds(inputs):
     """Property: Output magnitudes remain reasonable."""
-    A, mu, Sigma, mu_z, Sigma_z = inputs
+    A, mu, Sigma, mu_z, Sigma_z, Q = inputs
 
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
 
     # Frobenius norms should be reasonable
     norm_G = np.linalg.norm(G)
@@ -262,9 +267,9 @@ def test_sqr_inversion_property_norm_bounds(inputs):
 @settings(max_examples=50)
 def test_sqr_inversion_property_reconstruction(inputs):
     """Property: Reconstructed covariance from sqr form is PD."""
-    A, mu, Sigma, mu_z, Sigma_z = inputs
+    A, mu, Sigma, mu_z, Sigma_z, Q = inputs
 
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
 
     # Reconstruct covariance from Cholesky factor
     Lambda_reconstructed = Lambda.T @ Lambda
@@ -292,7 +297,7 @@ def test_sqr_inversion_property_cholesky_consistency(inputs):
     mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
 
     # Step 2: Use marginalization outputs as inversion inputs
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
 
     # Verify that the square-root factors reconstruct to positive definite matrices
     Sigma_reconstructed = Sigma @ Sigma.T

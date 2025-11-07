@@ -11,7 +11,7 @@ def test_taylor_mode_initialization_q0_returns_state_flattened():
         return y
 
     x0 = jnp.array([1.0, 2.0])
-    result = taylor_mode_initialization(vf, x0, q=0)
+    result, _ = taylor_mode_initialization(vf, x0, q=0)
 
     assert result.ndim == 1
     assert np.array_equal(np.asarray(result), np.asarray(x0).ravel())
@@ -23,7 +23,7 @@ def test_taylor_mode_initialization_scalar_linear_field_matches_closed_form():
 
     x0 = jnp.array([1.0])
     expected = jnp.array([(-1.0) ** k for k in range(4)])
-    result = taylor_mode_initialization(vf, x0, q=3)
+    result, _ = taylor_mode_initialization(vf, x0, q=3)
 
     assert result.shape == expected.shape
     assert np.allclose(np.asarray(result), np.asarray(expected))
@@ -35,7 +35,7 @@ def test_taylor_mode_initialization_vector_field_runs_and_flattens():
         return jnp.array([a * y[0] - y[0] * y[1], b * y[1] + y[0] * y[1]])
 
     x0 = jnp.array([1.0, 2.0])
-    result = taylor_mode_initialization(vf, x0, q=3)
+    result, _ = taylor_mode_initialization(vf, x0, q=3)
 
     assert result.ndim == 1
     assert result.shape[0] == len(x0) * (3 + 1)
@@ -61,7 +61,7 @@ def test_taylor_mode_initialization_q1_linear_vector_field_matches_matrix_produc
     x0 = jnp.array([1.0, 2.0])
 
     expected = jnp.concatenate((x0, A @ x0))
-    result = taylor_mode_initialization(vf, x0, q=1)
+    result, _ = taylor_mode_initialization(vf, x0, q=1)
 
     assert np.allclose(np.asarray(result), np.asarray(expected))
 
@@ -77,7 +77,7 @@ def test_taylor_mode_initialization_linear_vector_field_matches_matrix_powers():
     Ax = A @ x0
     A2x = A @ (A @ x0)
     expected = jnp.concatenate((x0, Ax, A2x))
-    result = taylor_mode_initialization(vf, x0, q=2)
+    result, _ = taylor_mode_initialization(vf, x0, q=2)
 
     assert np.allclose(np.asarray(result), np.asarray(expected))
 
@@ -123,7 +123,7 @@ def test_taylor_mode_initialization_passes_expected_series_to_jet(monkeypatch):
 
     monkeypatch.setattr(jax.experimental.jet, "jet", fake_jet)
 
-    result = taylor_mode_initialization(vf, x0, q=len(primals_outputs))
+    result, _ = taylor_mode_initialization(vf, x0, q=len(primals_outputs))
 
     expected_flat = jnp.concatenate(
         [jnp.ravel(arr) for arr in [x0, *accumulated_terms]]

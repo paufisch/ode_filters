@@ -1,9 +1,9 @@
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from ode_filters.GMP_priors import IWP, IWP_precond, taylor_mode_initialization
+from ode_filters.measurement_models import ODEInformation
 from ode_filters.ODE_filter_loop import (
     ekf1_sqr_loop,
     ekf1_sqr_loop_preconditioned,
@@ -84,8 +84,7 @@ def test_preconditioned_matches_standard_outputs(example):
     D = d * (q + 1)
     xi = example["xi_scale"] * np.eye(d)
 
-    mu_0 = np.asarray(taylor_mode_initialization(vf, x0, q))
-    Sigma_0_sqr = np.zeros((D, D))
+    mu_0, Sigma_0_sqr = taylor_mode_initialization(vf, x0, q)
 
     _, h = np.linspace(t0, t1, num_steps + 1, retstep=True)
 
@@ -100,23 +99,9 @@ def test_preconditioned_matches_standard_outputs(example):
     T_h = prior_precond.T(h)
     b_bar = np.zeros(D)
 
-    E0 = np.zeros(q + 1)
-    E0[0] = 1.0
-    E1 = np.zeros(q + 1)
-    E1[1] = 1.0
-    E0 = np.kron(E0, np.eye(d))
-    E1 = np.kron(E1, np.eye(d))
-    E0_jax = jnp.asarray(E0)
-    E1_jax = jnp.asarray(E1)
-
-    def g_for_jax(X):
-        return E1_jax @ X - vf(E0_jax @ X)
-
-    def g(X):
-        return np.asarray(g_for_jax(jnp.asarray(X)))
-
-    def jacobian_g(X):
-        return np.asarray(jax.jacfwd(g_for_jax)(jnp.asarray(X)))
+    measure = ODEInformation(vf, d=d, q=q)
+    g = measure.g
+    jacobian_g = measure.jacobian_g
 
     z_sequence = np.zeros((num_steps, d))
     R_h_sqr = np.zeros((d, d))
