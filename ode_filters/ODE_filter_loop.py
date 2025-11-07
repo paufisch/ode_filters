@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+
 import numpy as np
 
 from ode_filters.ODE_filter_step import (
@@ -7,18 +11,40 @@ from ode_filters.ODE_filter_step import (
     rts_sqr_smoother_step_preconditioned,
 )
 
+Array = np.ndarray
+StateFunction = Callable[[Array], Array]
+JacobianFunction = Callable[[Array], Array]
 
-# extended kalman filter of order 1 with initialization:
-# special case for fixed grid filtering
-# also this is time invarant in the sense that A_h, b_h, Q_h and R_h are time invariant
+LoopResult = tuple[
+    Array,
+    Array,
+    Array,
+    Array,
+    Array,
+    Array,
+    Array,
+    Array,
+    Array,
+]
+
+
 def ekf1_sqr_loop(
-    mu_0, Sigma_0_sqr, A_h, b_h, Q_h_sqr, R_h_sqr, g, jacobian_g, z_sequence, N
-):
-    # Determine dimensions from first iteration or function signature
+    mu_0: Array,
+    Sigma_0_sqr: Array,
+    A_h: Array,
+    b_h: Array,
+    Q_h_sqr: Array,
+    R_h_sqr: Array,
+    g: StateFunction,
+    jacobian_g: JacobianFunction,
+    z_sequence: Array,
+    N: int,
+) -> LoopResult:
+    """Run a square-root EKF over ``N`` observation steps."""
+
     state_dim = mu_0.shape[0]
     obs_dim = z_sequence.shape[1]
 
-    # Pre-allocate all arrays
     m_seq = np.empty((N + 1, state_dim))
     P_seq_sqr = np.empty((N + 1, state_dim, state_dim))
     m_pred_seq = np.empty((N, state_dim))
@@ -29,11 +55,9 @@ def ekf1_sqr_loop(
     mz_seq = np.empty((N, obs_dim))
     Pz_seq_sqr = np.empty((N, obs_dim, obs_dim))
 
-    # Initialize first values
     m_seq[0] = mu_0
     P_seq_sqr[0] = Sigma_0_sqr
 
-    # Fill in the loop
     for i in range(N):
         (
             (m_pred_seq[i], P_pred_seq_sqr[i]),
@@ -52,11 +76,6 @@ def ekf1_sqr_loop(
             R_h_sqr,
         )
 
-    # P_seq = np.matmul(np.transpose(P_seq_sqr, (0, 2, 1)), P_seq_sqr)
-    # P_pred_seq = np.matmul(np.transpose(P_pred_seq_sqr, (0, 2, 1)), P_pred_seq_sqr)
-    # Pz_seq = np.matmul(np.transpose(Pz_seq_sqr, (0, 2, 1)), Pz_seq_sqr)
-    # P_back_seq = np.matmul(np.transpose(P_back_seq_sqr, (0, 2, 1)), P_back_seq_sqr)
-
     return (
         m_seq,
         P_seq_sqr,
@@ -70,10 +89,17 @@ def ekf1_sqr_loop(
     )
 
 
-def rts_sqr_smoother_loop(m_N, P_N_sqr, G_back_seq, d_back_seq, P_back_seq_sqr, N):
-    state_dim = m_N.shape[0]
+def rts_sqr_smoother_loop(
+    m_N: Array,
+    P_N_sqr: Array,
+    G_back_seq: Array,
+    d_back_seq: Array,
+    P_back_seq_sqr: Array,
+    N: int,
+) -> tuple[Array, Array]:
+    """Run a Rauch–Tung–Striebel smoother over ``N`` steps."""
 
-    # Pre-allocate all arrays
+    state_dim = m_N.shape[0]
     m_smooth = np.empty((N + 1, state_dim))
     P_smooth_sqr = np.empty((N + 1, state_dim, state_dim))
     m_smooth[-1] = m_N
@@ -91,27 +117,35 @@ def rts_sqr_smoother_loop(m_N, P_N_sqr, G_back_seq, d_back_seq, P_back_seq_sqr, 
     return m_smooth, P_smooth_sqr
 
 
-# extended kalman filter of order 1 with initialization:
-# special case for fixed grid filtering
-# also this is time invarant in the sense that A_h, b_h, Q_h and R_h are time invariant
 def ekf1_sqr_loop_preconditioned(
-    mu_0,
-    Sigma_0_sqr,
-    T_h,
-    A_bar,
-    b_bar,
-    Q_sqr_bar,
-    R_h_sqr,
-    g,
-    jacobian_g,
-    z_sequence,
-    N,
-):
-    # Determine dimensions from first iteration or function signature
+    mu_0: Array,
+    Sigma_0_sqr: Array,
+    T_h: Array,
+    A_bar: Array,
+    b_bar: Array,
+    Q_sqr_bar: Array,
+    R_h_sqr: Array,
+    g: StateFunction,
+    jacobian_g: JacobianFunction,
+    z_sequence: Array,
+    N: int,
+) -> tuple[
+    Array,
+    Array,
+    Array,
+    Array,
+    Array,
+    Array,
+    Array,
+    Array,
+    Array,
+    Array,
+]:
+    """Run a preconditioned square-root EKF over ``N`` observation steps."""
+
     state_dim = mu_0.shape[0]
     obs_dim = z_sequence.shape[1]
 
-    # Pre-allocate all arrays
     m_seq_bar = np.empty((N + 1, state_dim))
     P_seq_sqr_bar = np.empty((N + 1, state_dim, state_dim))
     m_seq = np.empty((N + 1, state_dim))
@@ -124,14 +158,12 @@ def ekf1_sqr_loop_preconditioned(
     mz_seq = np.empty((N, obs_dim))
     Pz_seq_sqr = np.empty((N, obs_dim, obs_dim))
 
-    # Initialize first values
     m_seq[0] = mu_0
     P_seq_sqr[0] = Sigma_0_sqr
 
     m_seq_bar[0] = np.linalg.solve(T_h, mu_0)
     P_seq_sqr_bar[0] = np.linalg.solve(T_h, Sigma_0_sqr.T).T
 
-    # Fill in the loop
     for i in range(N):
         (
             (m_pred_seq_bar[i], P_pred_seq_sqr_bar[i]),
@@ -152,11 +184,6 @@ def ekf1_sqr_loop_preconditioned(
             R_h_sqr,
         )
 
-    # P_seq = np.matmul(np.transpose(P_seq_sqr, (0, 2, 1)), P_seq_sqr)
-    # P_pred_seq = np.matmul(np.transpose(P_pred_seq_sqr, (0, 2, 1)), P_pred_seq_sqr)
-    # Pz_seq = np.matmul(np.transpose(Pz_seq_sqr, (0, 2, 1)), Pz_seq_sqr)
-    # P_back_seq = np.matmul(np.transpose(P_back_seq_sqr, (0, 2, 1)), P_back_seq_sqr)
-
     return (
         m_seq,
         P_seq_sqr,
@@ -173,19 +200,20 @@ def ekf1_sqr_loop_preconditioned(
 
 
 def rts_sqr_smoother_loop_preconditioned(
-    m_N,
-    P_N_sqr,
-    m_N_bar,
-    P_N_sqr_bar,
-    G_back_seq_bar,
-    d_back_seq_bar,
-    P_back_seq_sqr_bar,
-    N,
-    T_h,
-):
+    m_N: Array,
+    P_N_sqr: Array,
+    m_N_bar: Array,
+    P_N_sqr_bar: Array,
+    G_back_seq_bar: Array,
+    d_back_seq_bar: Array,
+    P_back_seq_sqr_bar: Array,
+    N: int,
+    T_h: Array,
+) -> tuple[Array, Array]:
+    """Run a preconditioned Rauch–Tung–Striebel smoother over ``N`` steps."""
+
     state_dim = m_N.shape[0]
 
-    # Pre-allocate all arrays
     m_smooth = np.empty((N + 1, state_dim))
     P_smooth_sqr = np.empty((N + 1, state_dim, state_dim))
     m_smooth[-1] = m_N
