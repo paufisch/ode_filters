@@ -33,3 +33,24 @@ uv.lock
 
 # ignore python version
 .python-version
+
+# jupter notebooks
+*.ipynb_checkpoints
+
+# code coverage
+*.coverage
+*coverage*
+
+# ruff
+*.ruff_cache
+
+# pytest
+*.pytest_cache/
+
+# hypothesis
+*.hypothesis
+
+# specific notebooks
+intermediate_sampling.ipynb
+lotka-volterra.ipynb
+SIR.ipynb
