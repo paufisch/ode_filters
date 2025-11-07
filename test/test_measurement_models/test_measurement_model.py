@@ -64,3 +64,14 @@ def test_invalid_constructor_parameters_raise():
 
     with pytest.raises(ValueError):
         ODEInformation(vf=vf, d=1, q=0)
+
+
+def test_state_with_wrong_rank_raises_error():
+    def vf(state):
+        return state
+
+    model = ODEInformation(vf=vf, d=1, q=1)
+    bad_state = jnp.array([[1.0, 2.0]])  # shape (1, 2) → ndim = 2
+
+    with pytest.raises(ValueError, match="must be a one-dimensional"):
+        model.g(bad_state)
