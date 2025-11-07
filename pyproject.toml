@@ -1,8 +1,19 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ode_filters"]
+
+
 [project]
 name = "ode-filters"
+authors = [{name="Paul Fischer"}]
 version = "0.1.0"
-description = "Add your description here"
+description = "Basic ODE filtering and smooting implementation."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE*"]
 requires-python = ">=3.14"
 dependencies = [
     "autograd>=1.8.0",
