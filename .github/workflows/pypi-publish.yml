@@ -10,28 +10,28 @@ concurrency:
 
 jobs:
   publish:
-    name: Build and Publish to PyPI
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
+      - name: Checkout
+        uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v6
 
-      - name: Sync dependencies
-        run: uv sync
+      - name: Install Python 3.14
+        run: uv python install 3.14
 
-      - name: Build distribution artifacts
+      - name: Build
         run: uv build
 
-      - name: Publish to PyPI via Trusted Publisher
-        uses: pypa/gh-action-pypi-publish@v1.8.11
+      - name: Smoke test (wheel)
+        run: uv run --isolated --no-project --with dist/*.whl python -c "import ode_filters"
+
+      - name: Smoke test (source distribution)
+        run: uv run --isolated --no-project --with dist/*.tar.gz python -c "import ode_filters"
+
+      - name: Publish
+        run: uv publish
