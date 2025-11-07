@@ -1,15 +1,21 @@
-import array
+from __future__ import annotations
+
+from collections.abc import Callable
 from math import comb, factorial
 from operator import index
-from collections.abc import Callable
 
 import jax
 import jax.experimental.jet
 import jax.numpy as jnp
 import numpy as np
+from numpy.typing import ArrayLike
+
+Array = np.ndarray
+MatrixFunction = Callable[[float], Array]
+VectorField = Callable[[jnp.ndarray], jnp.ndarray]
 
 
-def _make_iwp_state_matrices(q: int):
+def _make_iwp_state_matrices(q: int) -> tuple[MatrixFunction, MatrixFunction]:
     """Return callables producing the transition A(h) and diffusion Q(h) matrices.
 
     Parameters
@@ -29,7 +35,7 @@ def _make_iwp_state_matrices(q: int):
 
     dim = q + 1
 
-    def A(h: float) -> np.ndarray:
+    def A(h: float) -> Array:
         if h < 0:
             raise ValueError("h must be non-negative.")
         mat = np.zeros((dim, dim), dtype=float)
@@ -38,7 +44,7 @@ def _make_iwp_state_matrices(q: int):
                 mat[i, j] = h ** (j - i) / factorial(j - i)
         return mat
 
-    def Q(h: float) -> np.ndarray:
+    def Q(h: float) -> Array:
         if h < 0:
             raise ValueError("h must be non-negative.")
         mat = np.zeros((dim, dim), dtype=float)
@@ -76,11 +82,11 @@ class IWP:
         self.xi = xi
         self._id = np.eye(d, dtype=xi.dtype)
 
-    def A(self, h: float) -> np.ndarray:
+    def A(self, h: float) -> Array:
         """State transition matrix for step size h."""
         return np.kron(self._A(self._validate_h(h)), self._id)
 
-    def Q(self, h: float) -> np.ndarray:
+    def Q(self, h: float) -> Array:
         """Process noise (diffusion) matrix for step size h."""
         return np.kron(self._Q(self._validate_h(h)), self.xi)
 
@@ -91,8 +97,12 @@ class IWP:
         return float(h)
 
 
-def taylor_mode_initialization(vf: Callable, inits: array, q: int) -> jnp.ndarray:
-    """Return flattened Taylor‑mode coefficients produced via JAX Jet.
+def taylor_mode_initialization(
+    vf: VectorField,
+    inits: ArrayLike,
+    q: int,
+) -> tuple[jnp.ndarray, np.ndarray]:
+    """Return flattened Taylor-mode coefficients produced via JAX Jet.
 
     Parameters
     ----------
@@ -105,8 +115,8 @@ def taylor_mode_initialization(vf: Callable, inits: array, q: int) -> jnp.ndarra
 
     Returns
     -------
-    jnp.ndarray
-        Concatenated Taylor coefficients (including the initial value).
+    tuple[jnp.ndarray, np.ndarray]
+        The flattened Taylor coefficients and a zero covariance matrix.
     """
     if not callable(vf):
         raise TypeError("vf must be callable.")
@@ -137,7 +147,9 @@ def taylor_mode_initialization(vf: Callable, inits: array, q: int) -> jnp.ndarra
     return init, np.zeros((D, D))
 
 
-def _make_iwp_precond_state_matrices(q: int):
+def _make_iwp_precond_state_matrices(
+    q: int,
+) -> tuple[Array, Array, MatrixFunction]:
     """Return callables producing the transition, diffusion, and scaling matrices."""
     q = index(q)
     if q < 0:
@@ -160,7 +172,7 @@ def _make_iwp_precond_state_matrices(q: int):
 
     factorials = np.array([float(factorial(q - idx)) for idx in range(dim)])
 
-    def T(h: float) -> np.ndarray:
+    def T(h: float) -> Array:
         if h < 0:
             raise ValueError("h must be non-negative.")
         h = float(h)
@@ -172,7 +184,7 @@ def _make_iwp_precond_state_matrices(q: int):
     return A_bar, Q_bar, T
 
 
-class IWP_precond:
+class PrecondIWP:
     """q-times integrated Wiener process prior for d-dimensional systems."""
 
     def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
@@ -196,15 +208,15 @@ class IWP_precond:
         self.xi = xi
         self._id = np.eye(d, dtype=xi.dtype)
 
-    def A(self) -> np.ndarray:
+    def A(self) -> Array:
         """State transition matrix for step size h."""
         return np.kron(self._A_bar, self._id)
 
-    def Q(self) -> np.ndarray:
+    def Q(self) -> Array:
         """Process noise (diffusion) matrix for step size h."""
         return np.kron(self._Q_bar, self.xi)
 
-    def T(self, h: float) -> np.ndarray:
+    def T(self, h: float) -> Array:
         """Scaling matrix for step size h."""
         return np.kron(self._T(self._validate_h(h)), self._id)
 

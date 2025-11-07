@@ -1,13 +1,17 @@
+from __future__ import annotations
+
 import numpy as np
+
+Array = np.ndarray
 
 
 def sqr_marginalization(
-    A: np.ndarray,
-    b: np.ndarray,
-    Q_sqr: np.ndarray,
-    mu: np.ndarray,
-    Sigma_sqr: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
+    A: Array,
+    b: Array,
+    Q_sqr: Array,
+    mu: Array,
+    Sigma_sqr: Array,
+) -> tuple[Array, Array]:
     """Marginalize out the linear transformation in a Gaussian model. Square root form to preserve positive definiteness.
 
     Computes the marginal distribution of z = Ax + b given p(x) ~ N(mu, Sigma)
@@ -63,13 +67,13 @@ def sqr_marginalization(
 
 
 def sqr_inversion(
-    A: np.ndarray,
-    mu: np.ndarray,
-    Sigma_sqr: np.ndarray,
-    mu_z: np.ndarray,
-    Sigma_z_sqr: np.ndarray,
-    Q_sqr: np.ndarray = None,  # this is needed here because of josephson form computation
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    A: Array,
+    mu: Array,
+    Sigma_sqr: Array,
+    mu_z: Array,
+    Sigma_z_sqr: Array,
+    Q_sqr: Array | None = None,
+) -> tuple[Array, Array, Array]:
     """Inversion using square-root covariance representation for stability.
 
     Numerically stable Bayesian bayesian_update using Cholesky factors and QR decomposition. Returns the posterior mean and Cholesky factor.
