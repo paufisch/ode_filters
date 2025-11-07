@@ -1,6 +1,6 @@
 # ODE Filters
 
-Probabilistic filtering and smoothing algorithms for ordinary differential equation solvers.
+Minimal ODE filtering and smoothing implementation.
 
 ## Overview
 
