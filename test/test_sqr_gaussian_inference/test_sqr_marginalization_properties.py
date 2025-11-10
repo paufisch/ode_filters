@@ -14,13 +14,15 @@ Properties tested:
 - Numerical stability across dimensions
 """
 
+from __future__ import annotations
+
 import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from numpy.linalg import cholesky
 
-from ode_filters.sqr_gaussian_inference import sqr_marginalization
+from ode_filters.inference.sqr_gaussian_inference import sqr_marginalization
 
 
 def generate_positive_definite_matrix(n):
@@ -78,6 +80,11 @@ def valid_sqr_marginalization_inputs(
     Sigma = cholesky(Sigma_temp, upper=True)
 
     return A, b, Q, mu, Sigma
+
+
+def load_random_marginalization_case():
+    """Convenience wrapper used by other test modules."""
+    return valid_sqr_marginalization_inputs()
 
 
 # ==============================================================================

@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from ode_filters.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
+from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
 
 Array = np.ndarray
 StateFunction = Callable[[Array], Array]

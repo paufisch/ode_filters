@@ -8,7 +8,15 @@ plugins:
   - search
   - mkdocs-jupyter:
       execute: true
+  - mkdocstrings:
+      default_handler: python
 nav:
   - Home: index.md
   - Examples:
-      - Probabilistic Solver Walkthrough: examples/examples.ipynb
+      - Basic usage: examples/examples.ipynb
+  - API Reference:
+      - Overview: api/index.md
+      - Filters: api/filters/index.md
+      - Inference: api/inference/index.md
+      - Measurement: api/measurement/index.md
+      - Priors: api/priors/index.md

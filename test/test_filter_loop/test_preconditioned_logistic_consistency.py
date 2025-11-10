@@ -2,13 +2,17 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from ode_filters.GMP_priors import IWP, PrecondIWP, taylor_mode_initialization
-from ode_filters.measurement_models import ODEInformation
-from ode_filters.ODE_filter_loop import (
+from ode_filters.filters.ODE_filter_loop import (
     ekf1_sqr_loop,
     ekf1_sqr_loop_preconditioned,
     rts_sqr_smoother_loop,
     rts_sqr_smoother_loop_preconditioned,
+)
+from ode_filters.measurement.measurement_models import ODEInformation
+from ode_filters.priors.GMP_priors import (
+    IWP,
+    PrecondIWP,
+    taylor_mode_initialization,
 )
 
 

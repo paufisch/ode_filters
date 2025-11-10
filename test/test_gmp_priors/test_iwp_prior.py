@@ -3,7 +3,7 @@ from math import factorial
 import numpy as np
 import pytest
 
-from ode_filters.GMP_priors import (
+from ode_filters.priors.GMP_priors import (
     IWP,
     PrecondIWP,
     _make_iwp_precond_state_matrices,

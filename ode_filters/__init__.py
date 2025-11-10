@@ -2,12 +2,41 @@
 
 This package provides implementations of Extended Kalman Filters (EKF), Kalman
 smoothers, and related utilities for inference in ordinary differential equation
-(ODE) systems. Includes:
+(ODE) systems. The public API is organized into the following subpackages:
 
-Modules:
-    gaussian_inference: Bayesian inference operations (marginalization, bayesian_update).
-    sqr_gaussian_inference: Numerically stable square-root (Cholesky) formulations.
-    ODE_filters: Extended Kalman Filter implementation with backward sampling.
-    helpers: Core Kalman filter and smoother implementations.
-    plotting_utils: Visualization utilities for filter results.
+- ``filters``: Filtering and smoothing routines.
+- ``inference``: Square-root Gaussian inference utilities.
+- ``measurement``: Measurement model helpers.
+- ``priors``: Gaussian Markov process prior models.
 """
+
+from .filters import (
+    ekf1_sqr_filter_step,
+    ekf1_sqr_filter_step_preconditioned,
+    ekf1_sqr_loop,
+    ekf1_sqr_loop_preconditioned,
+    rts_sqr_smoother_loop,
+    rts_sqr_smoother_loop_preconditioned,
+    rts_sqr_smoother_step,
+    rts_sqr_smoother_step_preconditioned,
+)
+from .inference import sqr_inversion, sqr_marginalization
+from .measurement import ODEInformation
+from .priors import IWP, PrecondIWP, taylor_mode_initialization
+
+__all__ = [
+    "ekf1_sqr_filter_step",
+    "ekf1_sqr_filter_step_preconditioned",
+    "rts_sqr_smoother_step",
+    "rts_sqr_smoother_step_preconditioned",
+    "ekf1_sqr_loop",
+    "ekf1_sqr_loop_preconditioned",
+    "rts_sqr_smoother_loop",
+    "rts_sqr_smoother_loop_preconditioned",
+    "sqr_marginalization",
+    "sqr_inversion",
+    "ODEInformation",
+    "IWP",
+    "PrecondIWP",
+    "taylor_mode_initialization",
+]
