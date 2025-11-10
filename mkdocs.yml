@@ -4,5 +4,11 @@ repo_url: https://github.com/paufisch/ode_filters
 docs_dir: docs
 theme:
   name: material
+plugins:
+  - search
+  - mkdocs-jupyter:
+      execute: true
 nav:
   - Home: index.md
+  - Examples:
+      - Probabilistic Solver Walkthrough: examples/examples.ipynb
