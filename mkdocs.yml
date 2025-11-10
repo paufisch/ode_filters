@@ -1,0 +1,8 @@
+site_name: ODE Filters
+site_url: https://paufisch.github.io/ode_filters/
+repo_url: https://github.com/paufisch/ode_filters
+docs_dir: docs
+theme:
+  name: material
+nav:
+  - Home: index.md
