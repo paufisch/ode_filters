@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from ode_filters.measurement_models import ODEInformation
+from ode_filters.measurement.measurement_models import ODEInformation
 
 
 def test_observation_matches_manual_computation():

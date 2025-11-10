@@ -3,7 +3,7 @@ import pytest
 from numpy.linalg import cholesky
 from pytest_cases import parametrize_with_cases
 
-from ode_filters.sqr_gaussian_inference import sqr_marginalization
+from ode_filters.inference.sqr_gaussian_inference import sqr_marginalization
 from test.test_sqr_gaussian_inference.test_marginalization_cases import (
     case_1d_to_1d,
     case_3d_to_2d,

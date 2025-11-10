@@ -3,7 +3,7 @@ import pytest
 from numpy.linalg import cholesky
 from pytest_cases import parametrize_with_cases
 
-from ode_filters.sqr_gaussian_inference import sqr_inversion
+from ode_filters.inference.sqr_gaussian_inference import sqr_inversion
 from test.test_sqr_gaussian_inference.test_inversion_cases import (
     case_2d_state_1d_observation,
     case_3d_state_2d_observation,

@@ -15,15 +15,20 @@ Properties tested:
 - Numerical stability across dimensions
 """
 
+from __future__ import annotations
+
 import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from numpy.linalg import cholesky
 
-from ode_filters.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
+from ode_filters.inference.sqr_gaussian_inference import (
+    sqr_inversion,
+    sqr_marginalization,
+)
 from test.test_sqr_gaussian_inference.test_sqr_marginalization_properties import (
-    valid_sqr_marginalization_inputs,
+    load_random_marginalization_case,
 )
 
 
@@ -188,7 +193,7 @@ def test_sqr_inversion_property_no_singular_square_root(inputs):
         pytest.fail("Lambda should be non-singular")
 
 
-@given(valid_sqr_marginalization_inputs())
+@given(load_random_marginalization_case())
 @settings(max_examples=100)
 def test_sqr_inversion_property_reduces_uncertainty(inputs):
     """Property: Posterior covariance is smaller than prior (integration test)."""
@@ -287,7 +292,7 @@ def test_sqr_inversion_property_reconstruction(inputs):
     ), "Reconstructed posterior covariance should be symmetric"
 
 
-@given(valid_sqr_marginalization_inputs())
+@given(load_random_marginalization_case())
 @settings(max_examples=50)
 def test_sqr_inversion_property_cholesky_consistency(inputs):
     """Property: Integration test - inversion on marginalization outputs."""
