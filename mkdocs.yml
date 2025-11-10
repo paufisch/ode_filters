@@ -14,4 +14,9 @@ nav:
   - Home: index.md
   - Examples:
       - Basic usage: examples/examples.ipynb
-  - API Reference: api/index.md
+  - API Reference:
+      - Overview: api/index.md
+      - Filters: api/filters/index.md
+      - Inference: api/inference/index.md
+      - Measurement: api/measurement/index.md
+      - Priors: api/priors/index.md
