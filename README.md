@@ -22,6 +22,8 @@ The package implements square-root Gaussian inference routines along with filter
 
 This creates a virtual environment under `.venv/` and makes the `uv run` command available for executing project tools.
 
+**Note**: The project targets Python 3.14 or newer.
+
 ## Quickstart
 
 - Run the full test suite:
