@@ -6,13 +6,13 @@
 [![Docs](https://img.shields.io/badge/docs-latest-brightgreen)](https://paufisch.github.io/ode_filters/)
 [![Coverage](https://codecov.io/gh/paufisch/ode_filters/branch/main/graph/badge.svg)](https://codecov.io/gh/paufisch/ode_filters)
 
-Basic ODE filtering and smoothing implementations. Mainly for research and educational purposes.
+The `ode-filters` package is an experimental implementation of basic ODE filtering and smoothing functionalities. Its main purpose is educational and research-oriented, providing a simple starting point for ODE filtering in Python. As such, it uses NumPy for the most part and JAX where autodiff is needed. Currently, only constant step sizes and time-invariant observation and dynamics are supported.
 
 ## Installation
 
 1. Install the latest release from PyPI:
 
-   ```bash
+   ```
    pip install ode-filters
    ```
 
@@ -20,6 +20,6 @@ Basic ODE filtering and smoothing implementations. Mainly for research and educa
 
 - Run the full test suite:
 
-  ```bash
+  ```
   uv run pytest --cov=ode_filters --cov-report=term-missing
   ```
