@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from ode_filters.ODE_filter_step import (
+from .ODE_filter_step import (
     ekf1_sqr_filter_step,
     ekf1_sqr_filter_step_preconditioned,
     rts_sqr_smoother_step,

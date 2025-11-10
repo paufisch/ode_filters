@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from ode_filters.ODE_filter_loop import (
+from ode_filters.filters.ODE_filter_loop import (
     ekf1_sqr_loop,
     rts_sqr_smoother_loop,
 )
