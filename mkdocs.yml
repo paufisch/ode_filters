@@ -18,6 +18,7 @@ markdown_extensions:
       check_paths: true
 nav:
   - Home: index.md
+  - Quickstart example: examples/quickstart.ipynb
   - Examples:
       - Basic usage: examples/examples.ipynb
   - API Reference:
