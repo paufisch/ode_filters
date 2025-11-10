@@ -26,9 +26,9 @@ jobs:
       - name: Run tests
         run: uv run pytest --cov=ode_filters --cov-report=term-missing --cov-report=xml
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           files: ./coverage.xml
           flags: unit
-          fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
+          slug: paufisch/ode_filters
