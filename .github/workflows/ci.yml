@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - development
   pull_request:
     branches:
       - main
@@ -30,3 +31,4 @@ jobs:
           files: ./coverage.xml
           flags: unit
           fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
