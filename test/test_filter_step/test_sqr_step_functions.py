@@ -8,10 +8,10 @@ from ode_filters.filters.ODE_filter_step import (
 
 
 def _linear_measurement(H, c):
-    def g(x):
+    def g(x, *, t):
         return H @ x + c
 
-    def jacobian(_):
+    def jacobian(x, *, t):
         return H
 
     return g, jacobian
@@ -30,8 +30,8 @@ def _dense_filter_step(A, b, Q, m_prev, P_prev, g, jacobian_g, R):
     d_back = m_prev - G_back @ m_pred
     P_back = P_prev - G_back @ P_pred @ G_back.T
 
-    H = jacobian_g(m_pred)
-    c = g(m_pred) - H @ m_pred
+    H = jacobian_g(m_pred, t=0.0)
+    c = g(m_pred, t=0.0) - H @ m_pred
 
     m_z = H @ m_pred + c
     P_z = H @ P_pred @ H.T + R

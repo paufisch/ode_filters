@@ -25,11 +25,11 @@ def _reconstruct_covariance(factors: np.ndarray) -> np.ndarray:
     return np.matmul(factors.transpose(0, 2, 1), factors)
 
 
-def _logistic_vf(x):
+def _logistic_vf(x, *, t):
     return x * (1.0 - x)
 
 
-def _lotka_volterra_vf(x):
+def _lotka_volterra_vf(x, *, t):
     return jnp.array(
         [
             2.0 * x[0] / 3.0 - 4.0 * x[0] * x[1] / 3.0,
@@ -38,7 +38,7 @@ def _lotka_volterra_vf(x):
     )
 
 
-def _sir_vf(x, beta=0.5, gamma=0.1):
+def _sir_vf(x, *, t, beta=0.5, gamma=0.1):
     return jnp.array(
         [
             -beta * x[0] * x[1],

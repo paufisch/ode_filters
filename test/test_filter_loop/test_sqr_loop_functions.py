@@ -8,11 +8,11 @@ from ode_filters.filters.ODE_filter_loop import (
 
 
 def _linear_measurement(H, c):
-    def g(x):
+    def g(x, *, t):
         return H @ x + c
 
-    def jacobian(_):
-        return H
+    def jacobian(x, *, t):
+        return
 
     return g, jacobian
 
@@ -123,7 +123,10 @@ def test_ekf1_sqr_loop_matches_dense_linear_case():
 
     num_steps = 3
 
-    g, jacobian = _linear_measurement(H, c)
+    g, jacobian = _linear_measurement(
+        H,
+        c,
+    )
 
     dense_results = ekf1_dense_loop(mu_0, Sigma_0, A, b, Q, R, g, jacobian, num_steps)
 
