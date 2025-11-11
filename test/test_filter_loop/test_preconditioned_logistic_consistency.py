@@ -90,7 +90,7 @@ def test_preconditioned_matches_standard_outputs(example):
 
     mu_0, Sigma_0_sqr = taylor_mode_initialization(vf, x0, q)
 
-    _, h = np.linspace(t0, t1, num_steps + 1, retstep=True)
+    ts, h = np.linspace(t0, t1, num_steps + 1, retstep=True)
 
     prior = IWP(q, d, Xi=xi)
     A_h = prior.A(h)
@@ -120,15 +120,7 @@ def test_preconditioned_matches_standard_outputs(example):
         _,
         _,
     ) = ekf1_sqr_loop(
-        mu_0,
-        Sigma_0_sqr,
-        A_h,
-        b_h,
-        Q_h_sqr,
-        R_h_sqr,
-        g,
-        jacobian_g,
-        num_steps,
+        mu_0, Sigma_0_sqr, A_h, b_h, Q_h_sqr, R_h_sqr, g, jacobian_g, num_steps, ts
     )
 
     (
@@ -154,6 +146,7 @@ def test_preconditioned_matches_standard_outputs(example):
         g,
         jacobian_g,
         num_steps,
+        ts,
     )
 
     m_smoothed_standard, P_smoothed_sqr_standard = rts_sqr_smoother_loop(

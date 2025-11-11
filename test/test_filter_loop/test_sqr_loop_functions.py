@@ -12,7 +12,7 @@ def _linear_measurement(H, c):
         return H @ x + c
 
     def jacobian(x, *, t):
-        return
+        return H
 
     return g, jacobian
 
@@ -21,7 +21,7 @@ def _reconstruct_covariance_sequence(factors):
     return np.matmul(factors.transpose(0, 2, 1), factors)
 
 
-def _dense_filter_step(A, b, Q, m_prev, P_prev, g, jacobian_g, R):
+def _dense_filter_step(A, b, Q, m_prev, P_prev, g, jacobian_g, R, t):
     m_pred = A @ m_prev + b
     P_pred = A @ P_prev @ A.T + Q
 
@@ -30,8 +30,8 @@ def _dense_filter_step(A, b, Q, m_prev, P_prev, g, jacobian_g, R):
     d_back = m_prev - G_back @ m_pred
     P_back = P_prev - G_back @ P_pred @ G_back.T
 
-    H = jacobian_g(m_pred)
-    c = g(m_pred) - H @ m_pred
+    H = jacobian_g(m_pred, t=t)
+    c = g(m_pred, t=t) - H @ m_pred
 
     m_z = H @ m_pred + c
     P_z = H @ P_pred @ H.T + R
@@ -68,7 +68,7 @@ def ekf1_dense_loop(mu_0, Sigma_0, A, b, Q, R, g, jacobian_g, N):
             (G_back_seq[i], d_back_seq[i], P_back_seq[i]),
             (mz_seq[i], Pz_seq[i]),
             (m_seq[i + 1], P_seq[i + 1]),
-        ) = _dense_filter_step(A, b, Q, m_seq[i], P_seq[i], g, jacobian_g, R)
+        ) = _dense_filter_step(A, b, Q, m_seq[i], P_seq[i], g, jacobian_g, R, t=0.0)
 
     return (
         m_seq,
@@ -122,6 +122,7 @@ def test_ekf1_sqr_loop_matches_dense_linear_case():
     Sigma_0 = np.array([[0.4, 0.1], [0.1, 0.3]])
 
     num_steps = 3
+    ts = np.linspace(0, 1, num_steps + 1)
 
     g, jacobian = _linear_measurement(
         H,
@@ -135,7 +136,7 @@ def test_ekf1_sqr_loop_matches_dense_linear_case():
     R_sqr = np.linalg.cholesky(R, upper=True)
 
     sqr_results = ekf1_sqr_loop(
-        mu_0, Sigma_0_sqr, A, b, Q_sqr, R_sqr, g, jacobian, num_steps
+        mu_0, Sigma_0_sqr, A, b, Q_sqr, R_sqr, g, jacobian, num_steps, ts
     )
 
     (
@@ -197,6 +198,7 @@ def test_rts_sqr_smoother_loop_matches_dense_linear_case():
     Sigma_0 = np.array([[0.4, 0.1], [0.1, 0.3]])
 
     num_steps = 3
+    ts = np.linspace(0, 1, num_steps + 1)
 
     g, jacobian = _linear_measurement(H, c)
 
@@ -207,7 +209,7 @@ def test_rts_sqr_smoother_loop_matches_dense_linear_case():
     R_sqr = np.linalg.cholesky(R, upper=True)
 
     sqr_results = ekf1_sqr_loop(
-        mu_0, Sigma_0_sqr, A, b, Q_sqr, R_sqr, g, jacobian, num_steps
+        mu_0, Sigma_0_sqr, A, b, Q_sqr, R_sqr, g, jacobian, num_steps, ts
     )
 
     (

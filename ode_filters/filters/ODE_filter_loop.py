@@ -28,7 +28,7 @@ LoopResult = tuple[
 ]
 
 
-# constant step size
+# constant step size model actually
 def ekf1_sqr_loop(
     mu_0: Array,
     Sigma_0_sqr: Array,
@@ -39,6 +39,7 @@ def ekf1_sqr_loop(
     g: StateFunction,
     jacobian_g: JacobianFunction,
     N: int,
+    ts: Array,
 ) -> LoopResult:
     """Run a square-root EKF over ``N`` observation steps."""
 
@@ -73,6 +74,7 @@ def ekf1_sqr_loop(
             g,
             jacobian_g,
             R_h_sqr,
+            t=ts[i + 1],
         )
 
     return (
@@ -127,6 +129,7 @@ def ekf1_sqr_loop_preconditioned(
     g: StateFunction,
     jacobian_g: JacobianFunction,
     N: int,
+    ts: Array,
 ) -> tuple[
     Array,
     Array,
@@ -180,6 +183,7 @@ def ekf1_sqr_loop_preconditioned(
             g,
             jacobian_g,
             R_h_sqr,
+            t=ts[i + 1],
         )
 
     return (
