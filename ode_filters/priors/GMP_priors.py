@@ -123,7 +123,7 @@ def taylor_mode_initialization(
         raise ValueError("q must be a non-negative integer.")
 
     def _vf(x):
-        vf(x, t=t0)
+        return vf(x, t=t0)
 
     base_state = jnp.asarray(inits)
     coefficients: list[jnp.ndarray] = [base_state]
