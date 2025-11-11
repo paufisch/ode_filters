@@ -25,11 +25,11 @@ def _reconstruct_covariance(factors: np.ndarray) -> np.ndarray:
     return np.matmul(factors.transpose(0, 2, 1), factors)
 
 
-def _logistic_vf(x):
+def _logistic_vf(x, *, t):
     return x * (1.0 - x)
 
 
-def _lotka_volterra_vf(x):
+def _lotka_volterra_vf(x, *, t):
     return jnp.array(
         [
             2.0 * x[0] / 3.0 - 4.0 * x[0] * x[1] / 3.0,
@@ -38,7 +38,7 @@ def _lotka_volterra_vf(x):
     )
 
 
-def _sir_vf(x, beta=0.5, gamma=0.1):
+def _sir_vf(x, *, t, beta=0.5, gamma=0.1):
     return jnp.array(
         [
             -beta * x[0] * x[1],
@@ -90,7 +90,7 @@ def test_preconditioned_matches_standard_outputs(example):
 
     mu_0, Sigma_0_sqr = taylor_mode_initialization(vf, x0, q)
 
-    _, h = np.linspace(t0, t1, num_steps + 1, retstep=True)
+    ts, h = np.linspace(t0, t1, num_steps + 1, retstep=True)
 
     prior = IWP(q, d, Xi=xi)
     A_h = prior.A(h)
@@ -107,7 +107,6 @@ def test_preconditioned_matches_standard_outputs(example):
     g = measure.g
     jacobian_g = measure.jacobian_g
 
-    z_sequence = np.zeros((num_steps, d))
     R_h_sqr = np.zeros((d, d))
 
     (
@@ -121,16 +120,7 @@ def test_preconditioned_matches_standard_outputs(example):
         _,
         _,
     ) = ekf1_sqr_loop(
-        mu_0,
-        Sigma_0_sqr,
-        A_h,
-        b_h,
-        Q_h_sqr,
-        R_h_sqr,
-        g,
-        jacobian_g,
-        z_sequence,
-        num_steps,
+        mu_0, Sigma_0_sqr, A_h, b_h, Q_h_sqr, R_h_sqr, g, jacobian_g, num_steps, ts
     )
 
     (
@@ -155,8 +145,8 @@ def test_preconditioned_matches_standard_outputs(example):
         R_h_sqr,
         g,
         jacobian_g,
-        z_sequence,
         num_steps,
+        ts,
     )
 
     m_smoothed_standard, P_smoothed_sqr_standard = rts_sqr_smoother_loop(

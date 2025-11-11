@@ -8,10 +8,10 @@ from ode_filters.filters.ODE_filter_loop import (
 
 
 def _linear_measurement(H, c):
-    def g(x):
+    def g(x, *, t):
         return H @ x + c
 
-    def jacobian(_):
+    def jacobian(x, *, t):
         return H
 
     return g, jacobian
@@ -21,7 +21,7 @@ def _reconstruct_covariance_sequence(factors):
     return np.matmul(factors.transpose(0, 2, 1), factors)
 
 
-def _dense_filter_step(A, b, Q, m_prev, P_prev, g, jacobian_g, z_observed, R):
+def _dense_filter_step(A, b, Q, m_prev, P_prev, g, jacobian_g, R, t):
     m_pred = A @ m_prev + b
     P_pred = A @ P_prev @ A.T + Q
 
@@ -30,8 +30,8 @@ def _dense_filter_step(A, b, Q, m_prev, P_prev, g, jacobian_g, z_observed, R):
     d_back = m_prev - G_back @ m_pred
     P_back = P_prev - G_back @ P_pred @ G_back.T
 
-    H = jacobian_g(m_pred)
-    c = g(m_pred) - H @ m_pred
+    H = jacobian_g(m_pred, t=t)
+    c = g(m_pred, t=t) - H @ m_pred
 
     m_z = H @ m_pred + c
     P_z = H @ P_pred @ H.T + R
@@ -40,14 +40,14 @@ def _dense_filter_step(A, b, Q, m_prev, P_prev, g, jacobian_g, z_observed, R):
     K = np.linalg.solve(P_z, innovation_cross.T).T
     d = m_pred - K @ m_z
     P_post = P_pred - K @ P_z @ K.T
-    m_post = K @ z_observed + d
+    m_post = d
 
     return (m_pred, P_pred), (G_back, d_back, P_back), (m_z, P_z), (m_post, P_post)
 
 
-def ekf1_dense_loop(mu_0, Sigma_0, A, b, Q, R, g, jacobian_g, z_sequence, N):
+def ekf1_dense_loop(mu_0, Sigma_0, A, b, Q, R, g, jacobian_g, N):
     state_dim = mu_0.shape[0]
-    obs_dim = z_sequence.shape[1]
+    obs_dim = R.shape[0]
 
     m_seq = np.empty((N + 1, state_dim))
     P_seq = np.empty((N + 1, state_dim, state_dim))
@@ -68,9 +68,7 @@ def ekf1_dense_loop(mu_0, Sigma_0, A, b, Q, R, g, jacobian_g, z_sequence, N):
             (G_back_seq[i], d_back_seq[i], P_back_seq[i]),
             (mz_seq[i], Pz_seq[i]),
             (m_seq[i + 1], P_seq[i + 1]),
-        ) = _dense_filter_step(
-            A, b, Q, m_seq[i], P_seq[i], g, jacobian_g, z_sequence[i], R
-        )
+        ) = _dense_filter_step(A, b, Q, m_seq[i], P_seq[i], g, jacobian_g, R, t=0.0)
 
     return (
         m_seq,
@@ -123,21 +121,22 @@ def test_ekf1_sqr_loop_matches_dense_linear_case():
     mu_0 = np.array([0.0, 1.0])
     Sigma_0 = np.array([[0.4, 0.1], [0.1, 0.3]])
 
-    z_sequence = np.array([[0.1], [0.2], [0.15]])
-    num_steps = z_sequence.shape[0]
+    num_steps = 3
+    ts = np.linspace(0, 1, num_steps + 1)
 
-    g, jacobian = _linear_measurement(H, c)
-
-    dense_results = ekf1_dense_loop(
-        mu_0, Sigma_0, A, b, Q, R, g, jacobian, z_sequence, num_steps
+    g, jacobian = _linear_measurement(
+        H,
+        c,
     )
+
+    dense_results = ekf1_dense_loop(mu_0, Sigma_0, A, b, Q, R, g, jacobian, num_steps)
 
     Sigma_0_sqr = np.linalg.cholesky(Sigma_0, upper=True)
     Q_sqr = np.linalg.cholesky(Q, upper=True)
     R_sqr = np.linalg.cholesky(R, upper=True)
 
     sqr_results = ekf1_sqr_loop(
-        mu_0, Sigma_0_sqr, A, b, Q_sqr, R_sqr, g, jacobian, z_sequence, num_steps
+        mu_0, Sigma_0_sqr, A, b, Q_sqr, R_sqr, g, jacobian, num_steps, ts
     )
 
     (
@@ -198,21 +197,19 @@ def test_rts_sqr_smoother_loop_matches_dense_linear_case():
     mu_0 = np.array([0.0, 1.0])
     Sigma_0 = np.array([[0.4, 0.1], [0.1, 0.3]])
 
-    z_sequence = np.array([[0.1], [0.2], [0.15]])
-    num_steps = z_sequence.shape[0]
+    num_steps = 3
+    ts = np.linspace(0, 1, num_steps + 1)
 
     g, jacobian = _linear_measurement(H, c)
 
-    dense_results = ekf1_dense_loop(
-        mu_0, Sigma_0, A, b, Q, R, g, jacobian, z_sequence, num_steps
-    )
+    dense_results = ekf1_dense_loop(mu_0, Sigma_0, A, b, Q, R, g, jacobian, num_steps)
 
     Sigma_0_sqr = np.linalg.cholesky(Sigma_0, upper=True)
     Q_sqr = np.linalg.cholesky(Q, upper=True)
     R_sqr = np.linalg.cholesky(R, upper=True)
 
     sqr_results = ekf1_sqr_loop(
-        mu_0, Sigma_0_sqr, A, b, Q_sqr, R_sqr, g, jacobian, z_sequence, num_steps
+        mu_0, Sigma_0_sqr, A, b, Q_sqr, R_sqr, g, jacobian, num_steps, ts
     )
 
     (

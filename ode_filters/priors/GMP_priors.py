@@ -98,9 +98,7 @@ class IWP:
 
 
 def taylor_mode_initialization(
-    vf: VectorField,
-    inits: ArrayLike,
-    q: int,
+    vf: VectorField, inits: ArrayLike, q: int, t0: float = 0.0
 ) -> tuple[jnp.ndarray, np.ndarray]:
     """Return flattened Taylor-mode coefficients produced via JAX Jet.
 
@@ -124,13 +122,16 @@ def taylor_mode_initialization(
     if q < 0:
         raise ValueError("q must be a non-negative integer.")
 
+    def _vf(x):
+        return vf(x, t=t0)
+
     base_state = jnp.asarray(inits)
     coefficients: list[jnp.ndarray] = [base_state]
     series_terms: list[jnp.ndarray] = []
 
     for order in range(q):
         primals_out, series_out = jax.experimental.jet.jet(
-            vf,
+            _vf,
             primals=(base_state,),
             series=(tuple(series_terms),),
         )

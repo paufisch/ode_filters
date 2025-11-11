@@ -36,8 +36,8 @@ def ekf1_sqr_filter_step(
     P_prev_sqr: Array,
     g: StateFunction,
     jacobian_g: JacobianFunction,
-    z_observed_t: Array,
     R_t_sqr: Array,
+    t: float = 0.0,
 ) -> FilterStepResult:
     """Perform a single square-root EKF prediction and update step."""
 
@@ -46,12 +46,12 @@ def ekf1_sqr_filter_step(
         A_t, m_prev, P_prev_sqr, m_pred, P_pred_sqr, Q_t_sqr
     )
 
-    H_t = jacobian_g(m_pred)
-    c_t = g(m_pred) - H_t @ m_pred
+    H_t = jacobian_g(m_pred, t=t)
+    c_t = g(m_pred, t=t) - H_t @ m_pred
 
     m_z, P_z_sqr = sqr_marginalization(H_t, c_t, R_t_sqr, m_pred, P_pred_sqr)
     K_t, d, P_t_sqr = sqr_inversion(H_t, m_pred, P_pred_sqr, m_z, P_z_sqr, R_t_sqr)
-    m_t = K_t @ z_observed_t + d
+    m_t = d  # for no zero measurements: m_t = K_t @ z_observed_t + d
 
     return (
         (m_pred, P_pred_sqr),
@@ -87,8 +87,8 @@ def ekf1_sqr_filter_step_preconditioned(
     P_prev_sqr_bar: Array,
     g: StateFunction,
     jacobian_g: JacobianFunction,
-    z_observed_t: Array,
     R_t_sqr: Array,
+    t: float = 0.0,
 ) -> PreconditionedFilterStepResult:
     """Perform a single preconditioned square-root EKF step."""
 
@@ -99,8 +99,8 @@ def ekf1_sqr_filter_step_preconditioned(
         A_bar, m_prev_bar, P_prev_sqr_bar, m_pred_bar, P_pred_sqr_bar, Q_sqr_bar
     )
 
-    H_t_bar = jacobian_g(T_t @ m_pred_bar) @ T_t
-    c_t = g(T_t @ m_pred_bar) - H_t_bar @ m_pred_bar
+    H_t_bar = jacobian_g(T_t @ m_pred_bar, t=t) @ T_t
+    c_t = g(T_t @ m_pred_bar, t=t) - H_t_bar @ m_pred_bar
 
     m_z, P_z_sqr = sqr_marginalization(
         H_t_bar, c_t, R_t_sqr, m_pred_bar, P_pred_sqr_bar
@@ -108,7 +108,7 @@ def ekf1_sqr_filter_step_preconditioned(
     K_t_bar, d_bar, P_t_sqr_bar = sqr_inversion(
         H_t_bar, m_pred_bar, P_pred_sqr_bar, m_z, P_z_sqr, R_t_sqr
     )
-    m_t_bar = K_t_bar @ z_observed_t + d_bar
+    m_t_bar = d_bar  # for non zero measurements: K_t_bar @ z_observed_t + d_bar
 
     m_t = T_t @ m_t_bar
     P_t_sqr = P_t_sqr_bar @ T_t.T

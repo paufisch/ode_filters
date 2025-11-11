@@ -8,7 +8,7 @@ from jax import Array
 class ODEInformation:
     """Evaluation and differential information for ODE measurement models."""
 
-    def __init__(self, vf: Callable[[Array], Array], d: int = 1, q: int = 1):
+    def __init__(self, vf: Callable[[Array, float], Array], d: int = 1, q: int = 1):
         """Initialize the measurement model.
 
         Args:
@@ -33,9 +33,9 @@ class ODEInformation:
         self._d = d
         self._q = q
         self._state_dim = (q + 1) * d
-        self._jacobian_fn = jax.jacfwd(self.g)
+        self._jacobian_vf = jax.jacfwd(self._vf)
 
-    def g(self, state: Array) -> Array:
+    def g(self, state: Array, *, t: float) -> Array:
         """Evaluate the observation model for a flattened state vector.
 
         Args:
@@ -48,9 +48,9 @@ class ODEInformation:
 
         state_arr = self._validate_state(state)
         projected = self._E0 @ state_arr
-        return self._E1 @ state_arr - self._vf(projected)
+        return self._E1 @ state_arr - self._vf(projected, t=t)
 
-    def jacobian_g(self, state: Array) -> Array:
+    def jacobian_g(self, state: Array, *, t: float) -> Array:
         """Return the Jacobian of the observation model at ``state``.
 
         Args:
@@ -62,7 +62,7 @@ class ODEInformation:
         """
 
         state_arr = self._validate_state(state)
-        return self._jacobian_fn(state_arr)
+        return self._E1 - self._jacobian_vf(self._E0 @ state_arr, t=t) @ self._E0
 
     def _validate_state(self, state: Array) -> Array:
         """Return a validated one-dimensional state array.

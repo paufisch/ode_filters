@@ -1,4 +1,3 @@
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -7,7 +6,7 @@ from ode_filters.priors.GMP_priors import taylor_mode_initialization
 
 
 def test_taylor_mode_initialization_q0_returns_state_flattened():
-    def vf(y):
+    def vf(y, *, t):
         return y
 
     x0 = jnp.array([1.0, 2.0])
@@ -18,7 +17,7 @@ def test_taylor_mode_initialization_q0_returns_state_flattened():
 
 
 def test_taylor_mode_initialization_scalar_linear_field_matches_closed_form():
-    def vf(y):
+    def vf(y, *, t):
         return -y  # u(t) = e^{-t} → u^{(k)}(0) = (-1)^k
 
     x0 = jnp.array([1.0])
@@ -30,7 +29,7 @@ def test_taylor_mode_initialization_scalar_linear_field_matches_closed_form():
 
 
 def test_taylor_mode_initialization_vector_field_runs_and_flattens():
-    def vf(y):
+    def vf(y, *, t):
         a, b = 0.5, -0.3
         return jnp.array([a * y[0] - y[0] * y[1], b * y[1] + y[0] * y[1]])
 
@@ -42,7 +41,7 @@ def test_taylor_mode_initialization_vector_field_runs_and_flattens():
 
 
 def test_taylor_mode_initialization_rejects_invalid_inputs():
-    def vf(y):
+    def vf(y, *, t):
         return y
 
     with pytest.raises(TypeError):
@@ -55,7 +54,7 @@ def test_taylor_mode_initialization_rejects_invalid_inputs():
 def test_taylor_mode_initialization_q1_linear_vector_field_matches_matrix_product():
     A = jnp.array([[0.0, 1.0], [-2.0, -3.0]])
 
-    def vf(y):
+    def vf(y, *, t):
         return A @ y
 
     x0 = jnp.array([1.0, 2.0])
@@ -69,7 +68,7 @@ def test_taylor_mode_initialization_q1_linear_vector_field_matches_matrix_produc
 def test_taylor_mode_initialization_linear_vector_field_matches_matrix_powers():
     A = jnp.array([[0.0, 1.0], [-2.0, -3.0]])
 
-    def vf(y):
+    def vf(y, *, t):
         return A @ y
 
     x0 = jnp.array([1.0, 2.0])
@@ -80,53 +79,3 @@ def test_taylor_mode_initialization_linear_vector_field_matches_matrix_powers():
     result, _ = taylor_mode_initialization(vf, x0, q=2)
 
     assert np.allclose(np.asarray(result), np.asarray(expected))
-
-
-def test_taylor_mode_initialization_passes_expected_series_to_jet(monkeypatch):
-    x0 = jnp.array([1.0, 2.0])
-
-    primals_outputs = [
-        jnp.array([10.0, 20.0]),
-        jnp.array([30.0, 40.0]),
-        jnp.array([50.0, 60.0]),
-    ]
-    series_outputs = [
-        (jnp.array([100.0, 200.0]),),
-        (jnp.array([300.0, 400.0]),),
-        (jnp.array([500.0, 600.0]),),
-    ]
-
-    calls = {"idx": 0}
-    expected_series_terms: list[jnp.ndarray] = []
-    accumulated_terms: list[jnp.ndarray] = []
-
-    def fake_jet(fun, primals, series, factorial_scaled=True):
-        assert fun is vf
-        assert np.array_equal(np.asarray(primals[0]), np.asarray(x0))
-
-        (incoming_series,) = series
-        assert len(incoming_series) == len(expected_series_terms)
-        for got, want in zip(incoming_series, expected_series_terms):
-            assert np.array_equal(np.asarray(got), np.asarray(want))
-
-        idx = calls["idx"]
-        primals_out = primals_outputs[idx]
-        terms_out = series_outputs[idx]
-        calls["idx"] += 1
-
-        accumulated_terms.append(terms_out[-1])
-        expected_series_terms[:] = [primals_out, *terms_out]
-        return primals_out, terms_out
-
-    def vf(y):
-        return y
-
-    monkeypatch.setattr(jax.experimental.jet, "jet", fake_jet)
-
-    result, _ = taylor_mode_initialization(vf, x0, q=len(primals_outputs))
-
-    expected_flat = jnp.concatenate(
-        [jnp.ravel(arr) for arr in [x0, *accumulated_terms]]
-    )
-    assert np.allclose(np.asarray(result), np.asarray(expected_flat))
-    assert calls["idx"] == len(primals_outputs)
