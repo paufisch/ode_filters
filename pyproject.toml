@@ -14,7 +14,7 @@ description = "Basic ODE filtering and smooting implementation."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE*"]
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = [
     "autograd>=1.8.0",
     "jax[cpu]>=0.8.0",

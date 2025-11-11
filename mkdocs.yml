@@ -10,12 +10,6 @@ plugins:
       execute: true
   - mkdocstrings:
       default_handler: python
-markdown_extensions:
-  - pymdownx.snippets:
-      base_path:
-        - docs
-        - .
-      check_paths: true
 nav:
   - Home: index.md
   - Quickstart example: examples/quickstart.ipynb
