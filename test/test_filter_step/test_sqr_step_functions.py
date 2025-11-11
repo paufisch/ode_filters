@@ -21,7 +21,7 @@ def _reconstruct_covariance(factor):
     return factor.T @ factor
 
 
-def _dense_filter_step(A, b, Q, m_prev, P_prev, g, jacobian_g, z_observed, R):
+def _dense_filter_step(A, b, Q, m_prev, P_prev, g, jacobian_g, R):
     m_pred = A @ m_prev + b
     P_pred = A @ P_prev @ A.T + Q
 
@@ -40,7 +40,7 @@ def _dense_filter_step(A, b, Q, m_prev, P_prev, g, jacobian_g, z_observed, R):
     K = np.linalg.solve(P_z, innovation_cross.T).T
     d = m_pred - K @ m_z
     P_post = P_pred - K @ P_z @ K.T
-    m_post = K @ z_observed + d
+    m_post = d
 
     return (m_pred, P_pred), (G_back, d_back, P_back), (m_z, P_z), (m_post, P_post)
 
@@ -62,12 +62,11 @@ def test_ekf1_sqr_filter_step_matches_dense_linear_case():
 
     m_prev = np.array([0.0, 1.0])
     P_prev = np.array([[0.4, 0.1], [0.1, 0.3]])
-    z_observed = np.array([0.3])
 
     g, jacobian = _linear_measurement(H, c)
 
     dense_pred, dense_back, dense_obs, dense_post = _dense_filter_step(
-        A, b, Q, m_prev, P_prev, g, jacobian, z_observed, R
+        A, b, Q, m_prev, P_prev, g, jacobian, R
     )
 
     P_prev_sqr = np.linalg.cholesky(P_prev, upper=True)
@@ -75,7 +74,7 @@ def test_ekf1_sqr_filter_step_matches_dense_linear_case():
     R_sqr = np.linalg.cholesky(R, upper=True)
 
     sqr_pred, sqr_back, sqr_obs, sqr_post = ekf1_sqr_filter_step(
-        A, b, Q_sqr, m_prev, P_prev_sqr, g, jacobian, z_observed, R_sqr
+        A, b, Q_sqr, m_prev, P_prev_sqr, g, jacobian, R_sqr
     )
 
     assert sqr_pred[0] == pytest.approx(dense_pred[0], rel=1e-12, abs=1e-12)
@@ -111,12 +110,11 @@ def test_rts_sqr_smoother_step_matches_dense_linear_case():
 
     m_prev = np.array([0.0, 1.0])
     P_prev = np.array([[0.4, 0.1], [0.1, 0.3]])
-    z_observed = np.array([0.3])
 
     g, jacobian = _linear_measurement(H, c)
 
     dense_pred, dense_back, dense_obs, dense_post = _dense_filter_step(
-        A, b, Q, m_prev, P_prev, g, jacobian, z_observed, R
+        A, b, Q, m_prev, P_prev, g, jacobian, R
     )
 
     P_prev_sqr = np.linalg.cholesky(P_prev, upper=True)
@@ -124,7 +122,7 @@ def test_rts_sqr_smoother_step_matches_dense_linear_case():
     R_sqr = np.linalg.cholesky(R, upper=True)
 
     sqr_pred, sqr_back, sqr_obs, sqr_post = ekf1_sqr_filter_step(
-        A, b, Q_sqr, m_prev, P_prev_sqr, g, jacobian, z_observed, R_sqr
+        A, b, Q_sqr, m_prev, P_prev_sqr, g, jacobian, R_sqr
     )
 
     dense_smoothed_prev = _dense_smoother_step(

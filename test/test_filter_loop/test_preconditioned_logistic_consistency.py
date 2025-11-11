@@ -107,7 +107,6 @@ def test_preconditioned_matches_standard_outputs(example):
     g = measure.g
     jacobian_g = measure.jacobian_g
 
-    z_sequence = np.zeros((num_steps, d))
     R_h_sqr = np.zeros((d, d))
 
     (
@@ -129,7 +128,6 @@ def test_preconditioned_matches_standard_outputs(example):
         R_h_sqr,
         g,
         jacobian_g,
-        z_sequence,
         num_steps,
     )
 
@@ -155,7 +153,6 @@ def test_preconditioned_matches_standard_outputs(example):
         R_h_sqr,
         g,
         jacobian_g,
-        z_sequence,
         num_steps,
     )
 

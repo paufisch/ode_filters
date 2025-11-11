@@ -28,6 +28,7 @@ LoopResult = tuple[
 ]
 
 
+# constant step size
 def ekf1_sqr_loop(
     mu_0: Array,
     Sigma_0_sqr: Array,
@@ -37,13 +38,12 @@ def ekf1_sqr_loop(
     R_h_sqr: Array,
     g: StateFunction,
     jacobian_g: JacobianFunction,
-    z_sequence: Array,
     N: int,
 ) -> LoopResult:
     """Run a square-root EKF over ``N`` observation steps."""
 
     state_dim = mu_0.shape[0]
-    obs_dim = z_sequence.shape[1]
+    obs_dim = R_h_sqr.shape[0]
 
     m_seq = np.empty((N + 1, state_dim))
     P_seq_sqr = np.empty((N + 1, state_dim, state_dim))
@@ -72,7 +72,6 @@ def ekf1_sqr_loop(
             P_seq_sqr[i],
             g,
             jacobian_g,
-            z_sequence[i],
             R_h_sqr,
         )
 
@@ -127,9 +126,9 @@ def ekf1_sqr_loop_preconditioned(
     R_h_sqr: Array,
     g: StateFunction,
     jacobian_g: JacobianFunction,
-    z_sequence: Array,
     N: int,
 ) -> tuple[
+    Array,
     Array,
     Array,
     Array,
@@ -144,7 +143,7 @@ def ekf1_sqr_loop_preconditioned(
     """Run a preconditioned square-root EKF over ``N`` observation steps."""
 
     state_dim = mu_0.shape[0]
-    obs_dim = z_sequence.shape[1]
+    obs_dim = R_h_sqr.shape[0]
 
     m_seq_bar = np.empty((N + 1, state_dim))
     P_seq_sqr_bar = np.empty((N + 1, state_dim, state_dim))
@@ -180,7 +179,6 @@ def ekf1_sqr_loop_preconditioned(
             P_seq_sqr_bar[i],
             g,
             jacobian_g,
-            z_sequence[i],
             R_h_sqr,
         )
 

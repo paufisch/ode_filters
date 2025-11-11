@@ -33,7 +33,7 @@ class ODEInformation:
         self._d = d
         self._q = q
         self._state_dim = (q + 1) * d
-        self._jacobian_fn = jax.jacfwd(self.g)
+        self._jacobian_vf = jax.jacfwd(self._vf)
 
     def g(self, state: Array) -> Array:
         """Evaluate the observation model for a flattened state vector.
@@ -62,7 +62,7 @@ class ODEInformation:
         """
 
         state_arr = self._validate_state(state)
-        return self._jacobian_fn(state_arr)
+        return self._E1 - self._jacobian_vf(self._E0 @ state_arr) @ self._E0
 
     def _validate_state(self, state: Array) -> Array:
         """Return a validated one-dimensional state array.
