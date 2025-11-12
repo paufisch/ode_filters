@@ -34,8 +34,7 @@ def ekf1_sqr_filter_step(
     Q_t_sqr: Array,
     m_prev: Array,
     P_prev_sqr: Array,
-    g: StateFunction,
-    jacobian_g: JacobianFunction,
+    measure: object,
     R_t_sqr: Array,
     t: float = 0.0,
 ) -> FilterStepResult:
@@ -46,8 +45,9 @@ def ekf1_sqr_filter_step(
         A_t, m_prev, P_prev_sqr, m_pred, P_pred_sqr, Q_t_sqr
     )
 
-    H_t = jacobian_g(m_pred, t=t)
-    c_t = g(m_pred, t=t) - H_t @ m_pred
+    # H_t = jacobian_g(m_pred, t=t)
+    # c_t = g(m_pred, t=t) - H_t @ m_pred
+    H_t, c_t = measure.linearize(m_pred, t=t)
 
     m_z, P_z_sqr = sqr_marginalization(H_t, c_t, R_t_sqr, m_pred, P_pred_sqr)
     K_t, d, P_t_sqr = sqr_inversion(H_t, m_pred, P_pred_sqr, m_z, P_z_sqr, R_t_sqr)
@@ -85,8 +85,7 @@ def ekf1_sqr_filter_step_preconditioned(
     T_t: Array,
     m_prev_bar: Array,
     P_prev_sqr_bar: Array,
-    g: StateFunction,
-    jacobian_g: JacobianFunction,
+    measure: object,
     R_t_sqr: Array,
     t: float = 0.0,
 ) -> PreconditionedFilterStepResult:
@@ -99,8 +98,10 @@ def ekf1_sqr_filter_step_preconditioned(
         A_bar, m_prev_bar, P_prev_sqr_bar, m_pred_bar, P_pred_sqr_bar, Q_sqr_bar
     )
 
-    H_t_bar = jacobian_g(T_t @ m_pred_bar, t=t) @ T_t
-    c_t = g(T_t @ m_pred_bar, t=t) - H_t_bar @ m_pred_bar
+    # H_t_bar = jacobian_g(T_t @ m_pred_bar, t=t) @ T_t
+    # c_t = g(T_t @ m_pred_bar, t=t) - H_t_bar @ m_pred_bar
+    H_t, c_t = measure.linearize(T_t @ m_pred_bar, t=t)
+    H_t_bar = H_t @ T_t
 
     m_z, P_z_sqr = sqr_marginalization(
         H_t_bar, c_t, R_t_sqr, m_pred_bar, P_pred_sqr_bar

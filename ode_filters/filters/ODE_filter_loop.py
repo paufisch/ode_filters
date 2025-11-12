@@ -36,8 +36,7 @@ def ekf1_sqr_loop(
     b_h: Array,
     Q_h_sqr: Array,
     R_h_sqr: Array,
-    g: StateFunction,
-    jacobian_g: JacobianFunction,
+    measure: object,
     N: int,
     ts: Array,
 ) -> LoopResult:
@@ -71,8 +70,7 @@ def ekf1_sqr_loop(
             Q_h_sqr,
             m_seq[i],
             P_seq_sqr[i],
-            g,
-            jacobian_g,
+            measure,
             R_h_sqr,
             t=ts[i + 1],
         )
@@ -126,8 +124,7 @@ def ekf1_sqr_loop_preconditioned(
     b_bar: Array,
     Q_sqr_bar: Array,
     R_h_sqr: Array,
-    g: StateFunction,
-    jacobian_g: JacobianFunction,
+    measure: object,
     N: int,
     ts: Array,
 ) -> tuple[
@@ -180,8 +177,7 @@ def ekf1_sqr_loop_preconditioned(
             T_h,
             m_seq_bar[i],
             P_seq_sqr_bar[i],
-            g,
-            jacobian_g,
+            measure,
             R_h_sqr,
             t=ts[i + 1],
         )

@@ -64,6 +64,12 @@ class ODEInformation:
         state_arr = self._validate_state(state)
         return self._E1 - self._jacobian_vf(self._E0 @ state_arr, t=t) @ self._E0
 
+    def linearize(self, state: Array, *, t: float) -> [Array, Array]:
+        """First order taylor linearization"""
+        H_t = self.jacobian_g(state, t=t)
+        c_t = self.g(state, t=t) - H_t @ state
+        return H_t, c_t
+
     def _validate_state(self, state: Array) -> Array:
         """Return a validated one-dimensional state array.
 
