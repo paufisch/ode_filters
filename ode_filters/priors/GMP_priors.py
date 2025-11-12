@@ -81,10 +81,14 @@ class IWP:
         self._dim = d
         self.xi = xi
         self._id = np.eye(d, dtype=xi.dtype)
+        self._b = np.zeros(d * (q + 1))
 
     def A(self, h: float) -> Array:
         """State transition matrix for step size h."""
         return np.kron(self._A(self._validate_h(h)), self._id)
+
+    def b(self, h: float) -> Array:
+        return self._b
 
     def Q(self, h: float) -> Array:
         """Process noise (diffusion) matrix for step size h."""
@@ -208,10 +212,14 @@ class PrecondIWP:
         self._dim = d
         self.xi = xi
         self._id = np.eye(d, dtype=xi.dtype)
+        self._b = np.zeros(d * (q + 1))
 
     def A(self) -> Array:
         """State transition matrix for step size h."""
         return np.kron(self._A_bar, self._id)
+
+    def b(self) -> Array:
+        return self._b
 
     def Q(self) -> Array:
         """Process noise (diffusion) matrix for step size h."""
