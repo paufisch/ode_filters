@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections.abc import Callable
 
 import numpy as np
@@ -40,17 +38,16 @@ def ekf1_sqr_filter_step(
     """Perform a single square-root EKF prediction and update step."""
 
     m_pred, P_pred_sqr = sqr_marginalization(A_t, b_t, Q_t_sqr, m_prev, P_prev_sqr)
+    # this is optional if only filtering is relevant
     G_back, d_back, P_back_sqr = sqr_inversion(
         A_t, m_prev, P_prev_sqr, m_pred, P_pred_sqr, Q_t_sqr
     )
 
-    # H_t = jacobian_g(m_pred, t=t)
-    # c_t = g(m_pred, t=t) - H_t @ m_pred
     H_t, c_t = measure.linearize(m_pred, t=t)
     R_t_sqr = measure.get_noise(t=t)  # get this from the measure as well
 
     m_z, P_z_sqr = sqr_marginalization(H_t, c_t, R_t_sqr, m_pred, P_pred_sqr)
-    K_t, d, P_t_sqr = sqr_inversion(H_t, m_pred, P_pred_sqr, m_z, P_z_sqr, R_t_sqr)
+    _, d, P_t_sqr = sqr_inversion(H_t, m_pred, P_pred_sqr, m_z, P_z_sqr, R_t_sqr)
     m_t = d  # for no zero measurements: m_t = K_t @ z_observed_t + d
 
     return (
@@ -97,8 +94,6 @@ def ekf1_sqr_filter_step_preconditioned(
         A_bar, m_prev_bar, P_prev_sqr_bar, m_pred_bar, P_pred_sqr_bar, Q_sqr_bar
     )
 
-    # H_t_bar = jacobian_g(T_t @ m_pred_bar, t=t) @ T_t
-    # c_t = g(T_t @ m_pred_bar, t=t) - H_t_bar @ m_pred_bar
     H_t, c_t = measure.linearize(T_t @ m_pred_bar, t=t)
     H_t_bar = H_t @ T_t
     R_t_sqr = measure.get_noise(t=t)  # get this from the measure as well
@@ -106,7 +101,7 @@ def ekf1_sqr_filter_step_preconditioned(
     m_z, P_z_sqr = sqr_marginalization(
         H_t_bar, c_t, R_t_sqr, m_pred_bar, P_pred_sqr_bar
     )
-    K_t_bar, d_bar, P_t_sqr_bar = sqr_inversion(
+    _, d_bar, P_t_sqr_bar = sqr_inversion(
         H_t_bar, m_pred_bar, P_pred_sqr_bar, m_z, P_z_sqr, R_t_sqr
     )
     m_t_bar = d_bar  # for non zero measurements: K_t_bar @ z_observed_t + d_bar

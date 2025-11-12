@@ -221,6 +221,7 @@ class ODEmeasurement(ODEInformation):
         ode_info = super().g(state, t=t)
 
         # Add measurement information if at a measurement time
+        # TODO: maybe this should allow some tolerance epsilon
         if t in self._z_t:
             idx = jnp.where(self._z_t == t)[0][0]
             measure = self._z[idx]
