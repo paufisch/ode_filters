@@ -214,7 +214,7 @@ class ODEmeasurements(ODEInformation):
         if t in self._z_t:
             idx = jnp.where(self._z_t == t)[0][0]
             measure = self._z[idx]
-            return jnp.concatenate([ode_info, self._A @ state - measure])
+            return jnp.concatenate([ode_info, self._A @ self._E0 @ state - measure])
 
         return ode_info
 
@@ -226,6 +226,6 @@ class ODEmeasurements(ODEInformation):
         ode_jacobi = super().jacobian_g(state, t=t)
 
         if t in self._z_t:
-            return jnp.concatenate([ode_jacobi, self._A])
+            return jnp.concatenate([ode_jacobi, self._A @ self._E0])
 
         return ode_jacobi
