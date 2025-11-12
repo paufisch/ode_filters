@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import numpy as np
+from numpy.linalg import cholesky
 
 from .ODE_filter_step import (
     ekf1_sqr_filter_step,
@@ -28,52 +29,56 @@ LoopResult = tuple[
 ]
 
 
-# constant step size model actually
 def ekf1_sqr_loop(
     mu_0: Array,
     Sigma_0_sqr: Array,
-    A_h: Array,
-    b_h: Array,
-    Q_h_sqr: Array,
-    R_h_sqr: Array,
+    prior: object,
     measure: object,
+    tspan: tuple[float, float],
     N: int,
-    ts: Array,
 ) -> LoopResult:
     """Run a square-root EKF over ``N`` observation steps."""
 
-    state_dim = mu_0.shape[0]
-    obs_dim = R_h_sqr.shape[0]
+    m_seq = [mu_0]
+    P_seq_sqr = [Sigma_0_sqr]
+    m_pred_seq = []
+    P_pred_seq_sqr = []
+    G_back_seq = []
+    d_back_seq = []
+    P_back_seq_sqr = []
+    mz_seq = []
+    Pz_seq_sqr = []
 
-    m_seq = np.empty((N + 1, state_dim))
-    P_seq_sqr = np.empty((N + 1, state_dim, state_dim))
-    m_pred_seq = np.empty((N, state_dim))
-    P_pred_seq_sqr = np.empty((N, state_dim, state_dim))
-    G_back_seq = np.empty((N, state_dim, state_dim))
-    d_back_seq = np.empty((N, state_dim))
-    P_back_seq_sqr = np.empty((N, state_dim, state_dim))
-    mz_seq = np.empty((N, obs_dim))
-    Pz_seq_sqr = np.empty((N, obs_dim, obs_dim))
-
-    m_seq[0] = mu_0
-    P_seq_sqr[0] = Sigma_0_sqr
+    ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    A_h = prior.A(h)
+    b_h = prior.b(h)
+    Q_h_sqr = cholesky(prior.Q(h), upper=True)
 
     for i in range(N):
         (
-            (m_pred_seq[i], P_pred_seq_sqr[i]),
-            (G_back_seq[i], d_back_seq[i], P_back_seq_sqr[i]),
-            (mz_seq[i], Pz_seq_sqr[i]),
-            (m_seq[i + 1], P_seq_sqr[i + 1]),
+            (m_pred, P_pred_sqr),
+            (G_back, d_back, P_back_sqr),
+            (mz, Pz_sqr),
+            (m, P_sqr),
         ) = ekf1_sqr_filter_step(
             A_h,
             b_h,
             Q_h_sqr,
-            m_seq[i],
-            P_seq_sqr[i],
+            m_seq[-1],
+            P_seq_sqr[-1],
             measure,
-            R_h_sqr,
             t=ts[i + 1],
         )
+
+        m_pred_seq.append(m_pred)
+        P_pred_seq_sqr.append(P_pred_sqr)
+        G_back_seq.append(G_back)
+        d_back_seq.append(d_back)
+        P_back_seq_sqr.append(P_back_sqr)
+        mz_seq.append(mz)
+        Pz_seq_sqr.append(Pz_sqr)
+        m_seq.append(m)
+        P_seq_sqr.append(P_sqr)
 
     return (
         m_seq,
@@ -118,15 +123,11 @@ def rts_sqr_smoother_loop(
 
 def ekf1_sqr_loop_preconditioned(
     mu_0: Array,
-    Sigma_0_sqr: Array,
-    T_h: Array,
-    A_bar: Array,
-    b_bar: Array,
-    Q_sqr_bar: Array,
-    R_h_sqr: Array,
+    P_0_sqr: Array,
+    prior: object,
     measure: object,
+    tspan: tuple[float, float],
     N: int,
-    ts: Array,
 ) -> tuple[
     Array,
     Array,
@@ -142,45 +143,54 @@ def ekf1_sqr_loop_preconditioned(
 ]:
     """Run a preconditioned square-root EKF over ``N`` observation steps."""
 
-    state_dim = mu_0.shape[0]
-    obs_dim = R_h_sqr.shape[0]
+    ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    A_bar = prior.A()
+    b_bar = prior.b()
+    Q_sqr_bar = cholesky(prior.Q(), upper=True)
+    T_h = prior.T(h)
 
-    m_seq_bar = np.empty((N + 1, state_dim))
-    P_seq_sqr_bar = np.empty((N + 1, state_dim, state_dim))
-    m_seq = np.empty((N + 1, state_dim))
-    P_seq_sqr = np.empty((N + 1, state_dim, state_dim))
-    m_pred_seq_bar = np.empty((N, state_dim))
-    P_pred_seq_sqr_bar = np.empty((N, state_dim, state_dim))
-    G_back_seq_bar = np.empty((N, state_dim, state_dim))
-    d_back_seq_bar = np.empty((N, state_dim))
-    P_back_seq_sqr_bar = np.empty((N, state_dim, state_dim))
-    mz_seq = np.empty((N, obs_dim))
-    Pz_seq_sqr = np.empty((N, obs_dim, obs_dim))
+    m_seq = [mu_0]
+    P_seq_sqr = [P_0_sqr]
+    m_seq_bar = [np.linalg.solve(T_h, mu_0)]
+    P_seq_sqr_bar = [np.linalg.solve(T_h, P_0_sqr.T).T]
 
-    m_seq[0] = mu_0
-    P_seq_sqr[0] = Sigma_0_sqr
-
-    m_seq_bar[0] = np.linalg.solve(T_h, mu_0)
-    P_seq_sqr_bar[0] = np.linalg.solve(T_h, Sigma_0_sqr.T).T
+    m_pred_seq_bar = []
+    P_pred_seq_sqr_bar = []
+    G_back_seq_bar = []
+    d_back_seq_bar = []
+    P_back_seq_sqr_bar = []
+    mz_seq = []
+    Pz_seq_sqr = []
 
     for i in range(N):
         (
-            (m_pred_seq_bar[i], P_pred_seq_sqr_bar[i]),
-            (G_back_seq_bar[i], d_back_seq_bar[i], P_back_seq_sqr_bar[i]),
-            (mz_seq[i], Pz_seq_sqr[i]),
-            (m_seq_bar[i + 1], P_seq_sqr_bar[i + 1]),
-            (m_seq[i + 1], P_seq_sqr[i + 1]),
+            (m_pred_seq_bar_i, P_pred_seq_sqr_bar_i),
+            (G_back_seq_bar_i, d_back_seq_bar_i, P_back_seq_sqr_bar_i),
+            (mz_seq_i, Pz_seq_sqr_i),
+            (m_seq_bar_next, P_seq_sqr_bar_next),
+            (m_seq_next, P_seq_sqr_next),
         ) = ekf1_sqr_filter_step_preconditioned(
             A_bar,
             b_bar,
             Q_sqr_bar,
             T_h,
-            m_seq_bar[i],
-            P_seq_sqr_bar[i],
+            m_seq_bar[-1],
+            P_seq_sqr_bar[-1],
             measure,
-            R_h_sqr,
             t=ts[i + 1],
         )
+
+        m_pred_seq_bar.append(m_pred_seq_bar_i)
+        P_pred_seq_sqr_bar.append(P_pred_seq_sqr_bar_i)
+        G_back_seq_bar.append(G_back_seq_bar_i)
+        d_back_seq_bar.append(d_back_seq_bar_i)
+        P_back_seq_sqr_bar.append(P_back_seq_sqr_bar_i)
+        mz_seq.append(mz_seq_i)
+        Pz_seq_sqr.append(Pz_seq_sqr_i)
+        m_seq_bar.append(m_seq_bar_next)
+        P_seq_sqr_bar.append(P_seq_sqr_bar_next)
+        m_seq.append(m_seq_next)
+        P_seq_sqr.append(P_seq_sqr_next)
 
     return (
         m_seq,
@@ -194,6 +204,7 @@ def ekf1_sqr_loop_preconditioned(
         P_back_seq_sqr_bar,
         mz_seq,
         Pz_seq_sqr,
+        T_h,
     )
 
 

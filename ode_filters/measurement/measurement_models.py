@@ -32,6 +32,7 @@ class ODEInformation:
         self._vf = vf
         self._d = d
         self._q = q
+        self._R = jnp.zeros((d, d))
         self._state_dim = (q + 1) * d
         self._jacobian_vf = jax.jacfwd(self._vf)
 
@@ -69,6 +70,9 @@ class ODEInformation:
         H_t = self.jacobian_g(state, t=t)
         c_t = self.g(state, t=t) - H_t @ state
         return H_t, c_t
+
+    def get_noise(self, *, t: float) -> Array:
+        return self._R
 
     def _validate_state(self, state: Array) -> Array:
         """Return a validated one-dimensional state array.
@@ -120,6 +124,8 @@ class ODEconservation(ODEInformation):
             )
         self._A = A
         self._p = p
+        self._k = p.shape[0]
+        self._R = jnp.zeros((d + self._k, d + self._k))
 
     def g(self, state: Array, *, t: float) -> Array:
         """Evaluate the observation model for a flattened state vector.
@@ -140,7 +146,7 @@ class ODEconservation(ODEInformation):
         return jnp.concatenate([ode_jacobi, self._A @ self._E0])
 
 
-class ODEmeasurements(ODEInformation):
+class ODEmeasurement(ODEInformation):
     """Evaluation and differential information for ODE measurement models."""
 
     def __init__(
@@ -167,6 +173,10 @@ class ODEmeasurements(ODEInformation):
         self._A = A
         self._z = z
         self._z_t = z_t
+        self._k = A.shape[0]
+        self._R_measure = jnp.zeros(
+            (d + self._k, d + self._k)
+        )  # TODO: this should be modifiyable especially for noisy measurements
 
         # Check that A is 2D and has d columns
         if self._A.ndim != 2 or self._A.shape[1] != d:
@@ -229,3 +239,110 @@ class ODEmeasurements(ODEInformation):
             return jnp.concatenate([ode_jacobi, self._A @ self._E0])
 
         return ode_jacobi
+
+    def get_noise(self, *, t: float) -> Array:
+        if t in self._z_t:
+            return self._R_measure
+        return self._R
+
+
+class ODEconservationmeasurement(ODEconservation):
+    """Evaluation and differential information for ODE measurement models."""
+
+    def __init__(
+        self,
+        vf: Callable[[Array, float], Array],
+        A: Array,
+        z: Array,
+        z_t: Array,
+        C: Array,
+        p: Array,
+        d: int = 1,
+        q: int = 1,
+    ):
+        """Initialize with ODE information plus linear measurements.
+
+        Extends ODEInformation with additional linear measurements of the form
+        A @ x(t) = z(t).
+
+        Args:
+            vf, d, q: See ODEInformation for documentation of these parameters.
+            A: Measurement matrix for linear observations.
+            z: Measurement values.
+            z_t: Time points corresponding to measurements.
+        """
+        super().__init__(vf, C, p, d, q)
+        self._A = A
+        self._z = z
+        self._z_t = z_t
+        self._k = A.shape[0]
+        self._R_measure = jnp.zeros(
+            (d + self._k, d + self._k)
+        )  # TODO: this should be modifiyable especially for noisy measurements
+
+        # Check that A is 2D and has d columns
+        if self._A.ndim != 2 or self._A.shape[1] != d:
+            raise ValueError(
+                f"'A' must be 2D with shape (k, {d}), got {self._A.shape}."
+            )
+
+        # Check that z is 2D and matches A's row dimension
+        if self._z.ndim != 2 or self._z.shape[1] != self._A.shape[0]:
+            raise ValueError(
+                f"'z' must be 2D with shape (n, {self._A.shape[0]}), got {self._z.shape}."
+            )
+
+        # Check z_t shape and flatten if needed
+        if self._z_t.ndim == 1:
+            if self._z_t.shape[0] != self._z.shape[0]:
+                raise ValueError(
+                    f"'z_t' length must match number of measurements {self._z.shape[0]}, "
+                    f"got {self._z_t.shape[0]}."
+                )
+        elif self._z_t.ndim == 2 and self._z_t.shape[1] == 1:
+            if self._z_t.shape[0] != self._z.shape[0]:
+                raise ValueError(
+                    f"'z_t' length must match number of measurements {self._z.shape[0]}, "
+                    f"got {self._z_t.shape[0]}."
+                )
+            self._z_t = self._z_t.flatten()
+        else:
+            raise ValueError(
+                f"'z_t' must be 1D shape (n,) or 2D shape (n, 1), got {self._z_t.shape}."
+            )
+
+    def g(self, state: Array, *, t: float) -> Array:
+        """Evaluate the observation model for a flattened state vector.
+
+        Args:
+            state: One-dimensional array of length ``(q + 1) * d`` containing the
+                stacked state derivatives.
+
+        """
+        # Get ODE information from parent class
+        ode_info = super().g(state, t=t)
+
+        # Add measurement information if at a measurement time
+        if t in self._z_t:
+            idx = jnp.where(self._z_t == t)[0][0]
+            measure = self._z[idx]
+            return jnp.concatenate([ode_info, self._A @ self._E0 @ state - measure])
+
+        return ode_info
+
+    def jacobian_g(self, state: Array, *, t: float) -> Array:
+        """Return the Jacobian of the observation model at ``state``."""
+
+        # state_arr = self._validate_state(state)
+        # return self._E1 - self._jacobian_vf(self._E0 @ state_arr, t=t) @ self._E0
+        ode_jacobi = super().jacobian_g(state, t=t)
+
+        if t in self._z_t:
+            return jnp.concatenate([ode_jacobi, self._A @ self._E0])
+
+        return ode_jacobi
+
+    def get_noise(self, *, t: float) -> Array:
+        if t in self._z_t:
+            return self._R_measure
+        return self._R
