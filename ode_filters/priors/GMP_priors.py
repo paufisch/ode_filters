@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from math import comb, factorial
 from operator import index
@@ -15,52 +16,7 @@ MatrixFunction = Callable[[float], Array]
 VectorField = Callable[[jnp.ndarray], jnp.ndarray]
 
 
-def _make_iwp_state_matrices(q: int) -> tuple[MatrixFunction, MatrixFunction]:
-    """Return callables producing the transition A(h) and diffusion Q(h) matrices.
-
-    Parameters
-    ----------
-    q : int
-        Smoothness order of the integrated Wiener process.
-
-    Returns
-    -------
-    tuple[callable, callable]
-        Functions A(h) and Q(h) that accept a positive scalar h and return
-        square numpy arrays of shape (q + 1, q + 1).
-    """
-    q = index(q)
-    if q < 0:
-        raise ValueError("q must be a non-negative integer.")
-
-    dim = q + 1
-
-    def A(h: float) -> Array:
-        if h < 0:
-            raise ValueError("h must be non-negative.")
-        mat = np.zeros((dim, dim), dtype=float)
-        for i in range(dim):
-            for j in range(i, dim):
-                mat[i, j] = h ** (j - i) / factorial(j - i)
-        return mat
-
-    def Q(h: float) -> Array:
-        if h < 0:
-            raise ValueError("h must be non-negative.")
-        mat = np.zeros((dim, dim), dtype=float)
-        for i in range(dim):
-            for j in range(dim):
-                power = 2 * q + 1 - i - j
-                denom = (2 * q + 1 - i - j) * factorial(q - i) * factorial(q - j)
-                mat[i, j] = (h**power) / denom
-        return mat
-
-    return A, Q
-
-
-class IWP:
-    """q-times integrated Wiener process prior for d-dimensional systems."""
-
+class BasePrior(ABC):
     def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
         if not isinstance(q, int):
             raise TypeError("q must be an integer.")
@@ -76,29 +32,29 @@ class IWP:
         if xi.shape != (d, d):
             raise ValueError(f"Xi must have shape ({d}, {d}), got {xi.shape}.")
 
-        self._A, self._Q = _make_iwp_state_matrices(q)
         self.q = q
         self._dim = d
         self.xi = xi
         self._id = np.eye(d, dtype=xi.dtype)
         self._b = np.zeros(d * (q + 1))
 
-    def A(self, h: float) -> Array:
-        """State transition matrix for step size h."""
-        return np.kron(self._A(self._validate_h(h)), self._id)
-
-    def b(self, h: float) -> Array:
-        return self._b
-
-    def Q(self, h: float) -> Array:
-        """Process noise (diffusion) matrix for step size h."""
-        return np.kron(self._Q(self._validate_h(h)), self.xi)
-
     @staticmethod
     def _validate_h(h: float) -> float:
         if h < 0:
             raise ValueError("h must be non-negative.")
         return float(h)
+
+    @abstractmethod
+    def A(self, h: float) -> np.ndarray:
+        pass
+
+    @abstractmethod
+    def b(self, h: float) -> np.ndarray:
+        pass
+
+    @abstractmethod
+    def Q(self, h: float) -> np.ndarray:
+        pass
 
 
 def taylor_mode_initialization(
@@ -152,6 +108,49 @@ def taylor_mode_initialization(
     return init, np.zeros((D, D))
 
 
+def _make_iwp_state_matrices(q: int) -> tuple[MatrixFunction, MatrixFunction]:
+    """Return callables producing the transition A(h) and diffusion Q(h) matrices.
+
+    Parameters
+    ----------
+    q : int
+        Smoothness order of the integrated Wiener process.
+
+    Returns
+    -------
+    tuple[callable, callable]
+        Functions A(h) and Q(h) that accept a positive scalar h and return
+        square numpy arrays of shape (q + 1, q + 1).
+    """
+    q = index(q)
+    if q < 0:
+        raise ValueError("q must be a non-negative integer.")
+
+    dim = q + 1
+
+    def A(h: float) -> Array:
+        if h < 0:
+            raise ValueError("h must be non-negative.")
+        mat = np.zeros((dim, dim), dtype=float)
+        for i in range(dim):
+            for j in range(i, dim):
+                mat[i, j] = h ** (j - i) / factorial(j - i)
+        return mat
+
+    def Q(h: float) -> Array:
+        if h < 0:
+            raise ValueError("h must be non-negative.")
+        mat = np.zeros((dim, dim), dtype=float)
+        for i in range(dim):
+            for j in range(dim):
+                power = 2 * q + 1 - i - j
+                denom = (2 * q + 1 - i - j) * factorial(q - i) * factorial(q - j)
+                mat[i, j] = (h**power) / denom
+        return mat
+
+    return A, Q
+
+
 def _make_iwp_precond_state_matrices(
     q: int,
 ) -> tuple[Array, Array, MatrixFunction]:
@@ -189,48 +188,34 @@ def _make_iwp_precond_state_matrices(
     return A_bar, Q_bar, T
 
 
-class PrecondIWP:
-    """q-times integrated Wiener process prior for d-dimensional systems."""
-
+class IWP(BasePrior):
     def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
-        if not isinstance(q, int):
-            raise TypeError("q must be an integer.")
-        if q < 0:
-            raise ValueError("q must be non-negative.")
+        super().__init__(q, d, Xi)
+        self._A, self._Q = _make_iwp_state_matrices(q)
 
-        if not isinstance(d, int):
-            raise TypeError("d must be an integer.")
-        if d <= 0:
-            raise ValueError("d must be positive.")
+    def A(self, h: float) -> np.ndarray:
+        return np.kron(self._A(self._validate_h(h)), self._id)
 
-        xi = np.eye(d, dtype=float) if Xi is None else np.asarray(Xi, dtype=float)
-        if xi.shape != (d, d):
-            raise ValueError(f"Xi must have shape ({d}, {d}), got {xi.shape}.")
-
-        self._A_bar, self._Q_bar, self._T = _make_iwp_precond_state_matrices(q)
-        self.q = q
-        self._dim = d
-        self.xi = xi
-        self._id = np.eye(d, dtype=xi.dtype)
-        self._b = np.zeros(d * (q + 1))
-
-    def A(self) -> Array:
-        """State transition matrix for step size h."""
-        return np.kron(self._A_bar, self._id)
-
-    def b(self) -> Array:
+    def b(self, h: float) -> np.ndarray:
         return self._b
 
-    def Q(self) -> Array:
-        """Process noise (diffusion) matrix for step size h."""
+    def Q(self, h: float) -> np.ndarray:
+        return np.kron(self._Q(self._validate_h(h)), self.xi)
+
+
+class PrecondIWP(BasePrior):
+    def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
+        super().__init__(q, d, Xi)
+        self._A_bar, self._Q_bar, self._T = _make_iwp_precond_state_matrices(q)
+
+    def A(self) -> np.ndarray:
+        return np.kron(self._A_bar, self._id)
+
+    def b(self) -> np.ndarray:
+        return self._b
+
+    def Q(self) -> np.ndarray:
         return np.kron(self._Q_bar, self.xi)
 
-    def T(self, h: float) -> Array:
-        """Scaling matrix for step size h."""
+    def T(self, h: float) -> np.ndarray:
         return np.kron(self._T(self._validate_h(h)), self._id)
-
-    @staticmethod
-    def _validate_h(h: float) -> float:
-        if h < 0:
-            raise ValueError("h must be non-negative.")
-        return float(h)
