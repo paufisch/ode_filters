@@ -84,16 +84,15 @@ class ODEconservation(ODEInformation):
         d: int = 1,
         q: int = 1,
     ):
-        """Initialize with ODE information plus linear measurements.
+        """Initialize with ODE information plus linear conservation law.
 
-        Extends ODEInformation with additional linear measurements of the form
+        Extends ODEInformation with additional linear conservation law of the form
         A @ x(t) = p.
 
         Args:
             vf, d, q: See ODEInformation for documentation of these parameters.
             A: Measurement matrix for linear observations.
             z: Measurement values.
-            z_t: Time points corresponding to measurements.
         """
         super().__init__(vf, d, q)
         if A.shape[0] != p.shape[0]:
