@@ -9,7 +9,7 @@ packages = ["ode_filters"]
 [project]
 name = "ode-filters"
 authors = [{name="Paul Fischer"}]
-version = "0.2.1"
+version = "0.3.0"
 description = "Basic ODE filtering and smooting implementation."
 readme = "README.md"
 license = "MIT"
