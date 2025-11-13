@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
@@ -5,6 +7,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
+from numpy.typing import ArrayLike
 
 
 class BaseODEInformation(ABC):
@@ -30,23 +33,68 @@ class BaseODEInformation(ABC):
 
     @abstractmethod
     def g(self, state: Array, *, t: float) -> Array:
-        """Evaluate the observation model for a flattened state vector."""
+        """Evaluate the observation model for a flattened state vector.
+
+        Args:
+            state: State vector of length ``(q + 1) * d``.
+            t: Current time.
+
+        Returns:
+            Observation model evaluation.
+        """
 
     @abstractmethod
     def jacobian_g(self, state: Array, *, t: float) -> Array:
-        """Return the Jacobian of the observation model at ``state``."""
+        """Return the Jacobian of the observation model at ``state``.
+
+        Args:
+            state: State vector of length ``(q + 1) * d``.
+            t: Current time.
+
+        Returns:
+            Jacobian matrix of the observation model.
+        """
 
     @abstractmethod
     def get_noise(self, *, t: float) -> Array:
-        """Return the measurement noise matrix at time ``t``."""
+        """Return the measurement noise matrix at time ``t``.
+
+        Args:
+            t: Current time.
+
+        Returns:
+            Measurement noise covariance matrix.
+        """
 
     def linearize(self, state: Array, *, t: float) -> tuple[Array, Array]:
+        """Linearize the observation model around the given state.
+
+        Args:
+            state: State vector to linearize around.
+            t: Current time.
+
+        Returns:
+            Tuple of (H_t, c_t) where:
+            - H_t is the Jacobian matrix
+            - c_t is the constant term (observation offset)
+        """
         state_arr = self._validate_state(state)
         H_t = self.jacobian_g(state_arr, t=t)
         c_t = self.g(state_arr, t=t) - H_t @ state_arr
         return H_t, c_t
 
     def _validate_state(self, state: Array) -> Array:
+        """Validate and convert state to required format.
+
+        Args:
+            state: State vector to validate.
+
+        Returns:
+            Validated state as float32 JAX array.
+
+        Raises:
+            ValueError: If state is not 1D or has incorrect length.
+        """
         state_arr = jnp.asarray(state, dtype=jnp.float32)
         if state_arr.ndim != 1:
             raise ValueError("'state' must be a one-dimensional array.")
@@ -61,15 +109,21 @@ class ODEInformation(BaseODEInformation):
     """Baseline ODE measurement model without additional constraints."""
 
     def g(self, state: Array, *, t: float) -> Array:
+        """Evaluate the observation model for a flattened state vector.
+
+        Returns the difference between the first derivative and the vector field.
+        """
         state_arr = self._validate_state(state)
         projected = self._E0 @ state_arr
         return self._E1 @ state_arr - self._vf(projected, t=t)
 
     def jacobian_g(self, state: Array, *, t: float) -> Array:
+        """Return the Jacobian of the observation model at ``state``."""
         state_arr = self._validate_state(state)
         return self._E1 - self._jacobian_vf(self._E0 @ state_arr, t=t) @ self._E0
 
     def get_noise(self, *, t: float) -> Array:
+        """Return the measurement noise matrix at time ``t``."""
         return self._R
 
 
@@ -79,8 +133,8 @@ class ODEconservation(ODEInformation):
     def __init__(
         self,
         vf: Callable[[Array, float], Array],
-        A,
-        p,
+        A: Array,
+        p: Array,
         d: int = 1,
         q: int = 1,
     ):
@@ -90,9 +144,11 @@ class ODEconservation(ODEInformation):
         A @ x(t) = p.
 
         Args:
-            vf, d, q: See ODEInformation for documentation of these parameters.
-            A: Measurement matrix for linear observations.
-            z: Measurement values.
+            vf: Vector field function with signature f(x, t) -> dx/dt.
+            A: Constraint matrix for linear conservation law (shape [k, d]).
+            p: Conservation law constant values (shape [k]).
+            d: State dimension (default 1).
+            q: Order of derivatives (default 1).
         """
         super().__init__(vf, d, q)
         if A.shape[0] != p.shape[0]:
@@ -110,23 +166,48 @@ class ODEconservation(ODEInformation):
         Args:
             state: One-dimensional array of length ``(q + 1) * d`` containing the
                 stacked state derivatives.
+            t: Current time.
 
+        Returns:
+            Observation model including ODE information and conservation constraint.
         """
         # Get ODE information from parent class
         ode_info = super().g(state, t=t)
         return jnp.concatenate([ode_info, self._A @ self._E0 @ state - self._p])
 
     def jacobian_g(self, state: Array, *, t: float) -> Array:
-        """Return the Jacobian of the observation model at ``state``."""
+        """Return the Jacobian of the observation model at ``state``.
 
+        Args:
+            state: State vector of length ``(q + 1) * d``.
+            t: Current time.
+
+        Returns:
+            Jacobian matrix including ODE and conservation constraint terms.
+        """
         ode_jacobi = super().jacobian_g(state, t=t)
         return jnp.concatenate([ode_jacobi, self._A @ self._E0])
 
 
 class LinearMeasurementBase:
-    """Shared utilities for models with additional linear measurements."""
+    """Shared utilities for models with additional linear measurements.
 
-    def _setup_linear_measurements(self, A: Array, z: Array, z_t: Array) -> None:
+    This is a mixin class that requires the subclass to define:
+    - self._d: int - State dimension
+    - self._R: Array - Base noise covariance matrix
+    - self._E0: Array - State extraction matrix
+    """
+
+    def _setup_linear_measurements(
+        self, A: ArrayLike, z: ArrayLike, z_t: ArrayLike
+    ) -> None:
+        if not hasattr(self, "_d"):
+            raise ValueError("Subclass must define self._d (state dimension).")
+        if not hasattr(self, "_R"):
+            raise ValueError("Subclass must define self._R (noise covariance matrix).")
+        if not hasattr(self, "_E0"):
+            raise ValueError("Subclass must define self._E0 (state extraction matrix).")
+
         A_arr = jnp.asarray(A)
         if A_arr.ndim != 2 or A_arr.shape[1] != self._d:
             raise ValueError(
@@ -166,23 +247,50 @@ class LinearMeasurementBase:
         )
 
     def _measurement_index(self, t: float) -> int | None:
+        """Find the measurement index for the given time ``t``.
+
+        Args:
+            t: Time value to search for.
+
+        Returns:
+            Index of the measurement at time t, or None if not found.
+        """
         matches = np.where(self._z_t_meas == t)[0]
         if matches.size == 0:
             return None
         return int(matches[0])
 
     def _measurement_residual(self, state: Array, idx: int) -> Array:
+        """Compute measurement residual for the given state and measurement index.
+
+        Args:
+            state: Current state vector.
+            idx: Index of the measurement in the measurement arrays.
+
+        Returns:
+            Measurement residual: A @ state - z[idx].
+        """
         return self._A_meas @ self._E0 @ state - self._z_meas[idx]
 
     def _measurement_jacobian(self) -> Array:
+        """Get the Jacobian matrix for linear measurements.
+
+        Returns:
+            Measurement Jacobian matrix: A @ E0.
+        """
         return self._A_meas @ self._E0
 
     def _measurement_noise(self) -> Array:
+        """Get the measurement noise covariance including measurement term.
+
+        Returns:
+            Combined measurement noise covariance matrix.
+        """
         return self._R_measure
 
 
 class ODEmeasurement(LinearMeasurementBase, ODEInformation):
-    """Evaluation and differential information for ODE measurement models."""
+    """ODE information combined with optional linear measurements."""
 
     def __init__(
         self,
@@ -193,10 +301,21 @@ class ODEmeasurement(LinearMeasurementBase, ODEInformation):
         d: int = 1,
         q: int = 1,
     ):
+        """Initialize ODE measurement model with linear measurements.
+
+        Args:
+            vf: Vector field function f(x, t) -> dx/dt.
+            A: Measurement matrix (shape [k, d]).
+            z: Measurement values (shape [n, k]).
+            z_t: Measurement times (shape [n]).
+            d: State dimension (default 1).
+            q: Order of derivatives (default 1).
+        """
         super().__init__(vf, d, q)
         self._setup_linear_measurements(A, z, z_t)
 
     def g(self, state: Array, *, t: float) -> Array:
+        """Evaluate observation model with optional measurement term."""
         ode_info = super().g(state, t=t)
         idx = self._measurement_index(t)
         if idx is None:
@@ -205,6 +324,7 @@ class ODEmeasurement(LinearMeasurementBase, ODEInformation):
         return jnp.concatenate([ode_info, residual])
 
     def jacobian_g(self, state: Array, *, t: float) -> Array:
+        """Return Jacobian including optional measurement term."""
         ode_jacobi = super().jacobian_g(state, t=t)
         idx = self._measurement_index(t)
         if idx is None:
@@ -212,6 +332,7 @@ class ODEmeasurement(LinearMeasurementBase, ODEInformation):
         return jnp.concatenate([ode_jacobi, self._measurement_jacobian()])
 
     def get_noise(self, *, t: float) -> Array:
+        """Get measurement noise including optional measurement term."""
         idx = self._measurement_index(t)
         if idx is None:
             return super().get_noise(t=t)
@@ -219,7 +340,7 @@ class ODEmeasurement(LinearMeasurementBase, ODEInformation):
 
 
 class ODEconservationmeasurement(LinearMeasurementBase, ODEconservation):
-    """Evaluation and differential information for ODE measurement models."""
+    """ODE with conservation law combined with optional linear measurements."""
 
     def __init__(
         self,
@@ -232,6 +353,18 @@ class ODEconservationmeasurement(LinearMeasurementBase, ODEconservation):
         d: int = 1,
         q: int = 1,
     ):
+        """Initialize ODE measurement model with conservation law and linear measurements.
+
+        Args:
+            vf: Vector field function f(x, t) -> dx/dt.
+            A: Measurement matrix for linear measurements (shape [k, d]).
+            z: Measurement values (shape [n, k]).
+            z_t: Measurement times (shape [n]).
+            C: Constraint matrix for conservation law (shape [m, d]).
+            p: Conservation law values (shape [m]).
+            d: State dimension (default 1).
+            q: Order of derivatives (default 1).
+        """
         super().__init__(vf, C, p, d, q)
         self._setup_linear_measurements(A, z, z_t)
         self._A_lin = self._A_meas
@@ -240,6 +373,7 @@ class ODEconservationmeasurement(LinearMeasurementBase, ODEconservation):
         self._k_lin = self._measurement_dim
 
     def g(self, state: Array, *, t: float) -> Array:
+        """Evaluate observation model with conservation law and optional measurements."""
         ode_info = super().g(state, t=t)
         idx = self._measurement_index(t)
         if idx is None:
@@ -248,6 +382,7 @@ class ODEconservationmeasurement(LinearMeasurementBase, ODEconservation):
         return jnp.concatenate([ode_info, residual])
 
     def jacobian_g(self, state: Array, *, t: float) -> Array:
+        """Return Jacobian with conservation law and optional measurements."""
         ode_jacobi = super().jacobian_g(state, t=t)
         idx = self._measurement_index(t)
         if idx is None:
@@ -255,6 +390,7 @@ class ODEconservationmeasurement(LinearMeasurementBase, ODEconservation):
         return jnp.concatenate([ode_jacobi, self._measurement_jacobian()])
 
     def get_noise(self, *, t: float) -> Array:
+        """Get measurement noise with conservation law and optional measurements."""
         idx = self._measurement_index(t)
         if idx is None:
             return super().get_noise(t=t)

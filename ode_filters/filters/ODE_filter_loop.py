@@ -5,6 +5,8 @@ from collections.abc import Callable
 import numpy as np
 from numpy.linalg import cholesky
 
+from ..measurement.measurement_models import BaseODEInformation
+from ..priors.GMP_priors import BasePrior
 from .ODE_filter_step import (
     ekf1_sqr_filter_step,
     ekf1_sqr_filter_step_preconditioned,
@@ -32,12 +34,24 @@ LoopResult = tuple[
 def ekf1_sqr_loop(
     mu_0: Array,
     Sigma_0_sqr: Array,
-    prior: object,
-    measure: object,
+    prior: BasePrior,
+    measure: BaseODEInformation,
     tspan: tuple[float, float],
     N: int,
 ) -> LoopResult:
-    """Run a square-root EKF over ``N`` observation steps."""
+    """Run a square-root EKF over ``N`` observation steps.
+
+    Args:
+        mu_0: Initial state mean estimate.
+        Sigma_0_sqr: Initial state covariance (square-root form).
+        prior: Prior model (e.g., IWP or PrecondIWP).
+        measure: Measurement model (e.g., ODEInformation or subclass).
+        tspan: Time interval (t_start, t_end).
+        N: Number of filter steps.
+
+    Returns:
+        Tuple of 9 arrays containing filtered estimates and intermediate results.
+    """
 
     m_seq = [mu_0]
     P_seq_sqr = [Sigma_0_sqr]
@@ -101,7 +115,19 @@ def rts_sqr_smoother_loop(
     P_back_seq_sqr: Array,
     N: int,
 ) -> tuple[Array, Array]:
-    """Run a Rauch–Tung–Striebel smoother over ``N`` steps."""
+    """Run a Rauch–Tung–Striebel smoother over ``N`` steps.
+
+    Args:
+        m_N: Final filtered state mean.
+        P_N_sqr: Final filtered state covariance (square-root form).
+        G_back_seq: Backward pass gain sequence from filter.
+        d_back_seq: Backward pass offset sequence from filter.
+        P_back_seq_sqr: Backward pass covariance sequence (square-root form) from filter.
+        N: Number of smoothing steps.
+
+    Returns:
+        Tuple of smoothed state means and covariances (square-root form).
+    """
 
     state_dim = m_N.shape[0]
     m_smooth = np.empty((N + 1, state_dim))
@@ -124,8 +150,8 @@ def rts_sqr_smoother_loop(
 def ekf1_sqr_loop_preconditioned(
     mu_0: Array,
     P_0_sqr: Array,
-    prior: object,
-    measure: object,
+    prior: BasePrior,
+    measure: BaseODEInformation,
     tspan: tuple[float, float],
     N: int,
 ) -> tuple[
@@ -141,9 +167,22 @@ def ekf1_sqr_loop_preconditioned(
     Array,
     Array,
 ]:
-    """Run a preconditioned square-root EKF over ``N`` observation steps."""
+    """Run a preconditioned square-root EKF over ``N`` observation steps.
+
+    Args:
+        mu_0: Initial state mean estimate.
+        P_0_sqr: Initial state covariance (square-root form).
+        prior: Prior model (typically PrecondIWP).
+        measure: Measurement model (e.g., ODEInformation or subclass).
+        tspan: Time interval (t_start, t_end).
+        N: Number of filter steps.
+
+    Returns:
+        Tuple of 11 arrays containing original and preconditioned estimates.
+    """
 
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    # For PrecondIWP, A() and b() don't use h, but accept it for API compatibility
     A_bar = prior.A()
     b_bar = prior.b()
     Q_sqr_bar = cholesky(prior.Q(), upper=True)
@@ -219,7 +258,22 @@ def rts_sqr_smoother_loop_preconditioned(
     N: int,
     T_h: Array,
 ) -> tuple[Array, Array]:
-    """Run a preconditioned Rauch–Tung–Striebel smoother over ``N`` steps."""
+    """Run a preconditioned Rauch–Tung–Striebel smoother over ``N`` steps.
+
+    Args:
+        m_N: Final filtered state mean (original space).
+        P_N_sqr: Final filtered state covariance (square-root form, original space).
+        m_N_bar: Final filtered state mean (preconditioned space).
+        P_N_sqr_bar: Final filtered state covariance (square-root form, preconditioned space).
+        G_back_seq_bar: Backward pass gain sequence (preconditioned).
+        d_back_seq_bar: Backward pass offset sequence (preconditioned).
+        P_back_seq_sqr_bar: Backward pass covariance sequence (square-root form, preconditioned).
+        N: Number of smoothing steps.
+        T_h: Preconditioning transformation matrix.
+
+    Returns:
+        Smoothed state means and covariances (square-root form, original space).
+    """
 
     state_dim = m_N.shape[0]
 
