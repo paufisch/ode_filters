@@ -183,9 +183,9 @@ def ekf1_sqr_loop_preconditioned(
 
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     # For PrecondIWP, A() and b() don't use h, but accept it for API compatibility
-    A_bar = prior.A(h)
-    b_bar = prior.b(h)
-    Q_sqr_bar = cholesky(prior.Q(h), upper=True)
+    A_bar = prior.A()
+    b_bar = prior.b()
+    Q_sqr_bar = cholesky(prior.Q(), upper=True)
     T_h = prior.T(h)
 
     m_seq = [mu_0]
