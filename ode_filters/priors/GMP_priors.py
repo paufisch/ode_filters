@@ -59,22 +59,19 @@ class BasePrior(ABC):
 
 def taylor_mode_initialization(
     vf: VectorField, inits: ArrayLike, q: int, t0: float = 0.0
-) -> tuple[jnp.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Return flattened Taylor-mode coefficients produced via JAX Jet.
 
-    Parameters
-    ----------
-    vf : callable
-        Vector field whose Taylor coefficients are required.
-    inits : array-like
-        Initial value around which the expansion takes place.
-    q : int
-        Number of higher-order coefficients to compute.
+    Args:
+        vf: Vector field whose Taylor coefficients are required.
+        inits: Initial value around which the expansion takes place.
+        q: Number of higher-order coefficients to compute.
+        t0: Initial time for Taylor expansion (default 0.0).
 
-    Returns
-    -------
-    tuple[jnp.ndarray, np.ndarray]
-        The flattened Taylor coefficients and a zero covariance matrix.
+    Returns:
+        Tuple of (coefficients, covariance) where:
+        - coefficients are the flattened Taylor coefficients as numpy array
+        - covariance is a zero covariance matrix as numpy array
     """
     if not callable(vf):
         raise TypeError("vf must be callable.")
@@ -105,7 +102,9 @@ def taylor_mode_initialization(
     leaves = jax.tree_util.tree_leaves(coefficients)
     init = jnp.concatenate([jnp.ravel(arr) for arr in leaves])
     D = init.shape[0]
-    return init, np.zeros((D, D))
+    # Convert JAX array to NumPy for consistent return type
+    init_np = np.asarray(init)
+    return init_np, np.zeros((D, D))
 
 
 def _make_iwp_state_matrices(q: int) -> tuple[MatrixFunction, MatrixFunction]:
@@ -189,33 +188,89 @@ def _make_iwp_precond_state_matrices(
 
 
 class IWP(BasePrior):
+    """Integrated Wiener Process prior model."""
+
     def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
         super().__init__(q, d, Xi)
         self._A, self._Q = _make_iwp_state_matrices(q)
 
     def A(self, h: float) -> np.ndarray:
+        """Return the state transition matrix for step size h.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            State transition matrix (shape [(q+1)*d, (q+1)*d]).
+        """
         return np.kron(self._A(self._validate_h(h)), self._id)
 
     def b(self, h: float) -> np.ndarray:
+        """Return the drift vector for step size h.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Zero drift vector (shape [(q+1)*d]).
+        """
         return self._b
 
     def Q(self, h: float) -> np.ndarray:
+        """Return the diffusion matrix for step size h.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Diffusion matrix (shape [(q+1)*d, (q+1)*d]).
+        """
         return np.kron(self._Q(self._validate_h(h)), self.xi)
 
 
 class PrecondIWP(BasePrior):
+    """Preconditioned Integrated Wiener Process prior.
+
+    Uses a preconditioning transformation T(h) to make matrices stepsize-independent.
+    The transformation matrices A() and Q() are constant (independent of h), while
+    the stepsize dependence is absorbed into T(h).
+    """
+
     def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
         super().__init__(q, d, Xi)
         self._A_bar, self._Q_bar, self._T = _make_iwp_precond_state_matrices(q)
 
     def A(self) -> np.ndarray:
+        """Return the constant preconditioning transition matrix.
+
+        Returns:
+            Constant transition matrix (shape [(q+1)*d, (q+1)*d]).
+        """
         return np.kron(self._A_bar, self._id)
 
     def b(self) -> np.ndarray:
+        """Return the zero drift vector.
+
+        Returns:
+            Zero drift vector (shape [(q+1)*d]).
+        """
         return self._b
 
     def Q(self) -> np.ndarray:
+        """Return the constant preconditioning diffusion matrix.
+
+        Returns:
+            Constant diffusion matrix (shape [(q+1)*d, (q+1)*d]).
+        """
         return np.kron(self._Q_bar, self.xi)
 
     def T(self, h: float) -> np.ndarray:
+        """Return the stepsize-dependent preconditioning transformation.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Preconditioning transformation matrix (shape [(q+1)*d, (q+1)*d]).
+        """
         return np.kron(self._T(self._validate_h(h)), self._id)
