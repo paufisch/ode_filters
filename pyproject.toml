@@ -9,7 +9,7 @@ packages = ["ode_filters"]
 [project]
 name = "ode-filters"
 authors = [{name="Paul Fischer"}]
-version = "0.2.2"
+version = "0.3.0"
 description = "Basic ODE filtering and smooting implementation."
 readme = "README.md"
 license = "MIT"
@@ -23,6 +23,12 @@ dependencies = [
     "scikit-learn>=1.7.2",
     "tqdm>=4.67.1",
     "tueplots>=0.2.1",
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 
 [dependency-groups]

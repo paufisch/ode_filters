@@ -54,5 +54,6 @@ uv.lock
 intermediate_sampling.ipynb
 lotka-volterra.ipynb
 SIR.ipynb
+docs/examples/additional_info.ipynb
 
 site/*
