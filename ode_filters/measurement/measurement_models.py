@@ -4,10 +4,9 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 import jax
-import jax.numpy as jnp
-import numpy as np
+import jax.numpy as np
 from jax import Array
-from numpy.typing import ArrayLike
+from jax.typing import ArrayLike
 
 
 class BaseODEInformation(ABC):
@@ -19,15 +18,15 @@ class BaseODEInformation(ABC):
         if q < 1:
             raise ValueError("'q' must be at least one.")
 
-        eye_d = jnp.eye(d, dtype=jnp.float32)
-        basis = jnp.eye(q + 1, dtype=jnp.float32)
-        self._E0 = jnp.kron(basis[0:1], eye_d)
-        self._E1 = jnp.kron(basis[1:2], eye_d)
+        eye_d = np.eye(d, dtype=np.float32)
+        basis = np.eye(q + 1, dtype=np.float32)
+        self._E0 = np.kron(basis[0:1], eye_d)
+        self._E1 = np.kron(basis[1:2], eye_d)
 
         self._vf = vf
         self._d = d
         self._q = q
-        self._R = jnp.zeros((d, d))
+        self._R = np.zeros((d, d))
         self._state_dim = (q + 1) * d
         self._jacobian_vf = jax.jacfwd(self._vf)
 
@@ -95,7 +94,7 @@ class BaseODEInformation(ABC):
         Raises:
             ValueError: If state is not 1D or has incorrect length.
         """
-        state_arr = jnp.asarray(state, dtype=jnp.float32)
+        state_arr = np.asarray(state, dtype=np.float32)
         if state_arr.ndim != 1:
             raise ValueError("'state' must be a one-dimensional array.")
         if state_arr.shape[0] != self._state_dim:
@@ -158,7 +157,7 @@ class ODEconservation(ODEInformation):
         self._A = A
         self._p = p
         self._k = p.shape[0]
-        self._R = jnp.zeros((d + self._k, d + self._k))
+        self._R = np.zeros((d + self._k, d + self._k))
 
     def g(self, state: Array, *, t: float) -> Array:
         """Evaluate the observation model for a flattened state vector.
@@ -173,7 +172,7 @@ class ODEconservation(ODEInformation):
         """
         # Get ODE information from parent class
         ode_info = super().g(state, t=t)
-        return jnp.concatenate([ode_info, self._A @ self._E0 @ state - self._p])
+        return np.concatenate([ode_info, self._A @ self._E0 @ state - self._p])
 
     def jacobian_g(self, state: Array, *, t: float) -> Array:
         """Return the Jacobian of the observation model at ``state``.
@@ -186,7 +185,7 @@ class ODEconservation(ODEInformation):
             Jacobian matrix including ODE and conservation constraint terms.
         """
         ode_jacobi = super().jacobian_g(state, t=t)
-        return jnp.concatenate([ode_jacobi, self._A @ self._E0])
+        return np.concatenate([ode_jacobi, self._A @ self._E0])
 
 
 class LinearMeasurementBase:
@@ -208,13 +207,13 @@ class LinearMeasurementBase:
         if not hasattr(self, "_E0"):
             raise ValueError("Subclass must define self._E0 (state extraction matrix).")
 
-        A_arr = jnp.asarray(A)
+        A_arr = np.asarray(A)
         if A_arr.ndim != 2 or A_arr.shape[1] != self._d:
             raise ValueError(
                 f"'A' must be 2D with shape (k, {self._d}), got {A_arr.shape}."
             )
 
-        z_arr = jnp.asarray(z)
+        z_arr = np.asarray(z)
         if z_arr.ndim != 2 or z_arr.shape[1] != A_arr.shape[0]:
             raise ValueError(
                 f"'z' must be 2D with shape (n, {A_arr.shape[0]}), got {z_arr.shape}."
@@ -241,7 +240,7 @@ class LinearMeasurementBase:
         self._z_t_meas = z_t_arr
         self._measurement_dim = int(A_arr.shape[0])
         base_dim = int(self._R.shape[0])
-        self._R_measure = jnp.zeros(
+        self._R_measure = np.zeros(
             (base_dim + self._measurement_dim, base_dim + self._measurement_dim),
             dtype=self._R.dtype,
         )
@@ -321,7 +320,7 @@ class ODEmeasurement(LinearMeasurementBase, ODEInformation):
         if idx is None:
             return ode_info
         residual = self._measurement_residual(state, idx)
-        return jnp.concatenate([ode_info, residual])
+        return np.concatenate([ode_info, residual])
 
     def jacobian_g(self, state: Array, *, t: float) -> Array:
         """Return Jacobian including optional measurement term."""
@@ -329,7 +328,7 @@ class ODEmeasurement(LinearMeasurementBase, ODEInformation):
         idx = self._measurement_index(t)
         if idx is None:
             return ode_jacobi
-        return jnp.concatenate([ode_jacobi, self._measurement_jacobian()])
+        return np.concatenate([ode_jacobi, self._measurement_jacobian()])
 
     def get_noise(self, *, t: float) -> Array:
         """Get measurement noise including optional measurement term."""
@@ -379,7 +378,7 @@ class ODEconservationmeasurement(LinearMeasurementBase, ODEconservation):
         if idx is None:
             return ode_info
         residual = self._measurement_residual(state, idx)
-        return jnp.concatenate([ode_info, residual])
+        return np.concatenate([ode_info, residual])
 
     def jacobian_g(self, state: Array, *, t: float) -> Array:
         """Return Jacobian with conservation law and optional measurements."""
@@ -387,7 +386,7 @@ class ODEconservationmeasurement(LinearMeasurementBase, ODEconservation):
         idx = self._measurement_index(t)
         if idx is None:
             return ode_jacobi
-        return jnp.concatenate([ode_jacobi, self._measurement_jacobian()])
+        return np.concatenate([ode_jacobi, self._measurement_jacobian()])
 
     def get_noise(self, *, t: float) -> Array:
         """Get measurement noise with conservation law and optional measurements."""

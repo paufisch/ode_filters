@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import numpy as np
+from jax import Array
 
 from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
 from ..measurement.measurement_models import BaseODEInformation
 
-Array = np.ndarray
 StateFunction = Callable[[Array], Array]
 JacobianFunction = Callable[[Array], Array]
 
