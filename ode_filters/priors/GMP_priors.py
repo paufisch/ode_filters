@@ -8,9 +8,9 @@ from operator import index
 import jax
 import jax.experimental.jet
 import jax.numpy as np
+from jax import Array
 from numpy.typing import ArrayLike
 
-Array = np.ndarray
 MatrixFunction = Callable[[float], Array]
 VectorField = Callable[[np.ndarray], np.ndarray]
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import jax.numpy as np
+from jax import Array
 
 from ..measurement.measurement_models import BaseODEInformation
 from ..priors.GMP_priors import BasePrior
@@ -13,7 +14,6 @@ from .ODE_filter_step import (
     rts_sqr_smoother_step_preconditioned,
 )
 
-Array = np.ndarray
 StateFunction = Callable[[Array], Array]
 JacobianFunction = Callable[[Array], Array]
 

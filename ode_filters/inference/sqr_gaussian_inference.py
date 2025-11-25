@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import jax.numpy as np
-
-Array = np.ndarray  # Type alias for numpy arrays
+from jax import Array
 
 
 def sqr_marginalization(
