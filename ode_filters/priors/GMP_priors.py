@@ -9,7 +9,7 @@ import jax
 import jax.experimental.jet
 import jax.numpy as np
 from jax import Array
-from numpy.typing import ArrayLike
+from jax.typing import ArrayLike
 
 MatrixFunction = Callable[[float], Array]
 VectorField = Callable[[np.ndarray], np.ndarray]
