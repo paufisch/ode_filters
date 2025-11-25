@@ -1,4 +1,4 @@
-import numpy as np
+import jax.numpy as np
 
 # ==============================================================================
 # TEST CASES: BASIC FUNCTIONALITY
@@ -58,7 +58,7 @@ def case_diagonal_matrices():
     """Test inversion with diagonal covariance matrices."""
     A = np.array([[1.0, 0.5]])
     mu = np.array([1.0, 2.0])
-    Sigma = np.diag([2.0, 3.0])
+    Sigma = np.diag(np.array([2.0, 3.0]))
     mu_z = np.array([2.0])
     Sigma_z = np.array([[2.25]])
 

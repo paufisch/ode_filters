@@ -1,6 +1,6 @@
 import jax
-import jax.numpy as jnp
-import numpy as np
+import jax.numpy as np
+import numpy as onp  # Regular numpy for testing utilities
 import pytest
 
 from ode_filters.measurement.measurement_models import ODEInformation
@@ -11,13 +11,13 @@ def test_observation_matches_manual_computation():
         return state**2
 
     model = ODEInformation(vf=vf, d=1, q=1)
-    state = jnp.array([2.0, 3.0])
+    state = np.array([2.0, 3.0])
     time = 0.0
 
     manual = model._E1 @ state - vf(model._E0 @ state, t=time)
     computed = model.g(state, t=time)
 
-    np.testing.assert_allclose(np.asarray(computed), np.asarray(manual))
+    onp.testing.assert_allclose(np.asarray(computed), np.asarray(manual))
 
 
 def test_jacobian_matches_expected_linearization():
@@ -25,14 +25,14 @@ def test_jacobian_matches_expected_linearization():
         return state**2
 
     model = ODEInformation(vf=vf, d=1, q=1)
-    state = jnp.array([1.5, -0.5])
+    state = np.array([1.5, -0.5])
     time = 1.0
 
     jacobian = model.jacobian_g(state, t=time)
     jacobian_vf = jax.jacfwd(vf)(model._E0 @ state, t=time)
     expected = model._E1 - jacobian_vf @ model._E0
 
-    np.testing.assert_allclose(np.asarray(jacobian), np.asarray(expected))
+    onp.testing.assert_allclose(np.asarray(jacobian), np.asarray(expected))
 
 
 @pytest.mark.parametrize("d, q", [(1, 1), (2, 2), (3, 1)])
@@ -54,7 +54,7 @@ def test_invalid_state_dimension_raises_error():
     model = ODEInformation(vf=vf, d=1, q=1)
 
     with pytest.raises(ValueError):
-        model.g(jnp.array([1.0]), t=0.0)
+        model.g(np.array([1.0]), t=0.0)
 
 
 def test_invalid_constructor_parameters_raise():
@@ -73,7 +73,7 @@ def test_state_with_wrong_rank_raises_error():
         return state
 
     model = ODEInformation(vf=vf, d=1, q=1)
-    bad_state = jnp.array([[1.0, 2.0]])  # shape (1, 2) → ndim = 2
+    bad_state = np.array([[1.0, 2.0]])  # shape (1, 2) → ndim = 2
 
     with pytest.raises(ValueError, match="must be a one-dimensional"):
         model.g(bad_state, t=0.0)
