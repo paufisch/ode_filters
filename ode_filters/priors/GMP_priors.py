@@ -12,11 +12,11 @@ from jax import Array
 from jax.typing import ArrayLike
 
 MatrixFunction = Callable[[float], Array]
-VectorField = Callable[[np.ndarray], np.ndarray]
+VectorField = Callable[[ArrayLike], Array]
 
 
 class BasePrior(ABC):
-    def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
+    def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         if not isinstance(q, int):
             raise TypeError("q must be an integer.")
         if q < 0:
@@ -44,21 +44,21 @@ class BasePrior(ABC):
         return float(h)
 
     @abstractmethod
-    def A(self, h: float) -> np.ndarray:
+    def A(self, h: float) -> Array:
         pass
 
     @abstractmethod
-    def b(self, h: float) -> np.ndarray:
+    def b(self, h: float) -> Array:
         pass
 
     @abstractmethod
-    def Q(self, h: float) -> np.ndarray:
+    def Q(self, h: float) -> Array:
         pass
 
 
 def taylor_mode_initialization(
     vf: VectorField, inits: ArrayLike, q: int, t0: float = 0.0
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[Array, Array]:
     """Return flattened Taylor-mode coefficients produced via JAX Jet.
 
     Args:
@@ -82,8 +82,8 @@ def taylor_mode_initialization(
         return vf(x, t=t0)
 
     base_state = np.asarray(inits)
-    coefficients: list[np.ndarray] = [base_state]
-    series_terms: list[np.ndarray] = []
+    coefficients: list[Array] = [base_state]
+    series_terms: list[Array] = []
 
     for order in range(q):
         primals_out, series_out = jax.experimental.jet.jet(
@@ -187,11 +187,11 @@ def _make_iwp_precond_state_matrices(
 class IWP(BasePrior):
     """Integrated Wiener Process prior model."""
 
-    def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
+    def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         super().__init__(q, d, Xi)
         self._A, self._Q = _make_iwp_state_matrices(q)
 
-    def A(self, h: float) -> np.ndarray:
+    def A(self, h: float) -> Array:
         """Return the state transition matrix for step size h.
 
         Args:
@@ -202,7 +202,7 @@ class IWP(BasePrior):
         """
         return np.kron(self._A(self._validate_h(h)), self._id)
 
-    def b(self, h: float) -> np.ndarray:
+    def b(self, h: float) -> Array:
         """Return the drift vector for step size h.
 
         Args:
@@ -213,7 +213,7 @@ class IWP(BasePrior):
         """
         return self._b
 
-    def Q(self, h: float) -> np.ndarray:
+    def Q(self, h: float) -> Array:
         """Return the diffusion matrix for step size h.
 
         Args:
@@ -233,11 +233,11 @@ class PrecondIWP(BasePrior):
     the stepsize dependence is absorbed into T(h).
     """
 
-    def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
+    def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         super().__init__(q, d, Xi)
         self._A_bar, self._Q_bar, self._T = _make_iwp_precond_state_matrices(q)
 
-    def A(self) -> np.ndarray:
+    def A(self) -> Array:
         """Return the constant preconditioning transition matrix.
 
         Returns:
@@ -245,7 +245,7 @@ class PrecondIWP(BasePrior):
         """
         return np.kron(self._A_bar, self._id)
 
-    def b(self) -> np.ndarray:
+    def b(self) -> Array:
         """Return the zero drift vector.
 
         Returns:
@@ -253,7 +253,7 @@ class PrecondIWP(BasePrior):
         """
         return self._b
 
-    def Q(self) -> np.ndarray:
+    def Q(self) -> Array:
         """Return the constant preconditioning diffusion matrix.
 
         Returns:
@@ -261,7 +261,7 @@ class PrecondIWP(BasePrior):
         """
         return np.kron(self._Q_bar, self.xi)
 
-    def T(self, h: float) -> np.ndarray:
+    def T(self, h: float) -> Array:
         """Return the stepsize-dependent preconditioning transformation.
 
         Args:
