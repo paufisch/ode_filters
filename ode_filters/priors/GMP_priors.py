@@ -10,13 +10,14 @@ import jax.experimental.jet
 import jax.numpy as np
 from jax import Array
 from jax.typing import ArrayLike
+from jax.scipy.linalg import expm
 
 MatrixFunction = Callable[[float], Array]
-VectorField = Callable[[np.ndarray], np.ndarray]
+VectorField = Callable[[ArrayLike], Array]
 
 
 class BasePrior(ABC):
-    def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
+    def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         if not isinstance(q, int):
             raise TypeError("q must be an integer.")
         if q < 0:
@@ -44,21 +45,21 @@ class BasePrior(ABC):
         return float(h)
 
     @abstractmethod
-    def A(self, h: float) -> np.ndarray:
+    def A(self, h: float) -> Array:
         pass
 
     @abstractmethod
-    def b(self, h: float) -> np.ndarray:
+    def b(self, h: float) -> Array:
         pass
 
     @abstractmethod
-    def Q(self, h: float) -> np.ndarray:
+    def Q(self, h: float) -> Array:
         pass
 
 
 def taylor_mode_initialization(
     vf: VectorField, inits: ArrayLike, q: int, t0: float = 0.0
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[Array, Array]:
     """Return flattened Taylor-mode coefficients produced via JAX Jet.
 
     Args:
@@ -82,8 +83,8 @@ def taylor_mode_initialization(
         return vf(x, t=t0)
 
     base_state = np.asarray(inits)
-    coefficients: list[np.ndarray] = [base_state]
-    series_terms: list[np.ndarray] = []
+    coefficients: list[Array] = [base_state]
+    series_terms: list[Array] = []
 
     for order in range(q):
         primals_out, series_out = jax.experimental.jet.jet(
@@ -187,11 +188,11 @@ def _make_iwp_precond_state_matrices(
 class IWP(BasePrior):
     """Integrated Wiener Process prior model."""
 
-    def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
+    def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         super().__init__(q, d, Xi)
         self._A, self._Q = _make_iwp_state_matrices(q)
 
-    def A(self, h: float) -> np.ndarray:
+    def A(self, h: float) -> Array:
         """Return the state transition matrix for step size h.
 
         Args:
@@ -202,7 +203,7 @@ class IWP(BasePrior):
         """
         return np.kron(self._A(self._validate_h(h)), self._id)
 
-    def b(self, h: float) -> np.ndarray:
+    def b(self, h: float) -> Array:
         """Return the drift vector for step size h.
 
         Args:
@@ -213,7 +214,7 @@ class IWP(BasePrior):
         """
         return self._b
 
-    def Q(self, h: float) -> np.ndarray:
+    def Q(self, h: float) -> Array:
         """Return the diffusion matrix for step size h.
 
         Args:
@@ -233,11 +234,11 @@ class PrecondIWP(BasePrior):
     the stepsize dependence is absorbed into T(h).
     """
 
-    def __init__(self, q: int, d: int, Xi: np.ndarray | None = None):
+    def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         super().__init__(q, d, Xi)
         self._A_bar, self._Q_bar, self._T = _make_iwp_precond_state_matrices(q)
 
-    def A(self) -> np.ndarray:
+    def A(self) -> Array:
         """Return the constant preconditioning transition matrix.
 
         Returns:
@@ -245,7 +246,7 @@ class PrecondIWP(BasePrior):
         """
         return np.kron(self._A_bar, self._id)
 
-    def b(self) -> np.ndarray:
+    def b(self) -> Array:
         """Return the zero drift vector.
 
         Returns:
@@ -253,7 +254,7 @@ class PrecondIWP(BasePrior):
         """
         return self._b
 
-    def Q(self) -> np.ndarray:
+    def Q(self) -> Array:
         """Return the constant preconditioning diffusion matrix.
 
         Returns:
@@ -261,7 +262,7 @@ class PrecondIWP(BasePrior):
         """
         return np.kron(self._Q_bar, self.xi)
 
-    def T(self, h: float) -> np.ndarray:
+    def T(self, h: float) -> Array:
         """Return the stepsize-dependent preconditioning transformation.
 
         Args:
@@ -271,3 +272,173 @@ class PrecondIWP(BasePrior):
             Preconditioning transformation matrix (shape [(q+1)*d, (q+1)*d]).
         """
         return np.kron(self._T(self._validate_h(h)), self._id)
+
+
+def _matern_companion_form(
+    l: float, q: int
+) -> tuple[Array, Array, float]:
+    """
+    Construct the companion form matrices for a Matérn GP prior.
+    
+    Reference: Särkkä & Hartikainen (2010, equations 12.34-12.35)
+    
+    Parameters
+    ----------
+    l : float
+        Length scale parameter ℓ
+    q : int
+        Smoothness parameter exponent (ν = q + 1/2, q ∈ ℤ)
+        
+    Returns
+    -------
+    F : Array
+        Drift matrix (shape [D, D]) - companion form matrix
+    L : Array
+        Diffusion vector (shape [D])
+    q : float
+        Diffusion coefficient σ²
+    """
+    if l <= 0:
+        raise ValueError("Length scale l must be positive.")
+    if not isinstance(q, int) or q < 0:
+        raise ValueError("Smoothness exponent q must be a non-negative integer.")
+    
+    # Compute ν = q + 1/2 and state dimensionality D = ν + 1/2 = q + 1
+    D = q + 1
+    nu = q + 0.5
+    
+    # Compute λ = √(2ν/ℓ) = √((2p + 1)/ℓ)
+    lam = np.sqrt((2.0 * q + 1.0) / l)
+    
+    # Construct F matrix (companion form)
+    F = np.zeros((D, D), dtype=float)
+    
+    # Super-diagonal: ones
+    for i in range(D - 1):
+        F = F.at[i, i + 1].set(1.0)
+    
+    # Last row: [-a_j * λ^(D-j) for j = 0, ..., D-1]
+    # where a_j = C(D, j) are binomial coefficients
+    for j in range(D):
+        a_j = comb(D, j)  # Binomial coefficient C(D, j)
+        power = D - j      # Power goes from D down to 1
+        F = F.at[D - 1, j].set(-a_j * (lam ** power))
+    
+    # Construct L vector: [0, 0, ..., 0, 1]ᵀ
+    L = np.zeros((D, 1), dtype=float).at[-1, 0].set(1.0)
+    
+    # Diffusion coefficient: q = σ² [(D-1)!]² / (2D-2)! * (2λ)^(2D-1)
+    # assuming σ = 1 
+    numerator = float(factorial(D - 1) ** 2)
+    denominator = float(factorial(2 * D - 2))
+    q = (numerator / denominator) * ((2.0 * lam) ** (2 * D - 1))
+    
+    return F, L, float(q)
+
+
+class MaternPrior(BasePrior):
+    """Matérn Gaussian process prior model using block matrix exponential."""
+
+    def __init__(
+        self,
+        q: int,
+        d: int,
+        l: float,
+        Xi: ArrayLike | None = None,
+    ):
+        """Initialize the Matérn prior. This creates a matern process prior for a d-dimensional process where each dimension is modeled independently by a q+1 times integrated matern process of the same length scale (l) with possible different output sclae (xi).  
+
+        Args:
+            q: Smoothness order (not used in this formulation but kept for compatibility).
+            d: State dimension.
+            l: length scale of the process
+            Xi: Optional scaling matrix (shape [d, d]).
+        """
+        #TODO: check if the above assumptions permit xi to be a non diagonal matrix. If not make sure it is always diagonal.
+        super().__init__(q, d, Xi)
+        self._F, self._L, self._q = _matern_companion_form(l, q)
+        #self._Q_param = np.asarray(self._q, dtype=float)
+        self.S = self._q * self._L @ self._L.T  # Precompute S = L @ Q @ L.T
+        self.n = self._F.shape[0]
+
+        if self._F.shape != (self.n, self.n):
+            raise ValueError(f"F must be square, got shape {self._F.shape}")
+        if self._L.shape[0] != self.n:
+            raise ValueError(
+                f"L first dimension must match F: {self._L.shape[0]} != {self.n}"
+            )
+        if self.S.shape != (self.n, self.n):
+            raise ValueError(
+                f"L @ Q @ L.T must be square with shape ({self.n}, {self.n}), "
+                f"got {self.S.shape}"
+            )
+
+    def _expm_block_matrix(self, h: float) -> Array:
+        """Compute exp(H*h) for Hamiltonian block matrix.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Matrix exponential of the block Hamiltonian (shape [2n, 2n]).
+        """
+        H = np.block([
+            [self._F, self.S],
+            [np.zeros_like(self._F), -self._F.T],
+        ])
+        return expm(H * h)
+
+    def A_and_Q(self, h: float) -> tuple[Array, Array]:
+        """Compute both A(h) and Q(h) efficiently in a single expm call.
+        This is sometimes called matrix fraction decomposition (MFD)
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Tuple of (A_h, Q_h) where:
+            - A_h: State transition matrix (shape [n, n])
+            - Q_h: Diffusion matrix (shape [n, n])
+        """
+        h = self._validate_h(h)
+        expm_H = self._expm_block_matrix(h)
+
+        A_h = expm_H[: self.n, : self.n]
+        Q_h = expm_H[: self.n, self.n :] @ A_h.T
+
+        return A_h, Q_h
+
+    def A(self, h: float) -> Array:
+        """Return the state transition matrix for step size h.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            State transition matrix (shape [n, n]).
+        """
+        A_h, _ = self.A_and_Q(self._validate_h(h))
+        return np.kron(A_h, self._id)
+
+    def b(self, h: float) -> Array:
+        """Return the drift vector for step size h.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Zero drift vector (shape [n]).
+        """
+        return np.zeros(self.n)
+
+    def Q(self, h: float) -> Array:
+        """Return the diffusion matrix for step size h.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Diffusion matrix (shape [n, n]).
+        """
+        _, Q_h = self.A_and_Q(self._validate_h(h))
+        return np.kron(Q_h, self.xi)
