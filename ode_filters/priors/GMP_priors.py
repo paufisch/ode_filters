@@ -37,6 +37,20 @@ class BasePrior(ABC):
         self.xi = xi
         self._id = np.eye(d, dtype=xi.dtype)
         self._b = np.zeros(d * (q + 1))
+        eye_d = np.eye(d)
+        basis = np.eye(q + 1)
+        self._E0 = np.kron(basis[0:1], eye_d)
+        self._E1 = np.kron(basis[1:2], eye_d)
+
+    @property
+    def E0(self) -> Array:
+        """State extraction matrix (shape [d, (q+1)*d])."""
+        return self._E0
+
+    @property
+    def E1(self) -> Array:
+        """Derivative extraction matrix (shape [d, (q+1)*d])."""
+        return self._E1
 
     @staticmethod
     def _validate_h(h: float) -> float:
@@ -471,6 +485,10 @@ class JointPrior(BasePrior):
         _D_x = (prior_x.q + 1) * prior_x._dim
         _D_u = (prior_u.q + 1) * prior_u._dim
         self._zeros = np.zeros((_D_x, _D_u))
+        zeros_up = np.zeros((prior_x._dim, _D_u))
+        zeros_down = np.zeros((prior_u._dim, _D_x))
+        self._E0 = np.block([[prior_x.E0, zeros_up],[zeros_down, prior_u.E0]])
+        self._E1 = np.block([[prior_x.E1, zeros_up]])
 
     def A(self, h: float) -> Array:
         """Return the block-diagonal state transition matrix.

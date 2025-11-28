@@ -12,22 +12,15 @@ from jax.typing import ArrayLike
 class BaseODEInformation(ABC):
     """Abstract base class for ODE measurement models."""
 
-    def __init__(self, vf: Callable[[Array, float], Array], d: int = 1, q: int = 1):
-        if d <= 0:
-            raise ValueError("'d' must be positive.")
-        if q < 1:
-            raise ValueError("'q' must be at least one.")
+    def __init__(self, vf: Callable[[Array, float], Array], E0: ArrayLike, E1: ArrayLike):
 
-        eye_d = np.eye(d, dtype=np.float32)
-        basis = np.eye(q + 1, dtype=np.float32)
-        self._E0 = np.kron(basis[0:1], eye_d)
-        self._E1 = np.kron(basis[1:2], eye_d)
 
         self._vf = vf
-        self._d = d
-        self._q = q
-        self._R = np.zeros((d, d))
-        self._state_dim = (q + 1) * d
+        self._d = E0.shape[0]
+        self._state_dim = E0.shape[1]
+        self._R = np.zeros((E1.shape[0], E1.shape[0]))
+        self._E0 = E0
+        self._E1 = E1
         self._jacobian_vf = jax.jacfwd(self._vf)
 
     @abstractmethod
@@ -35,7 +28,7 @@ class BaseODEInformation(ABC):
         """Evaluate the observation model for a flattened state vector.
 
         Args:
-            state: State vector of length ``(q + 1) * d``.
+            state: State vector of length matching ``E0.shape[1]``.
             t: Current time.
 
         Returns:
@@ -47,7 +40,7 @@ class BaseODEInformation(ABC):
         """Return the Jacobian of the observation model at ``state``.
 
         Args:
-            state: State vector of length ``(q + 1) * d``.
+            state: State vector of length matching ``E0.shape[1]``.
             t: Current time.
 
         Returns:
@@ -65,6 +58,7 @@ class BaseODEInformation(ABC):
             Measurement noise covariance matrix.
         """
 
+    # this is the EFK1 linearization
     def linearize(self, state: Array, *, t: float) -> tuple[Array, Array]:
         """Linearize the observation model around the given state.
 
@@ -132,39 +126,45 @@ class ODEconservation(ODEInformation):
     def __init__(
         self,
         vf: Callable[[Array, float], Array],
+        E0: ArrayLike,
+        E1: ArrayLike,
         A: Array,
         p: Array,
-        d: int = 1,
-        q: int = 1,
     ):
         """Initialize with ODE information plus linear conservation law.
 
         Extends ODEInformation with additional linear conservation law of the form
-        A @ x(t) = p.
+        A @ x(t) = p. Where x(t) = E0 @ X(t) is the projected state.
 
         Args:
             vf: Vector field function with signature f(x, t) -> dx/dt.
+            E0: State extraction matrix (shape [d, (q+1)*d]).
+            E1: Derivative extraction matrix (shape [d, (q+1)*d]).
             A: Constraint matrix for linear conservation law (shape [k, d]).
             p: Conservation law constant values (shape [k]).
-            d: State dimension (default 1).
-            q: Order of derivatives (default 1).
         """
-        super().__init__(vf, d, q)
+        super().__init__(vf, E0, E1)
         if A.shape[0] != p.shape[0]:
             raise ValueError(
                 f"A.shape[0] ({A.shape[0]}) must match p.shape[0] ({p.shape[0]})."
             )
+        if A.shape[1] != self._E0.shape[0]:
+            raise ValueError(
+                f"A.shape[0] ({A.shape[0]}) must match p.shape[0] ({p.shape[0]})."
+            )
+
         self._A = A
         self._p = p
-        self._k = p.shape[0]
-        self._R = np.zeros((d + self._k, d + self._k))
+        self._k = p.shape[0] #shape of conservation information measurement
+        self._m = self._d + self.k #shape of total measurement
+        self._R = np.zeros((self._m, self._m))
 
     def g(self, state: Array, *, t: float) -> Array:
         """Evaluate the observation model for a flattened state vector.
 
         Args:
-            state: One-dimensional array of length ``(q + 1) * d`` containing the
-                stacked state derivatives.
+            state: One-dimensional array of length matching ``E0.shape[1]``
+                containing the stacked state derivatives.
             t: Current time.
 
         Returns:
@@ -178,7 +178,7 @@ class ODEconservation(ODEInformation):
         """Return the Jacobian of the observation model at ``state``.
 
         Args:
-            state: State vector of length ``(q + 1) * d``.
+            state: State vector of length matching ``E0.shape[1]``.
             t: Current time.
 
         Returns:
@@ -200,12 +200,7 @@ class LinearMeasurementBase:
     def _setup_linear_measurements(
         self, A: ArrayLike, z: ArrayLike, z_t: ArrayLike
     ) -> None:
-        if not hasattr(self, "_d"):
-            raise ValueError("Subclass must define self._d (state dimension).")
-        if not hasattr(self, "_R"):
-            raise ValueError("Subclass must define self._R (noise covariance matrix).")
-        if not hasattr(self, "_E0"):
-            raise ValueError("Subclass must define self._E0 (state extraction matrix).")
+
 
         A_arr = np.asarray(A)
         if A_arr.ndim != 2 or A_arr.shape[1] != self._d:
@@ -294,23 +289,23 @@ class ODEmeasurement(LinearMeasurementBase, ODEInformation):
     def __init__(
         self,
         vf: Callable[[Array, float], Array],
+        E0: ArrayLike,
+        E1: ArrayLike,
         A: Array,
         z: Array,
         z_t: Array,
-        d: int = 1,
-        q: int = 1,
     ):
         """Initialize ODE measurement model with linear measurements.
 
         Args:
             vf: Vector field function f(x, t) -> dx/dt.
+            E0: State extraction matrix (shape [d, (q+1)*d]).
+            E1: Derivative extraction matrix (shape [d, (q+1)*d]).
             A: Measurement matrix (shape [k, d]).
             z: Measurement values (shape [n, k]).
             z_t: Measurement times (shape [n]).
-            d: State dimension (default 1).
-            q: Order of derivatives (default 1).
         """
-        super().__init__(vf, d, q)
+        super().__init__(vf, E0, E1)
         self._setup_linear_measurements(A, z, z_t)
 
     def g(self, state: Array, *, t: float) -> Array:
@@ -344,27 +339,27 @@ class ODEconservationmeasurement(LinearMeasurementBase, ODEconservation):
     def __init__(
         self,
         vf: Callable[[Array, float], Array],
+        E0: ArrayLike,
+        E1: ArrayLike,
+        C: Array,
+        p: Array,
         A: Array,
         z: Array,
         z_t: Array,
-        C: Array,
-        p: Array,
-        d: int = 1,
-        q: int = 1,
     ):
         """Initialize ODE measurement model with conservation law and linear measurements.
 
         Args:
             vf: Vector field function f(x, t) -> dx/dt.
+            E0: State extraction matrix (shape [d, (q+1)*d]).
+            E1: Derivative extraction matrix (shape [d, (q+1)*d]).
+            C: Constraint matrix for conservation law (shape [m, d]).
+            p: Conservation law values (shape [m]).
             A: Measurement matrix for linear measurements (shape [k, d]).
             z: Measurement values (shape [n, k]).
             z_t: Measurement times (shape [n]).
-            C: Constraint matrix for conservation law (shape [m, d]).
-            p: Conservation law values (shape [m]).
-            d: State dimension (default 1).
-            q: Order of derivatives (default 1).
         """
-        super().__init__(vf, C, p, d, q)
+        super().__init__(vf, E0, E1, C, p)
         self._setup_linear_measurements(A, z, z_t)
         self._A_lin = self._A_meas
         self._z = self._z_meas
