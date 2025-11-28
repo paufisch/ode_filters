@@ -443,3 +443,70 @@ class MaternPrior(BasePrior):
         _, Q_h = self.A_and_Q(self._validate_h(h))
         Q_h = 0.5 * (Q_h + Q_h.T)
         return np.kron(Q_h, self.xi)
+
+
+
+class JointPrior(BasePrior):
+    """Joint prior combining independent state (x) and input (u) priors.
+    
+    Creates a block-diagonal prior structure where state and input evolution
+    are independent. The resulting matrices are block-diagonal with zeros
+    in the off-diagonal blocks.
+    
+    Args:
+        prior_x: BasePrior instance for state evolution.
+        prior_u: BasePrior instance for input evolution.
+    """
+    
+    def __init__(self, prior_x: BasePrior, prior_u: BasePrior) -> None:
+        if not isinstance(prior_x, BasePrior):
+            raise TypeError(f"prior_x must be BasePrior instance, got {type(prior_x)}")
+        if not isinstance(prior_u, BasePrior):
+            raise TypeError(f"prior_u must be BasePrior instance, got {type(prior_u)}")
+            
+        self._prior_x = prior_x
+        self._prior_u = prior_u
+        
+        # Precompute dimensions and zero blocks for efficiency
+        _D_x = (prior_x.q + 1) * prior_x._dim
+        _D_u = (prior_u.q + 1) * prior_u._dim
+        self._zeros = np.zeros((_D_x, _D_u))
+
+    def A(self, h: float) -> Array:
+        """Return the block-diagonal state transition matrix.
+        
+        Args:
+            h: Step size.
+            
+        Returns:
+            Block-diagonal transition matrix with state and input blocks.
+        """
+        return np.block([
+            [self._prior_x.A(h), self._zeros],
+            [self._zeros.T, self._prior_u.A(h)]
+        ])
+
+    def b(self, h: float) -> Array:
+        """Return the concatenated drift vector.
+        
+        Args:
+            h: Step size.
+            
+        Returns:
+            Drift vector concatenating state and input drifts.
+        """
+        return np.concatenate([self._prior_x.b(h), self._prior_u.b(h)])
+
+    def Q(self, h: float) -> Array:
+        """Return the block-diagonal diffusion matrix.
+        
+        Args:
+            h: Step size.
+            
+        Returns:
+            Block-diagonal diffusion matrix with state and input blocks.
+        """
+        return np.block([
+            [self._prior_x.Q(h), self._zeros],
+            [self._zeros.T, self._prior_u.Q(h)]
+        ])
