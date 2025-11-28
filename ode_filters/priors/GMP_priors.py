@@ -441,4 +441,5 @@ class MaternPrior(BasePrior):
             Diffusion matrix (shape [n, n]).
         """
         _, Q_h = self.A_and_Q(self._validate_h(h))
+        Q_h = 0.5 * (Q_h + Q_h.T)
         return np.kron(Q_h, self.xi)
