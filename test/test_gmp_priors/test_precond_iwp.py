@@ -125,4 +125,3 @@ class TestPrecondIWPWithCustomXi:
         expected_A = np.kron(A_bar, np.eye(2))
 
         assert np.allclose(A, expected_A)
-

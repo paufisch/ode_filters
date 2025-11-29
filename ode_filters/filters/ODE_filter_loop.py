@@ -114,7 +114,7 @@ def rts_sqr_smoother_loop(
     P_back_seq_sqr: Array,
     N: int,
 ) -> tuple[Array, Array]:
-    """Run a Rauch–Tung–Striebel smoother over ``N`` steps.
+    """Run a Rauch-Tung-Striebel smoother over ``N`` steps.
 
     Args:
         m_N: Final filtered state mean.
@@ -259,7 +259,7 @@ def rts_sqr_smoother_loop_preconditioned(
     N: int,
     T_h: Array,
 ) -> tuple[Array, Array]:
-    """Run a preconditioned Rauch–Tung–Striebel smoother over ``N`` steps.
+    """Run a preconditioned Rauch-Tung-Striebel smoother over ``N`` steps.
 
     Args:
         m_N: Final filtered state mean (original space).

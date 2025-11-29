@@ -1,8 +1,6 @@
 """Tests for ODEmeasurement class and LinearMeasurementBase mixin."""
 
-import jax
 import jax.numpy as np
-import numpy as onp
 import pytest
 
 from ode_filters.measurement.measurement_models import (
@@ -25,6 +23,7 @@ class TestODEmeasurementConstruction:
 
     def test_basic_construction(self):
         """Test basic construction of ODEmeasurement."""
+
         def vf(x, *, t):
             return x
 
@@ -40,6 +39,7 @@ class TestODEmeasurementConstruction:
 
     def test_rejects_invalid_A_shape(self):
         """Test that invalid A shape raises error."""
+
         def vf(x, *, t):
             return x
 
@@ -53,6 +53,7 @@ class TestODEmeasurementConstruction:
 
     def test_rejects_mismatched_z_shape(self):
         """Test that mismatched z shape raises error."""
+
         def vf(x, *, t):
             return x
 
@@ -66,6 +67,7 @@ class TestODEmeasurementConstruction:
 
     def test_rejects_mismatched_z_t_length(self):
         """Test that mismatched z_t length raises error."""
+
         def vf(x, *, t):
             return x
 
@@ -79,6 +81,7 @@ class TestODEmeasurementConstruction:
 
     def test_accepts_2d_z_t(self):
         """Test that 2D z_t with shape (n, 1) is accepted."""
+
         def vf(x, *, t):
             return x
 
@@ -92,6 +95,7 @@ class TestODEmeasurementConstruction:
 
     def test_rejects_invalid_2d_z_t(self):
         """Test that 2D z_t with shape (n, k) where k > 1 raises error."""
+
         def vf(x, *, t):
             return x
 
@@ -110,6 +114,7 @@ class TestODEmeasurementMethods:
     @pytest.fixture
     def measurement_model(self):
         """Create a standard ODEmeasurement for testing."""
+
         def vf(x, *, t):
             return -x  # Simple decay
 
@@ -181,8 +186,9 @@ class TestODEInformationLinearize:
 
     def test_linearize_returns_H_and_c(self):
         """Test that linearize returns H and c matrices."""
+
         def vf(x, *, t):
-            return x ** 2
+            return x**2
 
         E0, E1 = make_projection_matrices(d=1, q=1)
         model = ODEInformation(vf=vf, E0=E0, E1=E1)
@@ -195,8 +201,9 @@ class TestODEInformationLinearize:
 
     def test_linearize_satisfies_affine_approximation(self):
         """Test that H @ state + c ≈ g(state)."""
+
         def vf(x, *, t):
-            return x ** 2
+            return x**2
 
         E0, E1 = make_projection_matrices(d=1, q=1)
         model = ODEInformation(vf=vf, E0=E0, E1=E1)
@@ -211,8 +218,9 @@ class TestODEInformationLinearize:
 
     def test_linearize_H_matches_jacobian(self):
         """Test that H from linearize matches jacobian_g."""
+
         def vf(x, *, t):
-            return x ** 2
+            return x**2
 
         E0, E1 = make_projection_matrices(d=1, q=1)
         model = ODEInformation(vf=vf, E0=E0, E1=E1)
@@ -229,6 +237,7 @@ class TestODEInformationGetNoise:
 
     def test_get_noise_returns_R(self):
         """Test that get_noise returns _R matrix."""
+
         def vf(x, *, t):
             return x
 
@@ -241,6 +250,7 @@ class TestODEInformationGetNoise:
 
     def test_noise_can_be_modified(self):
         """Test that noise matrix can be modified."""
+
         def vf(x, *, t):
             return x
 
@@ -259,6 +269,7 @@ class TestNoisePropertyAndSetters:
 
     def test_R_property_returns_noise_matrix(self):
         """Test that R property returns the noise matrix."""
+
         def vf(x, *, t):
             return x
 
@@ -270,6 +281,7 @@ class TestNoisePropertyAndSetters:
 
     def test_R_setter_with_matrix(self):
         """Test that R setter accepts a full matrix."""
+
         def vf(x, *, t):
             return x
 
@@ -283,6 +295,7 @@ class TestNoisePropertyAndSetters:
 
     def test_R_setter_with_vector(self):
         """Test that R setter accepts a vector for diagonal."""
+
         def vf(x, *, t):
             return x
 
@@ -297,6 +310,7 @@ class TestNoisePropertyAndSetters:
 
     def test_R_setter_with_scalar(self):
         """Test that R setter accepts a scalar for uniform diagonal."""
+
         def vf(x, *, t):
             return x
 
@@ -311,6 +325,7 @@ class TestNoisePropertyAndSetters:
 
     def test_R_setter_rejects_wrong_matrix_shape(self):
         """Test that R setter rejects incorrect matrix shapes."""
+
         def vf(x, *, t):
             return x
 
@@ -322,6 +337,7 @@ class TestNoisePropertyAndSetters:
 
     def test_R_setter_rejects_wrong_vector_length(self):
         """Test that R setter rejects incorrect vector length."""
+
         def vf(x, *, t):
             return x
 
@@ -333,6 +349,7 @@ class TestNoisePropertyAndSetters:
 
     def test_R_setter_rejects_3d_array(self):
         """Test that R setter rejects 3D+ arrays."""
+
         def vf(x, *, t):
             return x
 
@@ -348,6 +365,7 @@ class TestMeasurementNoiseDefaults:
 
     def test_default_measurement_noise_is_nonzero(self):
         """Test that default measurement noise is non-zero."""
+
         def vf(x, *, t):
             return x
 
@@ -365,6 +383,7 @@ class TestMeasurementNoiseDefaults:
 
     def test_custom_measurement_noise_at_construction(self):
         """Test custom measurement noise at construction."""
+
         def vf(x, *, t):
             return x
 
@@ -382,6 +401,7 @@ class TestMeasurementNoiseDefaults:
 
     def test_set_measurement_noise_scalar(self):
         """Test setting measurement noise with a scalar."""
+
         def vf(x, *, t):
             return x
 
@@ -397,6 +417,7 @@ class TestMeasurementNoiseDefaults:
 
     def test_set_measurement_noise_vector(self):
         """Test setting measurement noise with a vector."""
+
         def vf(x, *, t):
             return -x
 
@@ -414,6 +435,7 @@ class TestMeasurementNoiseDefaults:
 
     def test_set_measurement_noise_matrix(self):
         """Test setting measurement noise with a full matrix."""
+
         def vf(x, *, t):
             return -x
 
@@ -432,6 +454,7 @@ class TestMeasurementNoiseDefaults:
 
     def test_R_measure_setter_full_matrix(self):
         """Test setting the full R_measure matrix via setter."""
+
         def vf(x, *, t):
             return x
 
@@ -448,6 +471,7 @@ class TestMeasurementNoiseDefaults:
 
     def test_R_measure_setter_rejects_wrong_shape(self):
         """Test that R_measure setter rejects incorrect shapes."""
+
         def vf(x, *, t):
             return x
 
@@ -463,6 +487,7 @@ class TestMeasurementNoiseDefaults:
 
     def test_set_measurement_noise_rejects_wrong_vector_length(self):
         """Test that set_measurement_noise rejects wrong vector length."""
+
         def vf(x, *, t):
             return x
 
@@ -474,10 +499,13 @@ class TestMeasurementNoiseDefaults:
         model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
 
         with pytest.raises(ValueError, match="must have length"):
-            model.set_measurement_noise(np.array([0.1, 0.2]))  # 2 values but only 1 measurement
+            model.set_measurement_noise(
+                np.array([0.1, 0.2])
+            )  # 2 values but only 1 measurement
 
     def test_set_measurement_noise_rejects_wrong_matrix_shape(self):
         """Test that set_measurement_noise rejects wrong matrix shape."""
+
         def vf(x, *, t):
             return x
 
@@ -489,10 +517,13 @@ class TestMeasurementNoiseDefaults:
         model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
 
         with pytest.raises(ValueError, match="must have shape"):
-            model.set_measurement_noise(np.array([[0.1, 0.0], [0.0, 0.2]]))  # 2x2 but only 1 measurement
+            model.set_measurement_noise(
+                np.array([[0.1, 0.0], [0.0, 0.2]])
+            )  # 2x2 but only 1 measurement
 
     def test_set_measurement_noise_rejects_invalid_ndim(self):
         """Test that set_measurement_noise rejects 3D+ arrays."""
+
         def vf(x, *, t):
             return x
 
@@ -512,6 +543,7 @@ class TestMultiDimensionalMeasurement:
 
     def test_2d_state_with_measurements(self):
         """Test ODEmeasurement with 2D state."""
+
         def vf(x, *, t):
             return -x
 
@@ -530,6 +562,7 @@ class TestMultiDimensionalMeasurement:
 
     def test_partial_observation(self):
         """Test ODEmeasurement with partial observation."""
+
         def vf(x, *, t):
             return -x
 
@@ -545,4 +578,3 @@ class TestMultiDimensionalMeasurement:
 
         # d + k = 2 + 1 = 3
         assert result.shape == (3,)
-

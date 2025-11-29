@@ -1,10 +1,9 @@
 """Tests for JointPrior class."""
 
 import jax.numpy as np
-import numpy as onp
 import pytest
 
-from ode_filters.priors.GMP_priors import JointPrior, IWP, MaternPrior
+from ode_filters.priors.GMP_priors import IWP, JointPrior, MaternPrior
 
 
 class TestJointPriorConstruction:
@@ -22,7 +21,7 @@ class TestJointPriorConstruction:
     def test_constructor_with_different_priors(self):
         """Test construction with IWP and Matern priors."""
         prior_x = IWP(q=2, d=1)
-        prior_u = MaternPrior(q=1, d=1, l=1.0)
+        prior_u = MaternPrior(q=1, d=1, length_scale=1.0)
         joint = JointPrior(prior_x, prior_u)
 
         assert joint._prior_x is prior_x
@@ -158,19 +157,18 @@ class TestJointPriorIntegration:
         joint = JointPrior(prior_x, prior_u)
 
         h = 0.5
-        
+
         # Individual predictions
         state_x = np.array([1.0, 0.5])
         state_u = np.array([2.0, -0.5])
-        
+
         pred_x = prior_x.A(h) @ state_x
         pred_u = prior_u.A(h) @ state_u
-        
+
         # Joint prediction
         joint_state = np.concatenate([state_x, state_u])
         joint_pred = joint.A(h) @ joint_state
-        
+
         # Should match
         expected = np.concatenate([pred_x, pred_u])
         assert np.allclose(joint_pred, expected)
-

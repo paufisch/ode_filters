@@ -80,7 +80,7 @@ def rts_sqr_smoother_step(
     m_s: Array,
     P_s_sqr: Array,
 ) -> tuple[Array, Array]:
-    """Perform a single Rauch–Tung–Striebel backward smoothing step.
+    """Perform a single Rauch-Tung-Striebel backward smoothing step.
 
     Args:
         G_back: Backward pass gain matrix.
@@ -167,7 +167,7 @@ def rts_sqr_smoother_step_preconditioned(
     P_s_sqr_bar: Array,
     T_t: Array,
 ) -> tuple[tuple[Array, Array], tuple[Array, Array]]:
-    """Perform a single preconditioned Rauch–Tung–Striebel backward smoothing step.
+    """Perform a single preconditioned Rauch-Tung-Striebel backward smoothing step.
 
     Args:
         G_back_bar: Backward pass gain matrix (preconditioned space).

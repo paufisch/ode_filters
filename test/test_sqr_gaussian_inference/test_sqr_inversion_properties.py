@@ -162,7 +162,7 @@ def test_sqr_inversion_property_no_singular_square_root(inputs):
     """Property: Square-root matrix Lambda is non-singular."""
     A, mu, Sigma, mu_z, Sigma_z, Q = inputs
 
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
+    _G, _d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
 
     # For a valid square-root, the matrix should be non-singular
     # This means diagonal elements should be non-zero
@@ -193,7 +193,7 @@ def test_sqr_inversion_property_reduces_uncertainty(inputs):
     prior_trace = np.trace(Sigma_full)
 
     # Step 3: Perform inversion on marginalization outputs
-    G, _, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
+    _G, _, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
 
     # Step 4: Reconstruct posterior covariance and verify it reduces uncertainty
     Lambda_full = Lambda @ Lambda.T
@@ -264,7 +264,7 @@ def test_sqr_inversion_property_cholesky_consistency(inputs):
     mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
 
     # Step 2: Use marginalization outputs as inversion inputs
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
+    _G, _d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
 
     # Verify that the square-root factors reconstruct to positive definite matrices
     Sigma_reconstructed = Sigma @ Sigma.T

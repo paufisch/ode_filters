@@ -9,8 +9,8 @@ import jax
 import jax.experimental.jet
 import jax.numpy as np
 from jax import Array
-from jax.typing import ArrayLike
 from jax.scipy.linalg import expm
+from jax.typing import ArrayLike
 
 MatrixFunction = Callable[[float], Array]
 VectorField = Callable[[ArrayLike], Array]
@@ -100,7 +100,7 @@ def taylor_mode_initialization(
     coefficients: list[Array] = [base_state]
     series_terms: list[Array] = []
 
-    for order in range(q):
+    for _order in range(q):
         primals_out, series_out = jax.experimental.jet.jet(
             _vf,
             primals=(base_state,),
@@ -288,90 +288,90 @@ class PrecondIWP(BasePrior):
         return np.kron(self._T(self._validate_h(h)), self._id)
 
 
-def _matern_companion_form(
-    l: float, q: int
-) -> tuple[Array, Array, float]:
-    """
-    Construct the companion form matrices for a Matérn GP prior.
-    
-    Reference: Särkkä & Hartikainen (2010, equations 12.34-12.35)
-    
+def _matern_companion_form(length_scale: float, q: int) -> tuple[Array, Array, float]:
+    """Construct the companion form matrices for a Matern GP prior.
+
+    Reference: Sarkka & Hartikainen (2010, equations 12.34-12.35)
+
     Parameters
     ----------
-    l : float
-        Length scale parameter ℓ
+    length_scale : float
+        Length scale parameter.
     q : int
-        Smoothness parameter exponent (ν = q + 1/2, q ∈ ℤ)
-        
+        Smoothness parameter exponent (nu = q + 1/2, q in Z).
+
     Returns
     -------
     F : Array
-        Drift matrix (shape [D, D]) - companion form matrix
+        Drift matrix (shape [D, D]) - companion form matrix.
     L : Array
-        Diffusion vector (shape [D])
-    q : float
-        Diffusion coefficient σ²
+        Diffusion vector (shape [D]).
+    q_coeff : float
+        Diffusion coefficient.
     """
-    if l <= 0:
-        raise ValueError("Length scale l must be positive.")
+    if length_scale <= 0:
+        raise ValueError("Length scale must be positive.")
     if not isinstance(q, int) or q < 0:
         raise ValueError("Smoothness exponent q must be a non-negative integer.")
-    
-    # Compute ν = q + 1/2 and state dimensionality D = ν + 1/2 = q + 1
+
+    # Compute nu = q + 1/2 and state dimensionality D = nu + 1/2 = q + 1
     D = q + 1
-    nu = q + 0.5
-    
-    # Compute λ = √(2ν/ℓ) = √((2p + 1)/ℓ)
-    lam = np.sqrt((2.0 * q + 1.0) / l)
-    
+
+    # Compute lambda = sqrt(2*nu / length_scale) = sqrt((2q + 1) / length_scale)
+    lam = np.sqrt((2.0 * q + 1.0) / length_scale)
+
     # Construct F matrix (companion form)
     F = np.zeros((D, D), dtype=float)
-    
+
     # Super-diagonal: ones
     for i in range(D - 1):
         F = F.at[i, i + 1].set(1.0)
-    
+
     # Last row: [-a_j * λ^(D-j) for j = 0, ..., D-1]
     # where a_j = C(D, j) are binomial coefficients
     for j in range(D):
         a_j = comb(D, j)  # Binomial coefficient C(D, j)
-        power = D - j      # Power goes from D down to 1
-        F = F.at[D - 1, j].set(-a_j * (lam ** power))
-    
+        power = D - j  # Power goes from D down to 1
+        F = F.at[D - 1, j].set(-a_j * (lam**power))
+
     # Construct L vector: [0, 0, ..., 0, 1]ᵀ
     L = np.zeros((D, 1), dtype=float).at[-1, 0].set(1.0)
-    
-    # Diffusion coefficient: q = σ² [(D-1)!]² / (2D-2)! * (2λ)^(2D-1)
-    # assuming σ = 1 
+
+    # Diffusion coefficient: q = sigma^2 [(D-1)!]^2 / (2D-2)! * (2*lambda)^(2D-1)
+    # assuming sigma = 1
     numerator = float(factorial(D - 1) ** 2)
     denominator = float(factorial(2 * D - 2))
     q = (numerator / denominator) * ((2.0 * lam) ** (2 * D - 1))
-    
+
     return F, L, float(q)
 
 
 class MaternPrior(BasePrior):
-    """Matérn Gaussian process prior model using block matrix exponential."""
+    """Matern Gaussian process prior model using block matrix exponential."""
 
     def __init__(
         self,
         q: int,
         d: int,
-        l: float,
+        length_scale: float,
         Xi: ArrayLike | None = None,
     ):
-        """Initialize the Matérn prior. This creates a matern process prior for a d-dimensional process where each dimension is modeled independently by a q+1 times integrated matern process of the same length scale (l) with possible different output sclae (xi).  
+        """Initialize the Matern prior.
+
+        This creates a Matern process prior for a d-dimensional process where each
+        dimension is modeled independently by a q+1 times integrated Matern process
+        of the same length scale with possibly different output scale (Xi).
 
         Args:
-            q: Smoothness order (not used in this formulation but kept for compatibility).
+            q: Smoothness order.
             d: State dimension.
-            l: length scale of the process
+            length_scale: Length scale of the process.
             Xi: Optional scaling matrix (shape [d, d]).
         """
-        #TODO: check if the above assumptions permit xi to be a non diagonal matrix. If not make sure it is always diagonal.
+        # TODO: check if the above assumptions permit Xi to be a non-diagonal matrix.
         super().__init__(q, d, Xi)
-        self._F, self._L, self._q = _matern_companion_form(l, q)
-        #self._Q_param = np.asarray(self._q, dtype=float)
+        self._F, self._L, self._q = _matern_companion_form(length_scale, q)
+        # self._Q_param = np.asarray(self._q, dtype=float)
         self.S = self._q * self._L @ self._L.T  # Precompute S = L @ Q @ L.T
         self.n = self._F.shape[0]
 
@@ -397,10 +397,12 @@ class MaternPrior(BasePrior):
         Returns:
             Matrix exponential of the block Hamiltonian (shape [2n, 2n]).
         """
-        H = np.block([
-            [self._F, self.S],
-            [np.zeros_like(self._F), -self._F.T],
-        ])
+        H = np.block(
+            [
+                [self._F, self.S],
+                [np.zeros_like(self._F), -self._F.T],
+            ]
+        )
         return expm(H * h)
 
     def A_and_Q(self, h: float) -> tuple[Array, Array]:
@@ -460,57 +462,55 @@ class MaternPrior(BasePrior):
         return np.kron(Q_h, self.xi)
 
 
-
 class JointPrior(BasePrior):
     """Joint prior combining independent state (x) and input (u) priors.
-    
+
     Creates a block-diagonal prior structure where state and input evolution
     are independent. The resulting matrices are block-diagonal with zeros
     in the off-diagonal blocks.
-    
+
     Args:
         prior_x: BasePrior instance for state evolution.
         prior_u: BasePrior instance for input evolution.
     """
-    
+
     def __init__(self, prior_x: BasePrior, prior_u: BasePrior) -> None:
         if not isinstance(prior_x, BasePrior):
             raise TypeError(f"prior_x must be BasePrior instance, got {type(prior_x)}")
         if not isinstance(prior_u, BasePrior):
             raise TypeError(f"prior_u must be BasePrior instance, got {type(prior_u)}")
-            
+
         self._prior_x = prior_x
         self._prior_u = prior_u
-        
+
         # Precompute dimensions and zero blocks for efficiency
         _D_x = (prior_x.q + 1) * prior_x._dim
         _D_u = (prior_u.q + 1) * prior_u._dim
         self._zeros = np.zeros((_D_x, _D_u))
         zeros_up = np.zeros((prior_x._dim, _D_u))
         zeros_down = np.zeros((prior_u._dim, _D_x))
-        self._E0 = np.block([[prior_x.E0, zeros_up],[zeros_down, prior_u.E0]])
+        self._E0 = np.block([[prior_x.E0, zeros_up], [zeros_down, prior_u.E0]])
         self._E1 = np.block([[prior_x.E1, zeros_up]])
 
     def A(self, h: float) -> Array:
         """Return the block-diagonal state transition matrix.
-        
+
         Args:
             h: Step size.
-            
+
         Returns:
             Block-diagonal transition matrix with state and input blocks.
         """
-        return np.block([
-            [self._prior_x.A(h), self._zeros],
-            [self._zeros.T, self._prior_u.A(h)]
-        ])
+        return np.block(
+            [[self._prior_x.A(h), self._zeros], [self._zeros.T, self._prior_u.A(h)]]
+        )
 
     def b(self, h: float) -> Array:
         """Return the concatenated drift vector.
-        
+
         Args:
             h: Step size.
-            
+
         Returns:
             Drift vector concatenating state and input drifts.
         """
@@ -518,14 +518,13 @@ class JointPrior(BasePrior):
 
     def Q(self, h: float) -> Array:
         """Return the block-diagonal diffusion matrix.
-        
+
         Args:
             h: Step size.
-            
+
         Returns:
             Block-diagonal diffusion matrix with state and input blocks.
         """
-        return np.block([
-            [self._prior_x.Q(h), self._zeros],
-            [self._zeros.T, self._prior_u.Q(h)]
-        ])
+        return np.block(
+            [[self._prior_x.Q(h), self._zeros], [self._zeros.T, self._prior_u.Q(h)]]
+        )
