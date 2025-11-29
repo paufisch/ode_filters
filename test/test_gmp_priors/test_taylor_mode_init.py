@@ -1,7 +1,7 @@
 import jax.numpy as np
 import pytest
 
-from ode_filters.priors.GMP_priors import taylor_mode_initialization
+from ode_filters.priors.gmp_priors import taylor_mode_initialization
 
 
 def test_taylor_mode_initialization_q0_returns_state_flattened():

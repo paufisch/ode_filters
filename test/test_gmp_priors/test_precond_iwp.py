@@ -3,7 +3,7 @@
 import jax.numpy as np
 import pytest
 
-from ode_filters.priors.GMP_priors import PrecondIWP, _make_iwp_precond_state_matrices
+from ode_filters.priors.gmp_priors import PrecondIWP, _make_iwp_precond_state_matrices
 
 
 class TestPrecondIWPMethods:

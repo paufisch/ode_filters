@@ -1,6 +1,6 @@
 """Gaussian Markov process prior models."""
 
-from .GMP_priors import (
+from .gmp_priors import (
     IWP,
     JointPrior,
     MaternPrior,

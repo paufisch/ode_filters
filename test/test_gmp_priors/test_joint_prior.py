@@ -3,7 +3,7 @@
 import jax.numpy as np
 import pytest
 
-from ode_filters.priors.GMP_priors import IWP, JointPrior, MaternPrior
+from ode_filters.priors.gmp_priors import IWP, JointPrior, MaternPrior
 
 
 class TestJointPriorConstruction:

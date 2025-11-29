@@ -3,7 +3,7 @@
 import jax.numpy as np
 import pytest
 
-from ode_filters.priors.GMP_priors import MaternPrior, _matern_companion_form
+from ode_filters.priors.gmp_priors import MaternPrior, _matern_companion_form
 
 
 class TestMaternCompanionForm:

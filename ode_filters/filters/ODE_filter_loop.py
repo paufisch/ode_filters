@@ -6,8 +6,8 @@ import jax.numpy as np
 from jax import Array
 
 from ..measurement.measurement_models import BaseODEInformation
-from ..priors.GMP_priors import BasePrior
-from .ODE_filter_step import (
+from ..priors.gmp_priors import BasePrior
+from .ode_filter_step import (
     ekf1_sqr_filter_step,
     ekf1_sqr_filter_step_preconditioned,
     rts_sqr_smoother_step,
