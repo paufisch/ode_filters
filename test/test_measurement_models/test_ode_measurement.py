@@ -90,6 +90,19 @@ class TestODEmeasurementConstruction:
         model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
         assert model._z_t_meas.shape == (1,)
 
+    def test_rejects_invalid_2d_z_t(self):
+        """Test that 2D z_t with shape (n, k) where k > 1 raises error."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=1, q=1)
+        A = np.array([[1.0]])
+        z = np.array([[0.5]])
+        z_t = np.array([[0.5, 0.6]])  # Shape (1, 2) - invalid
+
+        with pytest.raises(ValueError, match="must be 1D shape"):
+            ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
+
 
 class TestODEmeasurementMethods:
     """Tests for ODEmeasurement methods."""

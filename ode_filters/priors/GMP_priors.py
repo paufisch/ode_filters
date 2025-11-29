@@ -60,15 +60,15 @@ class BasePrior(ABC):
 
     @abstractmethod
     def A(self, h: float) -> Array:
-        pass
+        pass  # pragma: no cover
 
     @abstractmethod
     def b(self, h: float) -> Array:
-        pass
+        pass  # pragma: no cover
 
     @abstractmethod
     def Q(self, h: float) -> Array:
-        pass
+        pass  # pragma: no cover
 
 
 def taylor_mode_initialization(
@@ -375,13 +375,14 @@ class MaternPrior(BasePrior):
         self.S = self._q * self._L @ self._L.T  # Precompute S = L @ Q @ L.T
         self.n = self._F.shape[0]
 
-        if self._F.shape != (self.n, self.n):
+        # Defensive checks - _matern_companion_form always returns valid shapes
+        if self._F.shape != (self.n, self.n):  # pragma: no cover
             raise ValueError(f"F must be square, got shape {self._F.shape}")
-        if self._L.shape[0] != self.n:
+        if self._L.shape[0] != self.n:  # pragma: no cover
             raise ValueError(
                 f"L first dimension must match F: {self._L.shape[0]} != {self.n}"
             )
-        if self.S.shape != (self.n, self.n):
+        if self.S.shape != (self.n, self.n):  # pragma: no cover
             raise ValueError(
                 f"L @ Q @ L.T must be square with shape ({self.n}, {self.n}), "
                 f"got {self.S.shape}"
