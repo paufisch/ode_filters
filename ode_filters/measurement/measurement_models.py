@@ -156,7 +156,7 @@ class ODEconservation(ODEInformation):
         self._A = A
         self._p = p
         self._k = p.shape[0] #shape of conservation information measurement
-        self._m = self._d + self.k #shape of total measurement
+        self._m = self._d + self._k #shape of total measurement
         self._R = np.zeros((self._m, self._m))
 
     def g(self, state: Array, *, t: float) -> Array:
