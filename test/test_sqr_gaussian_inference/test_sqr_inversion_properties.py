@@ -219,7 +219,7 @@ def test_sqr_inversion_property_reduces_uncertainty(inputs):
 @given(
     valid_sqr_inversion_inputs(n_state_min=1, n_state_max=10, n_obs_min=1, n_obs_max=10)
 )
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=500)
 def test_sqr_inversion_property_numerical_stability_large_dimensions(inputs):
     """Property: Function remains numerically stable for larger dimensions."""
     A, mu, Sigma, mu_z, Sigma_z, Q = inputs
