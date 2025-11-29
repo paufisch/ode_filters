@@ -254,6 +254,259 @@ class TestODEInformationGetNoise:
         assert R[0, 0] == pytest.approx(0.1)
 
 
+class TestNoisePropertyAndSetters:
+    """Tests for R property and setter methods."""
+
+    def test_R_property_returns_noise_matrix(self):
+        """Test that R property returns the noise matrix."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=2, q=1)
+        model = ODEInformation(vf=vf, E0=E0, E1=E1)
+
+        assert model.R.shape == (2, 2)
+        assert np.allclose(model.R, np.zeros((2, 2)))
+
+    def test_R_setter_with_matrix(self):
+        """Test that R setter accepts a full matrix."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=2, q=1)
+        model = ODEInformation(vf=vf, E0=E0, E1=E1)
+
+        new_R = np.array([[0.1, 0.0], [0.0, 0.2]])
+        model.R = new_R
+
+        assert np.allclose(model.R, new_R)
+
+    def test_R_setter_with_vector(self):
+        """Test that R setter accepts a vector for diagonal."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=2, q=1)
+        model = ODEInformation(vf=vf, E0=E0, E1=E1)
+
+        model.R = np.array([0.1, 0.2])
+
+        assert model.R[0, 0] == pytest.approx(0.1)
+        assert model.R[1, 1] == pytest.approx(0.2)
+        assert model.R[0, 1] == pytest.approx(0.0)
+
+    def test_R_setter_with_scalar(self):
+        """Test that R setter accepts a scalar for uniform diagonal."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=2, q=1)
+        model = ODEInformation(vf=vf, E0=E0, E1=E1)
+
+        model.R = 0.5
+
+        assert model.R[0, 0] == pytest.approx(0.5)
+        assert model.R[1, 1] == pytest.approx(0.5)
+        assert model.R[0, 1] == pytest.approx(0.0)
+
+    def test_R_setter_rejects_wrong_matrix_shape(self):
+        """Test that R setter rejects incorrect matrix shapes."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=2, q=1)
+        model = ODEInformation(vf=vf, E0=E0, E1=E1)
+
+        with pytest.raises(ValueError, match="must have shape"):
+            model.R = np.array([[0.1]])
+
+    def test_R_setter_rejects_wrong_vector_length(self):
+        """Test that R setter rejects incorrect vector length."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=2, q=1)
+        model = ODEInformation(vf=vf, E0=E0, E1=E1)
+
+        with pytest.raises(ValueError, match="must have length"):
+            model.R = np.array([0.1])
+
+    def test_R_setter_rejects_3d_array(self):
+        """Test that R setter rejects 3D+ arrays."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=2, q=1)
+        model = ODEInformation(vf=vf, E0=E0, E1=E1)
+
+        with pytest.raises(ValueError, match="must be scalar, 1D, or 2D"):
+            model.R = np.array([[[0.1]]])
+
+
+class TestMeasurementNoiseDefaults:
+    """Tests for default measurement noise in ODEmeasurement."""
+
+    def test_default_measurement_noise_is_nonzero(self):
+        """Test that default measurement noise is non-zero."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=1, q=1)
+        A = np.array([[1.0]])
+        z = np.array([[0.5]])
+        z_t = np.array([0.5])
+
+        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
+
+        R_meas = model.R_measure
+        # ODE part (1x1) should be zero, measurement part should be non-zero
+        assert R_meas[0, 0] == pytest.approx(0.0)  # ODE noise
+        assert R_meas[1, 1] == pytest.approx(1e-6)  # Default measurement noise
+
+    def test_custom_measurement_noise_at_construction(self):
+        """Test custom measurement noise at construction."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=1, q=1)
+        A = np.array([[1.0]])
+        z = np.array([[0.5]])
+        z_t = np.array([0.5])
+
+        model = ODEmeasurement(
+            vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t, measurement_noise=0.01
+        )
+
+        R_meas = model.R_measure
+        assert R_meas[1, 1] == pytest.approx(0.01)
+
+    def test_set_measurement_noise_scalar(self):
+        """Test setting measurement noise with a scalar."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=1, q=1)
+        A = np.array([[1.0]])
+        z = np.array([[0.5]])
+        z_t = np.array([0.5])
+
+        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
+        model.set_measurement_noise(0.05)
+
+        assert model.R_measure[1, 1] == pytest.approx(0.05)
+
+    def test_set_measurement_noise_vector(self):
+        """Test setting measurement noise with a vector."""
+        def vf(x, *, t):
+            return -x
+
+        E0, E1 = make_projection_matrices(d=2, q=1)
+        A = np.array([[1.0, 0.0], [0.0, 1.0]])  # 2D measurement
+        z = np.array([[0.5, 0.3]])
+        z_t = np.array([0.5])
+
+        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
+        model.set_measurement_noise(np.array([0.01, 0.02]))
+
+        # ODE part is 2x2, measurement part is 2x2
+        assert model.R_measure[2, 2] == pytest.approx(0.01)
+        assert model.R_measure[3, 3] == pytest.approx(0.02)
+
+    def test_set_measurement_noise_matrix(self):
+        """Test setting measurement noise with a full matrix."""
+        def vf(x, *, t):
+            return -x
+
+        E0, E1 = make_projection_matrices(d=2, q=1)
+        A = np.array([[1.0, 0.0], [0.0, 1.0]])
+        z = np.array([[0.5, 0.3]])
+        z_t = np.array([0.5])
+
+        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
+        noise_matrix = np.array([[0.1, 0.01], [0.01, 0.2]])
+        model.set_measurement_noise(noise_matrix)
+
+        assert model.R_measure[2, 2] == pytest.approx(0.1)
+        assert model.R_measure[3, 3] == pytest.approx(0.2)
+        assert model.R_measure[2, 3] == pytest.approx(0.01)
+
+    def test_R_measure_setter_full_matrix(self):
+        """Test setting the full R_measure matrix via setter."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=1, q=1)
+        A = np.array([[1.0]])
+        z = np.array([[0.5]])
+        z_t = np.array([0.5])
+
+        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
+        new_R = np.array([[0.01, 0.0], [0.0, 0.1]])
+        model.R_measure = new_R
+
+        assert np.allclose(model.R_measure, new_R)
+
+    def test_R_measure_setter_rejects_wrong_shape(self):
+        """Test that R_measure setter rejects incorrect shapes."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=1, q=1)
+        A = np.array([[1.0]])
+        z = np.array([[0.5]])
+        z_t = np.array([0.5])
+
+        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
+
+        with pytest.raises(ValueError, match="must have shape"):
+            model.R_measure = np.array([[0.1]])
+
+    def test_set_measurement_noise_rejects_wrong_vector_length(self):
+        """Test that set_measurement_noise rejects wrong vector length."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=1, q=1)
+        A = np.array([[1.0]])
+        z = np.array([[0.5]])
+        z_t = np.array([0.5])
+
+        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
+
+        with pytest.raises(ValueError, match="must have length"):
+            model.set_measurement_noise(np.array([0.1, 0.2]))  # 2 values but only 1 measurement
+
+    def test_set_measurement_noise_rejects_wrong_matrix_shape(self):
+        """Test that set_measurement_noise rejects wrong matrix shape."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=1, q=1)
+        A = np.array([[1.0]])
+        z = np.array([[0.5]])
+        z_t = np.array([0.5])
+
+        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
+
+        with pytest.raises(ValueError, match="must have shape"):
+            model.set_measurement_noise(np.array([[0.1, 0.0], [0.0, 0.2]]))  # 2x2 but only 1 measurement
+
+    def test_set_measurement_noise_rejects_invalid_ndim(self):
+        """Test that set_measurement_noise rejects 3D+ arrays."""
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=1, q=1)
+        A = np.array([[1.0]])
+        z = np.array([[0.5]])
+        z_t = np.array([0.5])
+
+        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
+
+        with pytest.raises(ValueError, match="must be scalar, 1D, or 2D"):
+            model.set_measurement_noise(np.array([[[0.1]]]))  # 3D array
+
+
 class TestMultiDimensionalMeasurement:
     """Tests for multi-dimensional measurement scenarios."""
 

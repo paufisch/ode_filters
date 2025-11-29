@@ -8,13 +8,14 @@ import jax.numpy as np
 from jax import Array
 from jax.typing import ArrayLike
 
+# Default measurement noise for observations
+DEFAULT_MEASUREMENT_NOISE = 1e-6
+
 
 class BaseODEInformation(ABC):
     """Abstract base class for ODE measurement models."""
 
     def __init__(self, vf: Callable[[Array, float], Array], E0: ArrayLike, E1: ArrayLike):
-
-
         self._vf = vf
         self._d = E0.shape[0]
         self._state_dim = E0.shape[1]
@@ -22,6 +23,48 @@ class BaseODEInformation(ABC):
         self._E0 = E0
         self._E1 = E1
         self._jacobian_vf = jax.jacfwd(self._vf)
+
+    @property
+    def R(self) -> Array:
+        """Measurement noise covariance matrix."""
+        return self._R
+
+    @R.setter
+    def R(self, value: ArrayLike) -> None:
+        """Set the measurement noise covariance matrix.
+
+        Args:
+            value: Noise specification. Can be:
+                - Scalar: Applied to all diagonal entries
+                - 1D array: Used as diagonal values
+                - 2D array: Used as full covariance matrix
+
+        Raises:
+            ValueError: If value has incorrect shape.
+        """
+        R_arr = np.asarray(value)
+        expected_dim = self._R.shape[0]
+
+        if R_arr.ndim == 0:
+            # Scalar - apply to all diagonal entries
+            self._R = float(R_arr) * np.eye(expected_dim)
+        elif R_arr.ndim == 1:
+            # Vector - set as diagonal
+            if R_arr.shape[0] != expected_dim:
+                raise ValueError(
+                    f"Diagonal values must have length {expected_dim}, got {R_arr.shape[0]}."
+                )
+            self._R = np.diag(R_arr)
+        elif R_arr.ndim == 2:
+            # Full matrix
+            expected_shape = (expected_dim, expected_dim)
+            if R_arr.shape != expected_shape:
+                raise ValueError(
+                    f"R must have shape {expected_shape}, got {R_arr.shape}."
+                )
+            self._R = R_arr
+        else:
+            raise ValueError("R must be scalar, 1D, or 2D array.")
 
     @abstractmethod
     def g(self, state: Array, *, t: float) -> Array:
@@ -150,13 +193,13 @@ class ODEconservation(ODEInformation):
             )
         if A.shape[1] != self._E0.shape[0]:
             raise ValueError(
-                f"A.shape[0] ({A.shape[0]}) must match p.shape[0] ({p.shape[0]})."
+                f"A.shape[1] ({A.shape[1]}) must match E0.shape[0] ({self._E0.shape[0]})."
             )
 
         self._A = A
         self._p = p
-        self._k = p.shape[0] #shape of conservation information measurement
-        self._m = self._d + self._k #shape of total measurement
+        self._k = p.shape[0]  # shape of conservation information measurement
+        self._m = self._d + self._k  # shape of total measurement
         self._R = np.zeros((self._m, self._m))
 
     def g(self, state: Array, *, t: float) -> Array:
@@ -198,10 +241,20 @@ class LinearMeasurementBase:
     """
 
     def _setup_linear_measurements(
-        self, A: ArrayLike, z: ArrayLike, z_t: ArrayLike
+        self,
+        A: ArrayLike,
+        z: ArrayLike,
+        z_t: ArrayLike,
+        measurement_noise: float = DEFAULT_MEASUREMENT_NOISE,
     ) -> None:
+        """Set up linear measurements with optional measurement noise.
 
-
+        Args:
+            A: Measurement matrix (shape [k, d]).
+            z: Measurement values (shape [n, k]).
+            z_t: Measurement times (shape [n]).
+            measurement_noise: Default noise variance for measurements (default: 1e-6).
+        """
         A_arr = np.asarray(A)
         if A_arr.ndim != 2 or A_arr.shape[1] != self._d:
             raise ValueError(
@@ -235,10 +288,82 @@ class LinearMeasurementBase:
         self._z_t_meas = z_t_arr
         self._measurement_dim = int(A_arr.shape[0])
         base_dim = int(self._R.shape[0])
-        self._R_measure = np.zeros(
-            (base_dim + self._measurement_dim, base_dim + self._measurement_dim),
-            dtype=self._R.dtype,
-        )
+        total_dim = base_dim + self._measurement_dim
+
+        # Create combined noise matrix with default measurement noise
+        self._R_measure = np.zeros((total_dim, total_dim), dtype=self._R.dtype)
+        # Copy base noise (ODE/conservation part)
+        self._R_measure = self._R_measure.at[:base_dim, :base_dim].set(self._R)
+        # Set default measurement noise on diagonal for measurement part
+        for i in range(self._measurement_dim):
+            self._R_measure = self._R_measure.at[
+                base_dim + i, base_dim + i
+            ].set(measurement_noise)
+
+    @property
+    def R_measure(self) -> Array:
+        """Combined noise covariance matrix (ODE + measurement)."""
+        return self._R_measure
+
+    @R_measure.setter
+    def R_measure(self, value: ArrayLike) -> None:
+        """Set the combined measurement noise covariance matrix.
+
+        Args:
+            value: New noise covariance matrix. Must match the expected shape.
+
+        Raises:
+            ValueError: If value has incorrect shape.
+        """
+        R_arr = np.asarray(value)
+        expected_shape = self._R_measure.shape
+        if R_arr.shape != expected_shape:
+            raise ValueError(
+                f"R must have shape {expected_shape}, got {R_arr.shape}."
+            )
+        self._R_measure = R_arr
+
+    def set_measurement_noise(self, noise: float | ArrayLike) -> None:
+        """Set the measurement noise for the observation part only.
+
+        Args:
+            noise: Either a scalar (applied to all measurement dimensions)
+                   or a vector of length measurement_dim for diagonal noise,
+                   or a full (measurement_dim, measurement_dim) matrix.
+        """
+        base_dim = int(self._R.shape[0])
+        noise_arr = np.asarray(noise)
+
+        if noise_arr.ndim == 0:
+            # Scalar - apply to all diagonal entries
+            for i in range(self._measurement_dim):
+                self._R_measure = self._R_measure.at[
+                    base_dim + i, base_dim + i
+                ].set(float(noise_arr))
+        elif noise_arr.ndim == 1:
+            # Vector - set diagonal
+            if noise_arr.shape[0] != self._measurement_dim:
+                raise ValueError(
+                    f"noise vector must have length {self._measurement_dim}, "
+                    f"got {noise_arr.shape[0]}."
+                )
+            for i in range(self._measurement_dim):
+                self._R_measure = self._R_measure.at[
+                    base_dim + i, base_dim + i
+                ].set(noise_arr[i])
+        elif noise_arr.ndim == 2:
+            # Full matrix
+            if noise_arr.shape != (self._measurement_dim, self._measurement_dim):
+                raise ValueError(
+                    f"noise matrix must have shape "
+                    f"({self._measurement_dim}, {self._measurement_dim}), "
+                    f"got {noise_arr.shape}."
+                )
+            self._R_measure = self._R_measure.at[
+                base_dim:, base_dim:
+            ].set(noise_arr)
+        else:
+            raise ValueError("noise must be scalar, 1D, or 2D array.")
 
     def _measurement_index(self, t: float) -> int | None:
         """Find the measurement index for the given time ``t``.
@@ -294,6 +419,7 @@ class ODEmeasurement(LinearMeasurementBase, ODEInformation):
         A: Array,
         z: Array,
         z_t: Array,
+        measurement_noise: float = DEFAULT_MEASUREMENT_NOISE,
     ):
         """Initialize ODE measurement model with linear measurements.
 
@@ -304,9 +430,10 @@ class ODEmeasurement(LinearMeasurementBase, ODEInformation):
             A: Measurement matrix (shape [k, d]).
             z: Measurement values (shape [n, k]).
             z_t: Measurement times (shape [n]).
+            measurement_noise: Default noise variance for measurements (default: 1e-6).
         """
         super().__init__(vf, E0, E1)
-        self._setup_linear_measurements(A, z, z_t)
+        self._setup_linear_measurements(A, z, z_t, measurement_noise)
 
     def g(self, state: Array, *, t: float) -> Array:
         """Evaluate observation model with optional measurement term."""
@@ -346,6 +473,7 @@ class ODEconservationmeasurement(LinearMeasurementBase, ODEconservation):
         A: Array,
         z: Array,
         z_t: Array,
+        measurement_noise: float = DEFAULT_MEASUREMENT_NOISE,
     ):
         """Initialize ODE measurement model with conservation law and linear measurements.
 
@@ -358,9 +486,10 @@ class ODEconservationmeasurement(LinearMeasurementBase, ODEconservation):
             A: Measurement matrix for linear measurements (shape [k, d]).
             z: Measurement values (shape [n, k]).
             z_t: Measurement times (shape [n]).
+            measurement_noise: Default noise variance for measurements (default: 1e-6).
         """
         super().__init__(vf, E0, E1, C, p)
-        self._setup_linear_measurements(A, z, z_t)
+        self._setup_linear_measurements(A, z, z_t, measurement_noise)
         self._A_lin = self._A_meas
         self._z = self._z_meas
         self._z_t = self._z_t_meas
