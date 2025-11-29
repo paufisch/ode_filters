@@ -6,8 +6,8 @@ import jax.numpy as np
 from jax import Array
 
 from ..measurement.measurement_models import BaseODEInformation
-from ..priors.GMP_priors import BasePrior
-from .ODE_filter_step import (
+from ..priors.gmp_priors import BasePrior
+from .ode_filter_step import (
     ekf1_sqr_filter_step,
     ekf1_sqr_filter_step_preconditioned,
     rts_sqr_smoother_step,
@@ -114,7 +114,7 @@ def rts_sqr_smoother_loop(
     P_back_seq_sqr: Array,
     N: int,
 ) -> tuple[Array, Array]:
-    """Run a Rauch–Tung–Striebel smoother over ``N`` steps.
+    """Run a Rauch-Tung-Striebel smoother over ``N`` steps.
 
     Args:
         m_N: Final filtered state mean.
@@ -259,7 +259,7 @@ def rts_sqr_smoother_loop_preconditioned(
     N: int,
     T_h: Array,
 ) -> tuple[Array, Array]:
-    """Run a preconditioned Rauch–Tung–Striebel smoother over ``N`` steps.
+    """Run a preconditioned Rauch-Tung-Striebel smoother over ``N`` steps.
 
     Args:
         m_N: Final filtered state mean (original space).

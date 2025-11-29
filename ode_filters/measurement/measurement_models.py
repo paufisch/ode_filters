@@ -15,7 +15,9 @@ DEFAULT_MEASUREMENT_NOISE = 1e-6
 class BaseODEInformation(ABC):
     """Abstract base class for ODE measurement models."""
 
-    def __init__(self, vf: Callable[[Array, float], Array], E0: ArrayLike, E1: ArrayLike):
+    def __init__(
+        self, vf: Callable[[Array, float], Array], E0: ArrayLike, E1: ArrayLike
+    ):
         self._vf = vf
         self._d = E0.shape[0]
         self._state_dim = E0.shape[1]
@@ -296,9 +298,9 @@ class LinearMeasurementBase:
         self._R_measure = self._R_measure.at[:base_dim, :base_dim].set(self._R)
         # Set default measurement noise on diagonal for measurement part
         for i in range(self._measurement_dim):
-            self._R_measure = self._R_measure.at[
-                base_dim + i, base_dim + i
-            ].set(measurement_noise)
+            self._R_measure = self._R_measure.at[base_dim + i, base_dim + i].set(
+                measurement_noise
+            )
 
     @property
     def R_measure(self) -> Array:
@@ -318,9 +320,7 @@ class LinearMeasurementBase:
         R_arr = np.asarray(value)
         expected_shape = self._R_measure.shape
         if R_arr.shape != expected_shape:
-            raise ValueError(
-                f"R must have shape {expected_shape}, got {R_arr.shape}."
-            )
+            raise ValueError(f"R must have shape {expected_shape}, got {R_arr.shape}.")
         self._R_measure = R_arr
 
     def set_measurement_noise(self, noise: float | ArrayLike) -> None:
@@ -337,9 +337,9 @@ class LinearMeasurementBase:
         if noise_arr.ndim == 0:
             # Scalar - apply to all diagonal entries
             for i in range(self._measurement_dim):
-                self._R_measure = self._R_measure.at[
-                    base_dim + i, base_dim + i
-                ].set(float(noise_arr))
+                self._R_measure = self._R_measure.at[base_dim + i, base_dim + i].set(
+                    float(noise_arr)
+                )
         elif noise_arr.ndim == 1:
             # Vector - set diagonal
             if noise_arr.shape[0] != self._measurement_dim:
@@ -348,9 +348,9 @@ class LinearMeasurementBase:
                     f"got {noise_arr.shape[0]}."
                 )
             for i in range(self._measurement_dim):
-                self._R_measure = self._R_measure.at[
-                    base_dim + i, base_dim + i
-                ].set(noise_arr[i])
+                self._R_measure = self._R_measure.at[base_dim + i, base_dim + i].set(
+                    noise_arr[i]
+                )
         elif noise_arr.ndim == 2:
             # Full matrix
             if noise_arr.shape != (self._measurement_dim, self._measurement_dim):
@@ -359,9 +359,7 @@ class LinearMeasurementBase:
                     f"({self._measurement_dim}, {self._measurement_dim}), "
                     f"got {noise_arr.shape}."
                 )
-            self._R_measure = self._R_measure.at[
-                base_dim:, base_dim:
-            ].set(noise_arr)
+            self._R_measure = self._R_measure.at[base_dim:, base_dim:].set(noise_arr)
         else:
             raise ValueError("noise must be scalar, 1D, or 2D array.")
 

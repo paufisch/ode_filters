@@ -9,7 +9,7 @@ from .measurement_models import (
 
 __all__ = [
     "ODEInformation",
-    "ODEmeasurement",
     "ODEconservation",
     "ODEconservationmeasurement",
+    "ODEmeasurement",
 ]

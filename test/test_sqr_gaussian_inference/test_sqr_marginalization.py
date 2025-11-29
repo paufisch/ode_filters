@@ -45,7 +45,7 @@ def test_sqr_marginalization_correctness(
     A, b, Q, mu, Sigma, expected_mu_z, expected_Sigma_z
 ):
     """Test that sqr_marginalization computes correct mean and covariance."""
-    if (Q != np.zeros_like(Q)).any():
+    if (np.zeros_like(Q) != Q).any():
         Q = np.linalg.cholesky(Q).T
     Sigma = np.linalg.cholesky(Sigma).T
     mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
@@ -117,7 +117,7 @@ def test_sqr_marginalization_preserves_positive_definiteness(A, b, Q, mu, Sigma)
     """Output covariance must remain positive definite."""
     Q = np.linalg.cholesky(Q).T
     Sigma = np.linalg.cholesky(Sigma).T
-    mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
+    _mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
     Sigma_z = Sigma_z.T @ Sigma_z
     # Check positive definiteness: all eigenvalues > 0
     eigenvalues = np.linalg.eigvalsh(Sigma_z)
@@ -129,7 +129,7 @@ def test_sqr_marginalization_output_symmetry(A, b, Q, mu, Sigma):
     """Output covariance matrix must be symmetric."""
     Q = np.linalg.cholesky(Q).T
     Sigma = np.linalg.cholesky(Sigma).T
-    mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
+    _mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
     Sigma_z = Sigma_z.T @ Sigma_z
 
     # Covariance matrices must be symmetric
@@ -215,7 +215,7 @@ def test_sqr_marginalization_1d_covariance_as_array():
 
     # Function should still work or raise clear error
     try:
-        mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
+        mu_z, _Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
         # If it works, verify output is still correct
         assert mu_z == pytest.approx([1.0])
     except (ValueError, onp.linalg.LinAlgError):

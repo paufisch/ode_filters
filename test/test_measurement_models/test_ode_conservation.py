@@ -1,8 +1,6 @@
 """Tests for ODEconservation and ODEconservationmeasurement classes."""
 
-import jax
 import jax.numpy as np
-import numpy as onp
 import pytest
 
 from ode_filters.measurement.measurement_models import (
@@ -25,6 +23,7 @@ class TestODEconservationConstruction:
 
     def test_basic_construction(self):
         """Test basic construction of ODEconservation."""
+
         def vf(x, *, t):
             return x
 
@@ -38,6 +37,7 @@ class TestODEconservationConstruction:
 
     def test_rejects_mismatched_A_p_shapes(self):
         """Test that mismatched A and p shapes raise error."""
+
         def vf(x, *, t):
             return x
 
@@ -50,6 +50,7 @@ class TestODEconservationConstruction:
 
     def test_rejects_mismatched_A_E0_shapes(self):
         """Test that mismatched A and E0 shapes raise error."""
+
         def vf(x, *, t):
             return x
 
@@ -67,6 +68,7 @@ class TestODEconservationMethods:
     @pytest.fixture
     def conservation_model(self):
         """Create a standard ODEconservation for testing."""
+
         def vf(x, *, t):
             return -x  # Simple decay
 
@@ -119,6 +121,7 @@ class TestODEconservationmeasurement:
     @pytest.fixture
     def measurement_model(self):
         """Create ODEconservationmeasurement for testing."""
+
         def vf(x, *, t):
             return -x
 
@@ -178,4 +181,3 @@ class TestODEconservationmeasurement:
 
         # Shape: (d + k + k_meas, d + k + k_meas) = (3, 3)
         assert R.shape == (3, 3)
-

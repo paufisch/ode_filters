@@ -203,7 +203,7 @@ def test_sqr_inversion_high_confidence_observation(A, mu, Sigma, mu_z, Sigma_z):
     """Test sqr_inversion with very small observation noise (high confidence in measurement)."""
     Sigma = np.linalg.cholesky(Sigma).T
     Sigma_z = np.linalg.cholesky(Sigma_z).T
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, _d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
     Lambda = Lambda.T @ Lambda
 
     # With high confidence in observation, Kalman gain should be larger
@@ -219,7 +219,7 @@ def test_sqr_inversion_low_confidence_observation(A, mu, Sigma, mu_z, Sigma_z):
     """Test sqr_inversion with large observation noise (low confidence in measurement)."""
     Sigma = np.linalg.cholesky(Sigma).T
     Sigma_z = np.linalg.cholesky(Sigma_z).T
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, _d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
     Lambda = Lambda.T @ Lambda
 
     # With low confidence in observation, Kalman gain should be smaller
@@ -286,7 +286,7 @@ def test_sqr_inversion_gain_matrix_properties():
     Sigma = np.linalg.cholesky(Sigma).T
     Sigma_z = np.linalg.cholesky(Sigma_z).T
 
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G, _d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
     Lambda = Lambda.T @ Lambda
 
     # Kalman gain dimensions: [n_state, n_obs]
@@ -305,7 +305,7 @@ def test_sqr_inversion_posterior_mean_shift():
     Sigma_z = np.array([[0.1]])  # Very confident observation
     Sigma = np.linalg.cholesky(Sigma).T
     Sigma_z = np.linalg.cholesky(Sigma_z).T
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    _G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
     Lambda = Lambda.T @ Lambda
 
     # Posterior mean should be shifted towards the observation
@@ -326,7 +326,7 @@ def test_sqr_inversion_preserves_covariance_properties():
     Sigma = np.linalg.cholesky(Sigma).T
     Sigma_z = np.linalg.cholesky(Sigma_z).T
 
-    G, d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    _G, _d, Lambda = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
     Lambda = Lambda.T @ Lambda
 
     # Lambda should be symmetric
