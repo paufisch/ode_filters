@@ -16,15 +16,48 @@ class BaseODEInformation(ABC):
     """Abstract base class for ODE measurement models."""
 
     def __init__(
-        self, vf: Callable[[Array, float], Array], E0: ArrayLike, E1: ArrayLike
+        self,
+        vf: Callable[[Array, float], Array],
+        E0: ArrayLike,
+        E1: ArrayLike,
+        E2: ArrayLike | None = None,
+        order: int = 1,
     ):
+        """Initialize the ODE measurement model.
+
+        Args:
+            vf: Vector field function.
+                For order=1: vf(x, *, t) -> dx/dt
+                For order=2: vf(x, dx, *, t) -> d²x/dt²
+            E0: State extraction matrix (shape [d, (q+1)*d]).
+            E1: First derivative extraction matrix (shape [d, (q+1)*d]).
+            E2: Second derivative extraction matrix (shape [d, (q+1)*d]).
+                Required for order=2, ignored for order=1.
+            order: ODE order (1 or 2, default 1).
+        """
+        if order not in (1, 2):
+            raise ValueError("order must be 1 or 2.")
+        if order == 2 and E2 is None:
+            raise ValueError("E2 is required for order=2.")
+
         self._vf = vf
-        self._d = E0.shape[0]
-        self._state_dim = E0.shape[1]
-        self._R = np.zeros((E1.shape[0], E1.shape[0]))
-        self._E0 = E0
-        self._E1 = E1
-        self._jacobian_vf = jax.jacfwd(self._vf)
+        self._order = order
+        self._E0 = np.asarray(E0)
+        self._E1 = np.asarray(E1)
+        self._E2 = np.asarray(E2) if E2 is not None else None
+        self._d = self._E0.shape[0]
+        self._state_dim = self._E0.shape[1]
+
+        # The constraint matrix is E1 for order 1, E2 for order 2
+        self._E_constraint = self._E1 if order == 1 else self._E2
+        self._R = np.zeros((self._E_constraint.shape[0], self._E_constraint.shape[0]))
+
+        # Precompile Jacobian functions
+        if order == 1:
+            self._jacobian_vf = jax.jacfwd(self._vf)
+        else:
+            self._jacobian_vf_x = jax.jacfwd(self._vf, argnums=0)
+            self._jacobian_vf_v = jax.jacfwd(self._vf, argnums=1)
 
     @property
     def R(self) -> Array:
@@ -149,16 +182,33 @@ class ODEInformation(BaseODEInformation):
     def g(self, state: Array, *, t: float) -> Array:
         """Evaluate the observation model for a flattened state vector.
 
-        Returns the difference between the first derivative and the vector field.
+        For order=1: Returns E1 @ state - vf(E0 @ state)
+        For order=2: Returns E2 @ state - vf(E0 @ state, E1 @ state)
         """
         state_arr = self._validate_state(state)
-        projected = self._E0 @ state_arr
-        return self._E1 @ state_arr - self._vf(projected, t=t)
+        x = self._E0 @ state_arr
+
+        if self._order == 1:
+            vf_eval = self._vf(x, t=t)
+        else:
+            v = self._E1 @ state_arr
+            vf_eval = self._vf(x, v, t=t)
+
+        return self._E_constraint @ state_arr - vf_eval
 
     def jacobian_g(self, state: Array, *, t: float) -> Array:
         """Return the Jacobian of the observation model at ``state``."""
         state_arr = self._validate_state(state)
-        return self._E1 - self._jacobian_vf(self._E0 @ state_arr, t=t) @ self._E0
+        x = self._E0 @ state_arr
+
+        if self._order == 1:
+            jac_vf = self._jacobian_vf(x, t=t)
+            return self._E_constraint - jac_vf @ self._E0
+        else:
+            v = self._E1 @ state_arr
+            jac_x = self._jacobian_vf_x(x, v, t=t)
+            jac_v = self._jacobian_vf_v(x, v, t=t)
+            return self._E_constraint - jac_x @ self._E0 - jac_v @ self._E1
 
     def get_noise(self, *, t: float) -> Array:
         """Return the measurement noise matrix at time ``t``."""
