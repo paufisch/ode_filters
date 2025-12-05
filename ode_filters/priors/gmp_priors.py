@@ -529,6 +529,10 @@ class JointPrior(BasePrior):
         zeros_down = np.zeros((prior_u._dim, _D_x))
         self._E0 = np.block([[prior_x.E0, zeros_up], [zeros_down, prior_u.E0]])
         self._E1 = np.block([[prior_x.E1, zeros_up]])
+        # E2 for second-order systems (extracts d²x/dt² from state x)
+        self._E2 = (
+            np.block([[prior_x.E2, zeros_up]]) if prior_x.E2 is not None else None
+        )
 
     def A(self, h: float) -> Array:
         """Return the block-diagonal state transition matrix.

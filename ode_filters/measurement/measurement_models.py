@@ -225,6 +225,8 @@ class ODEconservation(ODEInformation):
         E1: ArrayLike,
         A: Array,
         p: Array,
+        E2: ArrayLike | None = None,
+        order: int = 1,
     ):
         """Initialize with ODE information plus linear conservation law.
 
@@ -232,13 +234,17 @@ class ODEconservation(ODEInformation):
         A @ x(t) = p. Where x(t) = E0 @ X(t) is the projected state.
 
         Args:
-            vf: Vector field function with signature f(x, t) -> dx/dt.
+            vf: Vector field function.
+                For order=1: f(x, t) -> dx/dt
+                For order=2: f(x, dx, t) -> d²x/dt²
             E0: State extraction matrix (shape [d, (q+1)*d]).
             E1: Derivative extraction matrix (shape [d, (q+1)*d]).
             A: Constraint matrix for linear conservation law (shape [k, d]).
             p: Conservation law constant values (shape [k]).
+            E2: Second derivative extraction matrix (required for order=2).
+            order: ODE order (1 or 2, default 1).
         """
-        super().__init__(vf, E0, E1)
+        super().__init__(vf, E0, E1, E2=E2, order=order)
         if A.shape[0] != p.shape[0]:
             raise ValueError(
                 f"A.shape[0] ({A.shape[0]}) must match p.shape[0] ({p.shape[0]})."
@@ -468,19 +474,25 @@ class ODEmeasurement(LinearMeasurementBase, ODEInformation):
         z: Array,
         z_t: Array,
         measurement_noise: float = DEFAULT_MEASUREMENT_NOISE,
+        E2: ArrayLike | None = None,
+        order: int = 1,
     ):
         """Initialize ODE measurement model with linear measurements.
 
         Args:
-            vf: Vector field function f(x, t) -> dx/dt.
+            vf: Vector field function.
+                For order=1: f(x, t) -> dx/dt
+                For order=2: f(x, dx, t) -> d²x/dt²
             E0: State extraction matrix (shape [d, (q+1)*d]).
             E1: Derivative extraction matrix (shape [d, (q+1)*d]).
             A: Measurement matrix (shape [k, d]).
             z: Measurement values (shape [n, k]).
             z_t: Measurement times (shape [n]).
             measurement_noise: Default noise variance for measurements (default: 1e-6).
+            E2: Second derivative extraction matrix (required for order=2).
+            order: ODE order (1 or 2, default 1).
         """
-        super().__init__(vf, E0, E1)
+        super().__init__(vf, E0, E1, E2=E2, order=order)
         self._setup_linear_measurements(A, z, z_t, measurement_noise)
 
     def g(self, state: Array, *, t: float) -> Array:
@@ -522,11 +534,15 @@ class ODEconservationmeasurement(LinearMeasurementBase, ODEconservation):
         z: Array,
         z_t: Array,
         measurement_noise: float = DEFAULT_MEASUREMENT_NOISE,
+        E2: ArrayLike | None = None,
+        order: int = 1,
     ):
         """Initialize ODE measurement model with conservation law and linear measurements.
 
         Args:
-            vf: Vector field function f(x, t) -> dx/dt.
+            vf: Vector field function.
+                For order=1: f(x, t) -> dx/dt
+                For order=2: f(x, dx, t) -> d²x/dt²
             E0: State extraction matrix (shape [d, (q+1)*d]).
             E1: Derivative extraction matrix (shape [d, (q+1)*d]).
             C: Constraint matrix for conservation law (shape [m, d]).
@@ -535,8 +551,10 @@ class ODEconservationmeasurement(LinearMeasurementBase, ODEconservation):
             z: Measurement values (shape [n, k]).
             z_t: Measurement times (shape [n]).
             measurement_noise: Default noise variance for measurements (default: 1e-6).
+            E2: Second derivative extraction matrix (required for order=2).
+            order: ODE order (1 or 2, default 1).
         """
-        super().__init__(vf, E0, E1, C, p)
+        super().__init__(vf, E0, E1, C, p, E2=E2, order=order)
         self._setup_linear_measurements(A, z, z_t, measurement_noise)
         self._A_lin = self._A_meas
         self._z = self._z_meas
