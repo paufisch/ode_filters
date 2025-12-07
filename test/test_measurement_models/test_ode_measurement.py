@@ -7,7 +7,9 @@ from ode_filters.measurement.measurement_models import (
     Conservation,
     Measurement,
     ODEInformation,
+    ODEInformationWithHidden,
     ODEmeasurement,
+    SecondOrderODEInformationWithHidden,
 )
 
 
@@ -546,3 +548,186 @@ class TestMultiDimensionalMeasurement:
 
         # d + k = 2 + 1 = 3
         assert result.shape == (3,)
+
+
+class TestHiddenStates:
+    """Tests for ODE models with hidden states using separate classes."""
+
+    def test_first_order_with_hidden_state(self):
+        """Test first-order ODE with hidden parameter: dx/dt = -u * x."""
+
+        # Vector field with hidden parameter
+        def vf(x, u, *, t):
+            return -u * x
+
+        # State is [x, x', u, u'] for q=1, d_x=1, d_u=1
+        # Joint state dimension: (q+1)*d_x + (q+1)*d_u = 2 + 2 = 4
+        d_x, d_u, q = 1, 1, 1
+        D_x = (q + 1) * d_x  # 2
+        D_u = (q + 1) * d_u  # 2
+        D = D_x + D_u  # 4
+
+        # Build projection matrices for joint state [x_block, u_block]
+        # E0 extracts x (first d_x elements of x_block)
+        E0 = np.zeros((d_x, D))
+        E0 = E0.at[0, 0].set(1.0)
+
+        # E1 extracts x' (derivative part of x_block)
+        E1 = np.zeros((d_x, D))
+        E1 = E1.at[0, 1].set(1.0)
+
+        # E0_hidden extracts u (first d_u elements of u_block)
+        E0_hidden = np.zeros((d_u, D))
+        E0_hidden = E0_hidden.at[0, 2].set(1.0)
+
+        model = ODEInformationWithHidden(vf, E0, E1, E0_hidden)
+
+        # State: [x=1, x'=-0.5, u=0.5, u'=0]
+        # At equilibrium: x' = -u*x = -0.5*1 = -0.5 ✓
+        state = np.array([1.0, -0.5, 0.5, 0.0])
+
+        # Residual should be zero at equilibrium
+        g_val = model.g(state, t=0.0)
+        assert g_val.shape == (1,)
+        assert np.allclose(g_val, np.zeros(1), atol=1e-6)
+
+    def test_first_order_hidden_jacobian(self):
+        """Test Jacobian computation with hidden state."""
+
+        def vf(x, u, *, t):
+            return -u * x
+
+        d_x, d_u, q = 1, 1, 1
+        D = (q + 1) * (d_x + d_u)
+
+        E0 = np.zeros((d_x, D))
+        E0 = E0.at[0, 0].set(1.0)
+        E1 = np.zeros((d_x, D))
+        E1 = E1.at[0, 1].set(1.0)
+        E0_hidden = np.zeros((d_u, D))
+        E0_hidden = E0_hidden.at[0, 2].set(1.0)
+
+        model = ODEInformationWithHidden(vf, E0, E1, E0_hidden)
+
+        state = np.array([1.0, -0.5, 0.5, 0.0])
+        jacobian = model.jacobian_g(state, t=0.0)
+
+        # Jacobian shape: (d_x, D) = (1, 4)
+        assert jacobian.shape == (1, 4)
+
+        # Manual computation:
+        # g = x' - vf(x, u) = x' + u*x
+        # dg/d[x, x', u, u'] = [u, 1, x, 0] = [0.5, 1, 1, 0]
+        expected = np.array([[0.5, 1.0, 1.0, 0.0]])
+        assert np.allclose(jacobian, expected, atol=1e-5)
+
+    def test_second_order_with_hidden_state(self):
+        """Test second-order ODE with hidden parameter: d²x/dt² = -omega²*x - u*v."""
+
+        # Damped oscillator with unknown damping coefficient
+        def vf(x, v, u, *, t):
+            omega = 1.0
+            return -(omega**2) * x - u * v
+
+        # State: [x, x', x'', u, u', u''] for q=2, d_x=1, d_u=1
+        d_x, d_u, q = 1, 1, 2
+        D_x = (q + 1) * d_x  # 3
+        D_u = (q + 1) * d_u  # 3
+        D = D_x + D_u  # 6
+
+        # E0 extracts x
+        E0 = np.zeros((d_x, D))
+        E0 = E0.at[0, 0].set(1.0)
+
+        # E1 extracts x'
+        E1 = np.zeros((d_x, D))
+        E1 = E1.at[0, 1].set(1.0)
+
+        # E2 extracts x''
+        E2 = np.zeros((d_x, D))
+        E2 = E2.at[0, 2].set(1.0)
+
+        # E0_hidden extracts u
+        E0_hidden = np.zeros((d_u, D))
+        E0_hidden = E0_hidden.at[0, 3].set(1.0)
+
+        model = SecondOrderODEInformationWithHidden(vf, E0, E1, E2, E0_hidden)
+
+        # State: x=1, x'=0, x''=-1, u=0, u'=0, u''=0
+        # vf = -1*1 - 0*0 = -1, so residual = x'' - vf = -1 - (-1) = 0
+        state = np.array([1.0, 0.0, -1.0, 0.0, 0.0, 0.0])
+
+        g_val = model.g(state, t=0.0)
+        assert g_val.shape == (1,)
+        assert np.allclose(g_val, np.zeros(1), atol=1e-6)
+
+    def test_hidden_with_measurement_constraint(self):
+        """Test hidden states combined with measurement constraints."""
+
+        def vf(x, u, *, t):
+            return -u * x
+
+        d_x, d_u, q = 1, 1, 1
+        D = (q + 1) * (d_x + d_u)
+
+        E0 = np.zeros((d_x, D))
+        E0 = E0.at[0, 0].set(1.0)
+        E1 = np.zeros((d_x, D))
+        E1 = E1.at[0, 1].set(1.0)
+        E0_hidden = np.zeros((d_u, D))
+        E0_hidden = E0_hidden.at[0, 2].set(1.0)
+
+        # Measurement constraint on x
+        measurement = Measurement(
+            A=np.array([[1.0]]),
+            z=np.array([[0.5]]),
+            z_t=np.array([0.5]),
+            noise=0.01,
+        )
+
+        model = ODEInformationWithHidden(
+            vf, E0, E1, E0_hidden, constraints=[measurement]
+        )
+
+        state = np.array([1.0, -0.5, 0.5, 0.0])
+
+        # At t=0: only ODE constraint (d_x=1)
+        g_t0 = model.g(state, t=0.0)
+        assert g_t0.shape == (1,)
+
+        # At t=0.5: ODE (1) + measurement (1) = 2
+        g_t05 = model.g(state, t=0.5)
+        assert g_t05.shape == (2,)
+
+    def test_second_order_hidden_jacobian(self):
+        """Test Jacobian computation for second-order with hidden state."""
+
+        def vf(x, v, u, *, t):
+            return -x - u * v
+
+        d_x, d_u, q = 1, 1, 2
+        D = (q + 1) * (d_x + d_u)
+
+        E0 = np.zeros((d_x, D))
+        E0 = E0.at[0, 0].set(1.0)
+        E1 = np.zeros((d_x, D))
+        E1 = E1.at[0, 1].set(1.0)
+        E2 = np.zeros((d_x, D))
+        E2 = E2.at[0, 2].set(1.0)
+        E0_hidden = np.zeros((d_u, D))
+        E0_hidden = E0_hidden.at[0, 3].set(1.0)
+
+        model = SecondOrderODEInformationWithHidden(vf, E0, E1, E2, E0_hidden)
+
+        # State: x=1, x'=0.5, x''=-1, u=2, u'=0, u''=0
+        state = np.array([1.0, 0.5, -1.0, 2.0, 0.0, 0.0])
+        jacobian = model.jacobian_g(state, t=0.0)
+
+        # Jacobian shape: (d_x, D) = (1, 6)
+        assert jacobian.shape == (1, 6)
+
+        # g = x'' - vf(x, v, u) = x'' + x + u*v
+        # dg/dx = 1, dg/dv = u = 2, dg/du = v = 0.5
+        # dg/d[x, x', x'', u, u', u''] = [1, 2, 1, 0.5, 0, 0]
+        expected = np.array([[1.0, 2.0, 1.0, 0.5, 0.0, 0.0]])
+        assert np.allclose(jacobian, expected, atol=1e-5)

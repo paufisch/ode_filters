@@ -323,19 +323,24 @@ class BaseODEInformation(ABC):
         return state_arr
 
 
+# =============================================================================
+# First-order ODE classes
+# =============================================================================
+
+
 class ODEInformation(BaseODEInformation):
     """First-order ODE measurement model: dx/dt = f(x, t).
 
     Args:
         vf: Vector field function vf(x, *, t) -> dx/dt.
-        E0: State extraction matrix (shape [d, (q+1)*d]).
-        E1: First derivative extraction matrix (shape [d, (q+1)*d]).
+        E0: State extraction matrix (shape [d, D]).
+        E1: First derivative extraction matrix (shape [d, D]).
         constraints: Optional list of Conservation and/or Measurement constraints.
     """
 
     def __init__(
         self,
-        vf: Callable[[Array, float], Array],
+        vf: Callable[[Array], Array],
         E0: ArrayLike,
         E1: ArrayLike,
         constraints: list[Conservation | Measurement] | None = None,
@@ -361,20 +366,73 @@ class ODEInformation(BaseODEInformation):
         return self._E_constraint - jac_vf @ self._E0
 
 
-class SecondOrderODEInformation(BaseODEInformation):
-    """Second-order ODE measurement model: d^2x/dt^2 = f(x, dx/dt, t).
+class ODEInformationWithHidden(BaseODEInformation):
+    """First-order ODE with hidden states: dx/dt = f(x, u, t).
+
+    For joint state-parameter estimation where u is a hidden parameter
+    that appears in the dynamics but evolves according to its own prior.
 
     Args:
-        vf: Vector field function vf(x, v, *, t) -> d^2x/dt^2.
-        E0: State extraction matrix (shape [d, (q+1)*d]).
-        E1: First derivative extraction matrix (shape [d, (q+1)*d]).
-        E2: Second derivative extraction matrix (shape [d, (q+1)*d]).
+        vf: Vector field function vf(x, u, *, t) -> dx/dt.
+        E0: State extraction matrix for x (shape [d_x, D]).
+        E1: First derivative extraction matrix (shape [d_x, D]).
+        E0_hidden: Hidden state extraction matrix for u (shape [d_u, D]).
         constraints: Optional list of Conservation and/or Measurement constraints.
     """
 
     def __init__(
         self,
-        vf: Callable[[Array, Array, float], Array],
+        vf: Callable[[Array, Array], Array],
+        E0: ArrayLike,
+        E1: ArrayLike,
+        E0_hidden: ArrayLike,
+        constraints: list[Conservation | Measurement] | None = None,
+    ):
+        self._vf = vf
+        self._E0 = np.asarray(E0)
+        self._E1 = np.asarray(E1)
+        self._E0_hidden = np.asarray(E0_hidden)
+        self._d = self._E0.shape[0]
+        self._state_dim = self._E0.shape[1]
+        self._E_constraint = self._E1
+        self._base_R = np.zeros((self._d, self._d))
+        self._jacobian_vf_x = jax.jacfwd(self._vf, argnums=0)
+        self._jacobian_vf_u = jax.jacfwd(self._vf, argnums=1)
+        self._init_constraints(constraints)
+
+    def _ode_residual(self, state: Array, *, t: float) -> Array:
+        x = self._E0 @ state
+        u = self._E0_hidden @ state
+        vf_eval = self._vf(x, u, t=t)
+        return self._E_constraint @ state - vf_eval
+
+    def _ode_jacobian(self, state: Array, *, t: float) -> Array:
+        x = self._E0 @ state
+        u = self._E0_hidden @ state
+        jac_vf_x = self._jacobian_vf_x(x, u, t=t)
+        jac_vf_u = self._jacobian_vf_u(x, u, t=t)
+        return self._E_constraint - jac_vf_x @ self._E0 - jac_vf_u @ self._E0_hidden
+
+
+# =============================================================================
+# Second-order ODE classes
+# =============================================================================
+
+
+class SecondOrderODEInformation(BaseODEInformation):
+    """Second-order ODE measurement model: d^2x/dt^2 = f(x, v, t).
+
+    Args:
+        vf: Vector field function vf(x, v, *, t) -> d^2x/dt^2.
+        E0: State extraction matrix (shape [d, D]).
+        E1: First derivative extraction matrix (shape [d, D]).
+        E2: Second derivative extraction matrix (shape [d, D]).
+        constraints: Optional list of Conservation and/or Measurement constraints.
+    """
+
+    def __init__(
+        self,
+        vf: Callable[[Array, Array], Array],
         E0: ArrayLike,
         E1: ArrayLike,
         E2: ArrayLike,
@@ -406,9 +464,73 @@ class SecondOrderODEInformation(BaseODEInformation):
         return self._E_constraint - jac_x @ self._E0 - jac_v @ self._E1
 
 
+class SecondOrderODEInformationWithHidden(BaseODEInformation):
+    """Second-order ODE with hidden states: d^2x/dt^2 = f(x, v, u, t).
+
+    For joint state-parameter estimation where u is a hidden parameter
+    that appears in the dynamics but evolves according to its own prior.
+
+    Args:
+        vf: Vector field function vf(x, v, u, *, t) -> d^2x/dt^2.
+        E0: State extraction matrix for x (shape [d_x, D]).
+        E1: First derivative extraction matrix (shape [d_x, D]).
+        E2: Second derivative extraction matrix (shape [d_x, D]).
+        E0_hidden: Hidden state extraction matrix for u (shape [d_u, D]).
+        constraints: Optional list of Conservation and/or Measurement constraints.
+    """
+
+    def __init__(
+        self,
+        vf: Callable[[Array, Array, Array], Array],
+        E0: ArrayLike,
+        E1: ArrayLike,
+        E2: ArrayLike,
+        E0_hidden: ArrayLike,
+        constraints: list[Conservation | Measurement] | None = None,
+    ):
+        self._vf = vf
+        self._E0 = np.asarray(E0)
+        self._E1 = np.asarray(E1)
+        self._E2 = np.asarray(E2)
+        self._E0_hidden = np.asarray(E0_hidden)
+        self._d = self._E0.shape[0]
+        self._state_dim = self._E0.shape[1]
+        self._E_constraint = self._E2
+        self._base_R = np.zeros((self._d, self._d))
+        self._jacobian_vf_x = jax.jacfwd(self._vf, argnums=0)
+        self._jacobian_vf_v = jax.jacfwd(self._vf, argnums=1)
+        self._jacobian_vf_u = jax.jacfwd(self._vf, argnums=2)
+        self._init_constraints(constraints)
+
+    def _ode_residual(self, state: Array, *, t: float) -> Array:
+        x = self._E0 @ state
+        v = self._E1 @ state
+        u = self._E0_hidden @ state
+        vf_eval = self._vf(x, v, u, t=t)
+        return self._E_constraint @ state - vf_eval
+
+    def _ode_jacobian(self, state: Array, *, t: float) -> Array:
+        x = self._E0 @ state
+        v = self._E1 @ state
+        u = self._E0_hidden @ state
+        jac_x = self._jacobian_vf_x(x, v, u, t=t)
+        jac_v = self._jacobian_vf_v(x, v, u, t=t)
+        jac_u = self._jacobian_vf_u(x, v, u, t=t)
+        return (
+            self._E_constraint
+            - jac_x @ self._E0
+            - jac_v @ self._E1
+            - jac_u @ self._E0_hidden
+        )
+
+
+# =============================================================================
 # Convenience factory functions for backward compatibility
+# =============================================================================
+
+
 def ODEconservation(
-    vf: Callable[[Array, float], Array],
+    vf: Callable,
     E0: ArrayLike,
     E1: ArrayLike,
     A: Array,
@@ -430,7 +552,7 @@ def ODEconservation(
 
 
 def SecondOrderODEconservation(
-    vf: Callable[[Array, Array, float], Array],
+    vf: Callable,
     E0: ArrayLike,
     E1: ArrayLike,
     E2: ArrayLike,
@@ -454,7 +576,7 @@ def SecondOrderODEconservation(
 
 
 def ODEmeasurement(
-    vf: Callable[[Array, float], Array],
+    vf: Callable,
     E0: ArrayLike,
     E1: ArrayLike,
     A: Array,
@@ -482,7 +604,7 @@ def ODEmeasurement(
 
 
 def SecondOrderODEmeasurement(
-    vf: Callable[[Array, Array, float], Array],
+    vf: Callable,
     E0: ArrayLike,
     E1: ArrayLike,
     E2: ArrayLike,
@@ -512,7 +634,7 @@ def SecondOrderODEmeasurement(
 
 
 def ODEconservationmeasurement(
-    vf: Callable[[Array, float], Array],
+    vf: Callable,
     E0: ArrayLike,
     E1: ArrayLike,
     C: Array,
@@ -547,7 +669,7 @@ def ODEconservationmeasurement(
 
 
 def SecondOrderODEconservationmeasurement(
-    vf: Callable[[Array, Array, float], Array],
+    vf: Callable,
     E0: ArrayLike,
     E1: ArrayLike,
     E2: ArrayLike,

@@ -501,15 +501,26 @@ class MaternPrior(BasePrior):
 
 
 class JointPrior(BasePrior):
-    """Joint prior combining independent state (x) and input (u) priors.
+    """Joint prior combining independent state (x) and hidden/input (u) priors.
 
-    Creates a block-diagonal prior structure where state and input evolution
+    Creates a block-diagonal prior structure where state and hidden evolution
     are independent. The resulting matrices are block-diagonal with zeros
     in the off-diagonal blocks.
 
+    For joint state-parameter estimation, the hidden state u can represent
+    unknown parameters that appear in the ODE but evolve according to their
+    own prior (e.g., IWP or Matern).
+
+    Projection matrices:
+        E0: Extracts [x, u] - zeroth derivatives of both (shape [d_x + d_u, D])
+        E0_x: Extracts x only - zeroth derivative of state (shape [d_x, D])
+        E0_hidden: Extracts u only - zeroth derivative of hidden (shape [d_u, D])
+        E1: Extracts dx/dt - first derivative of state x (shape [d_x, D])
+        E2: Extracts d^2x/dt^2 - second derivative of x (shape [d_x, D]), if q >= 2
+
     Args:
         prior_x: BasePrior instance for state evolution.
-        prior_u: BasePrior instance for input evolution.
+        prior_u: BasePrior instance for hidden/input evolution.
     """
 
     def __init__(self, prior_x: BasePrior, prior_u: BasePrior) -> None:
@@ -527,12 +538,39 @@ class JointPrior(BasePrior):
         self._zeros = np.zeros((_D_x, _D_u))
         zeros_up = np.zeros((prior_x._dim, _D_u))
         zeros_down = np.zeros((prior_u._dim, _D_x))
+
+        # E0 extracts [x, u] - both zeroth derivatives (for measurements on both)
         self._E0 = np.block([[prior_x.E0, zeros_up], [zeros_down, prior_u.E0]])
+
+        # E0_x extracts x only (for ODE vector field)
+        self._E0_x = np.block([[prior_x.E0, zeros_up]])
+
+        # E0_hidden extracts u only (for hidden states in vector field)
+        self._E0_hidden = np.block([[zeros_down, prior_u.E0]])
+
+        # E1 extracts dx/dt (first derivative of x, for ODE constraint)
         self._E1 = np.block([[prior_x.E1, zeros_up]])
-        # E2 for second-order systems (extracts d²x/dt² from state x)
+
+        # E2 for second-order systems (extracts d^2x/dt^2 from state x)
         self._E2 = (
             np.block([[prior_x.E2, zeros_up]]) if prior_x.E2 is not None else None
         )
+
+    @property
+    def E0_x(self) -> Array:
+        """State extraction matrix for x only (shape [d_x, D]).
+
+        Use this as E0 in the measurement model when you have hidden states.
+        """
+        return self._E0_x
+
+    @property
+    def E0_hidden(self) -> Array:
+        """Hidden state extraction matrix for u only (shape [d_u, D]).
+
+        Use this as E0_hidden in the measurement model.
+        """
+        return self._E0_hidden
 
     def A(self, h: float) -> Array:
         """Return the block-diagonal state transition matrix.
