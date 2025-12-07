@@ -1,9 +1,10 @@
-"""Tests for ODEconservation and ODEconservationmeasurement classes."""
+"""Tests for ODEconservation and ODEconservationmeasurement factory functions."""
 
 import jax.numpy as np
 import pytest
 
 from ode_filters.measurement.measurement_models import (
+    Conservation,
     ODEconservation,
     ODEconservationmeasurement,
 )
@@ -32,8 +33,9 @@ class TestODEconservationConstruction:
         p = np.array([1.0])
 
         model = ODEconservation(vf=vf, E0=E0, E1=E1, A=A, p=p)
-        assert model._A.shape == (1, 2)
-        assert model._p.shape == (1,)
+        # Model has one Conservation constraint
+        assert len(model._constraints) == 1
+        assert isinstance(model._constraints[0], Conservation)
 
     def test_rejects_mismatched_A_p_shapes(self):
         """Test that mismatched A and p shapes raise error."""
