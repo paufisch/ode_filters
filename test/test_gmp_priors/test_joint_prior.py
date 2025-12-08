@@ -1,9 +1,15 @@
-"""Tests for JointPrior class."""
+"""Tests for JointPrior and PrecondJointPrior classes."""
 
 import jax.numpy as np
 import pytest
 
-from ode_filters.priors.gmp_priors import IWP, JointPrior, MaternPrior
+from ode_filters.priors.gmp_priors import (
+    IWP,
+    JointPrior,
+    MaternPrior,
+    PrecondIWP,
+    PrecondJointPrior,
+)
 
 
 class TestJointPriorConstruction:
@@ -225,3 +231,207 @@ class TestJointPriorIntegration:
         # Should match
         expected = np.concatenate([pred_x, pred_u])
         assert np.allclose(joint_pred, expected)
+
+
+# =============================================================================
+# PrecondJointPrior Tests
+# =============================================================================
+
+
+class TestPrecondJointPriorConstruction:
+    """Tests for PrecondJointPrior constructor."""
+
+    def test_constructor_with_two_precond_priors(self):
+        """Test construction with two PrecondIWP priors."""
+        prior_x = PrecondIWP(q=2, d=1)
+        prior_u = PrecondIWP(q=3, d=1)
+        joint = PrecondJointPrior(prior_x, prior_u)
+
+        assert joint._prior_x is prior_x
+        assert joint._prior_u is prior_u
+
+    def test_rejects_non_precond_prior_x(self):
+        """Test that non-PrecondIWP for prior_x raises error."""
+        prior_u = PrecondIWP(q=2, d=1)
+        with pytest.raises(TypeError, match="prior_x must be PrecondIWP"):
+            PrecondJointPrior(IWP(q=2, d=1), prior_u)
+
+    def test_rejects_non_precond_prior_u(self):
+        """Test that non-PrecondIWP for prior_u raises error."""
+        prior_x = PrecondIWP(q=2, d=1)
+        with pytest.raises(TypeError, match="prior_u must be PrecondIWP"):
+            PrecondJointPrior(prior_x, IWP(q=2, d=1))
+
+    def test_rejects_matern_prior(self):
+        """Test that MaternPrior is rejected."""
+        prior_x = PrecondIWP(q=2, d=1)
+        with pytest.raises(TypeError, match="prior_u must be PrecondIWP"):
+            PrecondJointPrior(prior_x, MaternPrior(q=1, d=1, length_scale=1.0))
+
+
+class TestPrecondJointPriorMatrices:
+    """Tests for PrecondJointPrior matrix methods."""
+
+    @pytest.fixture
+    def precond_joint_prior(self):
+        """Create a standard PrecondJointPrior for testing."""
+        prior_x = PrecondIWP(q=2, d=1)  # D_x = 3
+        prior_u = PrecondIWP(q=1, d=1)  # D_u = 2
+        return PrecondJointPrior(prior_x, prior_u)
+
+    def test_A_returns_block_diagonal_constant(self, precond_joint_prior):
+        """Test that A() returns constant block-diagonal matrix."""
+        A = precond_joint_prior.A()
+
+        # Expected shape: (D_x + D_u, D_x + D_u) = (5, 5)
+        assert A.shape == (5, 5)
+
+        # Check block structure
+        A_x = precond_joint_prior._prior_x.A()
+        A_u = precond_joint_prior._prior_u.A()
+
+        # Top-left block should match A_x
+        assert np.allclose(A[:3, :3], A_x)
+        # Bottom-right block should match A_u
+        assert np.allclose(A[3:, 3:], A_u)
+        # Off-diagonal blocks should be zero
+        assert np.allclose(A[:3, 3:], np.zeros((3, 2)))
+        assert np.allclose(A[3:, :3], np.zeros((2, 3)))
+
+    def test_Q_returns_block_diagonal_constant(self, precond_joint_prior):
+        """Test that Q() returns constant block-diagonal matrix."""
+        Q = precond_joint_prior.Q()
+
+        assert Q.shape == (5, 5)
+
+        Q_x = precond_joint_prior._prior_x.Q()
+        Q_u = precond_joint_prior._prior_u.Q()
+
+        assert np.allclose(Q[:3, :3], Q_x)
+        assert np.allclose(Q[3:, 3:], Q_u)
+        assert np.allclose(Q[:3, 3:], np.zeros((3, 2)))
+        assert np.allclose(Q[3:, :3], np.zeros((2, 3)))
+
+    def test_b_returns_zero_vector(self, precond_joint_prior):
+        """Test that b() returns zero drift vector."""
+        b = precond_joint_prior.b()
+
+        assert b.shape == (5,)
+        assert np.allclose(b, np.zeros(5))
+
+    def test_T_returns_block_diagonal(self, precond_joint_prior):
+        """Test that T(h) returns block-diagonal transformation."""
+        h = 0.5
+        T = precond_joint_prior.T(h)
+
+        assert T.shape == (5, 5)
+
+        T_x = precond_joint_prior._prior_x.T(h)
+        T_u = precond_joint_prior._prior_u.T(h)
+
+        # Top-left block should match T_x
+        assert np.allclose(T[:3, :3], T_x)
+        # Bottom-right block should match T_u
+        assert np.allclose(T[3:, 3:], T_u)
+        # Off-diagonal blocks should be zero
+        assert np.allclose(T[:3, 3:], np.zeros((3, 2)))
+        assert np.allclose(T[3:, :3], np.zeros((2, 3)))
+
+    def test_T_is_stepsize_dependent(self, precond_joint_prior):
+        """Test that T(h) changes with step size."""
+        T1 = precond_joint_prior.T(0.1)
+        T2 = precond_joint_prior.T(0.5)
+
+        # Should be different
+        assert not np.allclose(T1, T2)
+
+
+class TestPrecondJointPriorProjections:
+    """Tests for PrecondJointPrior projection properties."""
+
+    def test_E0_extracts_both_states(self):
+        """Test that E0 extracts both x and u from joint state."""
+        prior_x = PrecondIWP(q=2, d=1)  # D_x = 3, d_x = 1
+        prior_u = PrecondIWP(q=1, d=1)  # D_u = 2, d_u = 1
+        joint = PrecondJointPrior(prior_x, prior_u)
+
+        E0 = joint.E0
+        assert E0.shape == (2, 5)  # (d_x + d_u, D_x + D_u)
+
+        # Test extraction
+        state = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        extracted = E0 @ state
+        # Should get [x, u] = [1.0, 4.0]
+        assert np.allclose(extracted, np.array([1.0, 4.0]))
+
+    def test_E0_x_extracts_state_only(self):
+        """Test that E0_x extracts only x from joint state."""
+        prior_x = PrecondIWP(q=2, d=1)
+        prior_u = PrecondIWP(q=1, d=1)
+        joint = PrecondJointPrior(prior_x, prior_u)
+
+        E0_x = joint.E0_x
+        assert E0_x.shape == (1, 5)
+
+        state = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        extracted = E0_x @ state
+        assert np.allclose(extracted, np.array([1.0]))
+
+    def test_E0_hidden_extracts_hidden_only(self):
+        """Test that E0_hidden extracts only u from joint state."""
+        prior_x = PrecondIWP(q=2, d=1)
+        prior_u = PrecondIWP(q=1, d=1)
+        joint = PrecondJointPrior(prior_x, prior_u)
+
+        E0_hidden = joint.E0_hidden
+        assert E0_hidden.shape == (1, 5)
+
+        state = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        extracted = E0_hidden @ state
+        assert np.allclose(extracted, np.array([4.0]))
+
+    def test_E1_extracts_state_derivative(self):
+        """Test that E1 extracts x' from joint state."""
+        prior_x = PrecondIWP(q=2, d=1)
+        prior_u = PrecondIWP(q=1, d=1)
+        joint = PrecondJointPrior(prior_x, prior_u)
+
+        E1 = joint.E1
+        assert E1.shape == (1, 5)
+
+        state = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        extracted = E1 @ state
+        assert np.allclose(extracted, np.array([2.0]))
+
+    def test_E2_extracts_second_derivative(self):
+        """Test that E2 extracts x'' from joint state."""
+        prior_x = PrecondIWP(q=2, d=1)
+        prior_u = PrecondIWP(q=1, d=1)
+        joint = PrecondJointPrior(prior_x, prior_u)
+
+        E2 = joint.E2
+        assert E2 is not None
+        assert E2.shape == (1, 5)
+
+        state = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        extracted = E2 @ state
+        assert np.allclose(extracted, np.array([3.0]))
+
+    def test_E2_is_none_for_low_order(self):
+        """Test that E2 is None when q < 2."""
+        prior_x = PrecondIWP(q=1, d=1)
+        prior_u = PrecondIWP(q=1, d=1)
+        joint = PrecondJointPrior(prior_x, prior_u)
+
+        assert joint.E2 is None
+
+    def test_multidimensional_projections(self):
+        """Test projections with multi-dimensional states."""
+        prior_x = PrecondIWP(q=1, d=2)  # D_x = 4, d_x = 2
+        prior_u = PrecondIWP(q=1, d=3)  # D_u = 6, d_u = 3
+        joint = PrecondJointPrior(prior_x, prior_u)
+
+        assert joint.E0.shape == (5, 10)  # (d_x + d_u, D_x + D_u)
+        assert joint.E0_x.shape == (2, 10)
+        assert joint.E0_hidden.shape == (3, 10)
+        assert joint.E1.shape == (2, 10)
