@@ -2,19 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import numpy as np
-from numpy.linalg import cholesky
+import jax.numpy as np
+from jax import Array
 
 from ..measurement.measurement_models import BaseODEInformation
-from ..priors.GMP_priors import BasePrior
-from .ODE_filter_step import (
+from ..priors.gmp_priors import BasePrior
+from .ode_filter_step import (
     ekf1_sqr_filter_step,
     ekf1_sqr_filter_step_preconditioned,
     rts_sqr_smoother_step,
     rts_sqr_smoother_step_preconditioned,
 )
 
-Array = np.ndarray
 StateFunction = Callable[[Array], Array]
 JacobianFunction = Callable[[Array], Array]
 
@@ -66,7 +65,7 @@ def ekf1_sqr_loop(
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     A_h = prior.A(h)
     b_h = prior.b(h)
-    Q_h_sqr = cholesky(prior.Q(h), upper=True)
+    Q_h_sqr = np.linalg.cholesky(prior.Q(h)).T
 
     for i in range(N):
         (
@@ -115,7 +114,7 @@ def rts_sqr_smoother_loop(
     P_back_seq_sqr: Array,
     N: int,
 ) -> tuple[Array, Array]:
-    """Run a Rauch–Tung–Striebel smoother over ``N`` steps.
+    """Run a Rauch-Tung-Striebel smoother over ``N`` steps.
 
     Args:
         m_N: Final filtered state mean.
@@ -130,19 +129,21 @@ def rts_sqr_smoother_loop(
     """
 
     state_dim = m_N.shape[0]
-    m_smooth = np.empty((N + 1, state_dim))
-    P_smooth_sqr = np.empty((N + 1, state_dim, state_dim))
-    m_smooth[-1] = m_N
-    P_smooth_sqr[-1] = P_N_sqr
+    m_smooth = np.zeros((N + 1, state_dim))
+    P_smooth_sqr = np.zeros((N + 1, state_dim, state_dim))
+    m_smooth = m_smooth.at[-1].set(m_N)
+    P_smooth_sqr = P_smooth_sqr.at[-1].set(P_N_sqr)
 
     for j in range(N - 1, -1, -1):
-        (m_smooth[j], P_smooth_sqr[j]) = rts_sqr_smoother_step(
+        m_j, P_j = rts_sqr_smoother_step(
             G_back_seq[j],
             d_back_seq[j],
             P_back_seq_sqr[j],
             m_smooth[j + 1],
             P_smooth_sqr[j + 1],
         )
+        m_smooth = m_smooth.at[j].set(m_j)
+        P_smooth_sqr = P_smooth_sqr.at[j].set(P_j)
 
     return m_smooth, P_smooth_sqr
 
@@ -185,7 +186,7 @@ def ekf1_sqr_loop_preconditioned(
     # For PrecondIWP, A() and b() don't use h, but accept it for API compatibility
     A_bar = prior.A()
     b_bar = prior.b()
-    Q_sqr_bar = cholesky(prior.Q(), upper=True)
+    Q_sqr_bar = np.linalg.cholesky(prior.Q()).T
     T_h = prior.T(h)
 
     m_seq = [mu_0]
@@ -258,7 +259,7 @@ def rts_sqr_smoother_loop_preconditioned(
     N: int,
     T_h: Array,
 ) -> tuple[Array, Array]:
-    """Run a preconditioned Rauch–Tung–Striebel smoother over ``N`` steps.
+    """Run a preconditioned Rauch-Tung-Striebel smoother over ``N`` steps.
 
     Args:
         m_N: Final filtered state mean (original space).
@@ -277,25 +278,27 @@ def rts_sqr_smoother_loop_preconditioned(
 
     state_dim = m_N.shape[0]
 
-    m_smooth = np.empty((N + 1, state_dim))
-    P_smooth_sqr = np.empty((N + 1, state_dim, state_dim))
-    m_smooth[-1] = m_N
-    P_smooth_sqr[-1] = P_N_sqr
-    m_smooth_bar = np.empty((N + 1, state_dim))
-    P_smooth_sqr_bar = np.empty((N + 1, state_dim, state_dim))
-    m_smooth_bar[-1] = m_N_bar
-    P_smooth_sqr_bar[-1] = P_N_sqr_bar
+    m_smooth = np.zeros((N + 1, state_dim))
+    P_smooth_sqr = np.zeros((N + 1, state_dim, state_dim))
+    m_smooth = m_smooth.at[-1].set(m_N)
+    P_smooth_sqr = P_smooth_sqr.at[-1].set(P_N_sqr)
+    m_smooth_bar = np.zeros((N + 1, state_dim))
+    P_smooth_sqr_bar = np.zeros((N + 1, state_dim, state_dim))
+    m_smooth_bar = m_smooth_bar.at[-1].set(m_N_bar)
+    P_smooth_sqr_bar = P_smooth_sqr_bar.at[-1].set(P_N_sqr_bar)
 
     for j in range(N - 1, -1, -1):
-        (m_smooth_bar[j], P_smooth_sqr_bar[j]), (m_smooth[j], P_smooth_sqr[j]) = (
-            rts_sqr_smoother_step_preconditioned(
-                G_back_seq_bar[j],
-                d_back_seq_bar[j],
-                P_back_seq_sqr_bar[j],
-                m_smooth_bar[j + 1],
-                P_smooth_sqr_bar[j + 1],
-                T_h,
-            )
+        (m_bar_j, P_bar_j), (m_j, P_j) = rts_sqr_smoother_step_preconditioned(
+            G_back_seq_bar[j],
+            d_back_seq_bar[j],
+            P_back_seq_sqr_bar[j],
+            m_smooth_bar[j + 1],
+            P_smooth_sqr_bar[j + 1],
+            T_h,
         )
+        m_smooth_bar = m_smooth_bar.at[j].set(m_bar_j)
+        P_smooth_sqr_bar = P_smooth_sqr_bar.at[j].set(P_bar_j)
+        m_smooth = m_smooth.at[j].set(m_j)
+        P_smooth_sqr = P_smooth_sqr.at[j].set(P_j)
 
     return m_smooth, P_smooth_sqr

@@ -16,18 +16,28 @@ Properties tested:
 
 from __future__ import annotations
 
-import numpy as np
+import jax.numpy as np
+import numpy as onp  # Regular numpy for exceptions
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from numpy.linalg import cholesky
 
 from ode_filters.inference.sqr_gaussian_inference import sqr_marginalization
 
 
-def generate_positive_definite_matrix(n):
-    """Generate a random positive definite matrix of size n x n."""
-    A = np.random.randn(n, n)
+@st.composite
+def generate_positive_definite_matrix_strategy(draw, n):
+    """Generate a random positive definite matrix of size n x n using hypothesis."""
+    # Generate a random matrix using hypothesis
+    A_flat = draw(
+        st.lists(
+            st.floats(-5, 5, allow_nan=False, allow_infinity=False),
+            min_size=n * n,
+            max_size=n * n,
+        )
+    )
+    A = np.array(A_flat).reshape(n, n)
+    # Make it positive definite: A.T @ A + small diagonal
     return A.T @ A + np.eye(n) * 0.1
 
 
@@ -60,9 +70,9 @@ def valid_sqr_marginalization_inputs(
     b = np.array(b_flat)
 
     # Generate Q and convert to Cholesky form
-    Q_temp = generate_positive_definite_matrix(n_obs)
+    Q_temp = draw(generate_positive_definite_matrix_strategy(n_obs))
     Q_temp = Q_temp / np.max(np.abs(Q_temp)) * 10
-    Q = cholesky(Q_temp, upper=True)
+    Q = np.linalg.cholesky(Q_temp).T
 
     # Generate mu
     mu_flat = draw(
@@ -75,9 +85,9 @@ def valid_sqr_marginalization_inputs(
     mu = np.array(mu_flat)
 
     # Generate Sigma and convert to Cholesky form
-    Sigma_temp = generate_positive_definite_matrix(n_state)
+    Sigma_temp = draw(generate_positive_definite_matrix_strategy(n_state))
     Sigma_temp = Sigma_temp / np.max(np.abs(Sigma_temp)) * 10
-    Sigma = cholesky(Sigma_temp, upper=True)
+    Sigma = np.linalg.cholesky(Sigma_temp).T
 
     return A, b, Q, mu, Sigma
 
@@ -146,7 +156,7 @@ def test_sqr_marginalization_property_no_nan_or_inf(inputs):
         n_state_min=1, n_state_max=10, n_obs_min=1, n_obs_max=10
     )
 )
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=500)
 def test_sqr_marginalization_property_numerical_stability_large_dimensions(inputs):
     """Property: Function remains numerically stable for larger dimensions."""
     A, b, Q, mu, Sigma = inputs
@@ -184,7 +194,7 @@ def test_sqr_marginalization_property_reconstruction(inputs):
     """Property: Reconstructed covariance from sqr form is PD."""
     A, b, Q, mu, Sigma = inputs
 
-    mu_z, Sigma_z_sqr = sqr_marginalization(A, b, Q, mu, Sigma)
+    _mu_z, Sigma_z_sqr = sqr_marginalization(A, b, Q, mu, Sigma)
 
     # Reconstruct covariance from Cholesky factor
     Sigma_z_reconstructed = Sigma_z_sqr.T @ Sigma_z_sqr
@@ -196,9 +206,9 @@ def test_sqr_marginalization_property_reconstruction(inputs):
         f"Min eigenvalue: {np.min(eigenvalues)}"
     )
 
-    # Reconstructed should be symmetric
+    # Reconstructed should be symmetric (relaxed tolerance for float32)
     assert np.allclose(
-        Sigma_z_reconstructed, Sigma_z_reconstructed.T, rtol=1e-10, atol=1e-12
+        Sigma_z_reconstructed, Sigma_z_reconstructed.T, rtol=1e-5, atol=1e-7
     ), "Reconstructed covariance should be symmetric"
 
 
@@ -224,14 +234,14 @@ def test_sqr_marginalization_property_square_root_reconstruction(inputs):
     """Property: Sigma_z reconstructs to original covariance when squared."""
     A, b, Q, mu, Sigma = inputs
 
-    mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
+    _mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
 
     # Reconstruct covariance from square-root: Sigma_z.T @ Sigma_z should equal the covariance
     Sigma_z_reconstructed = Sigma_z.T @ Sigma_z
 
-    # Reconstructed should be symmetric
+    # Reconstructed should be symmetric (relaxed tolerance for float32)
     assert np.allclose(
-        Sigma_z_reconstructed, Sigma_z_reconstructed.T, rtol=1e-10, atol=1e-12
+        Sigma_z_reconstructed, Sigma_z_reconstructed.T, rtol=1e-5, atol=1e-7
     ), "Reconstructed covariance should be symmetric"
 
     # Reconstructed should be positive definite
@@ -248,7 +258,7 @@ def test_sqr_marginalization_property_no_singular_square_root(inputs):
     """Property: Square-root matrix is non-singular (no zero diagonal elements)."""
     A, b, Q, mu, Sigma = inputs
 
-    mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
+    _mu_z, Sigma_z = sqr_marginalization(A, b, Q, mu, Sigma)
 
     # For a valid square-root, the matrix should be non-singular
     # This means diagonal elements should be non-zero
@@ -263,5 +273,5 @@ def test_sqr_marginalization_property_no_singular_square_root(inputs):
         assert np.abs(det) > 1e-12, (
             f"Square-root matrix should be non-singular, det={det}"
         )
-    except np.linalg.LinAlgError:
+    except onp.linalg.LinAlgError:
         pytest.fail("Square-root matrix should be non-singular")

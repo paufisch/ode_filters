@@ -1,9 +1,9 @@
 from math import factorial
 
-import numpy as np
+import jax.numpy as np
 import pytest
 
-from ode_filters.priors.GMP_priors import (
+from ode_filters.priors.gmp_priors import (
     IWP,
     PrecondIWP,
     _make_iwp_precond_state_matrices,
@@ -20,14 +20,14 @@ def test_make_iwp_state_matrices_matches_closed_form(q, h):
     expected_A = np.zeros((dim, dim), dtype=float)
     for i in range(dim):
         for j in range(i, dim):
-            expected_A[i, j] = h ** (j - i) / factorial(j - i)
+            expected_A = expected_A.at[i, j].set(h ** (j - i) / factorial(j - i))
 
     expected_Q = np.zeros((dim, dim), dtype=float)
     for i in range(dim):
         for j in range(dim):
             power = 2 * q + 1 - i - j
             denom = (2 * q + 1 - i - j) * factorial(q - i) * factorial(q - j)
-            expected_Q[i, j] = h**power / denom
+            expected_Q = expected_Q.at[i, j].set(h**power / denom)
 
     assert A_fn(h) == pytest.approx(expected_A)
     assert Q_fn(h) == pytest.approx(expected_Q)

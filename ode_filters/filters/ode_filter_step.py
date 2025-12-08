@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import numpy as np
+from jax import Array
 
 from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
 from ..measurement.measurement_models import BaseODEInformation
 
-Array = np.ndarray
 StateFunction = Callable[[Array], Array]
 JacobianFunction = Callable[[Array], Array]
 
@@ -81,7 +80,7 @@ def rts_sqr_smoother_step(
     m_s: Array,
     P_s_sqr: Array,
 ) -> tuple[Array, Array]:
-    """Perform a single Rauch–Tung–Striebel backward smoothing step.
+    """Perform a single Rauch-Tung-Striebel backward smoothing step.
 
     Args:
         G_back: Backward pass gain matrix.
@@ -168,7 +167,7 @@ def rts_sqr_smoother_step_preconditioned(
     P_s_sqr_bar: Array,
     T_t: Array,
 ) -> tuple[tuple[Array, Array], tuple[Array, Array]]:
-    """Perform a single preconditioned Rauch–Tung–Striebel backward smoothing step.
+    """Perform a single preconditioned Rauch-Tung-Striebel backward smoothing step.
 
     Args:
         G_back_bar: Backward pass gain matrix (preconditioned space).
