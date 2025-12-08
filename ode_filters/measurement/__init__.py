@@ -1,6 +1,7 @@
 """Measurement model utilities for ODE filtering."""
 
 from .measurement_models import (
+    BlackBoxMeasurement,
     Conservation,
     Measurement,
     ODEconservation,
@@ -13,9 +14,11 @@ from .measurement_models import (
     SecondOrderODEInformation,
     SecondOrderODEInformationWithHidden,
     SecondOrderODEmeasurement,
+    TransformedMeasurement,
 )
 
 __all__ = [
+    "BlackBoxMeasurement",
     "Conservation",
     "Measurement",
     "ODEInformation",
@@ -28,4 +31,5 @@ __all__ = [
     "SecondOrderODEconservation",
     "SecondOrderODEconservationmeasurement",
     "SecondOrderODEmeasurement",
+    "TransformedMeasurement",
 ]

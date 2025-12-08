@@ -5,8 +5,12 @@ models used in probabilistic ODE solvers. The design separates concerns cleanly:
 
 - **ODE classes** define the dynamical system constraint
 - **Constraint dataclasses** define additional constraints (conservation laws, measurements)
+- **Black-box models** allow arbitrary user-defined measurement functions
+- **Transformed models** apply nonlinear state transformations with proper Jacobians
 
 ## Class Hierarchy
+
+### ODE Information Classes
 
 The module provides four ODE information classes, organized by ODE order and whether
 hidden states are present:
@@ -17,6 +21,13 @@ hidden states are present:
 | `ODEInformationWithHidden`            | 1st       | Yes           | `vf(x, u, *, t) -> dx/dt`        |
 | `SecondOrderODEInformation`           | 2nd       | No            | `vf(x, v, *, t) -> d^2x/dt^2`    |
 | `SecondOrderODEInformationWithHidden` | 2nd       | Yes           | `vf(x, v, u, *, t) -> d^2x/dt^2` |
+
+### Flexible Measurement Classes
+
+| Class                    | Description                                              |
+| ------------------------ | -------------------------------------------------------- |
+| `BlackBoxMeasurement`    | User-defined `g(state, t)` with autodiff Jacobian        |
+| `TransformedMeasurement` | Wraps any model with nonlinear state transformation      |
 
 This separation ensures:
 
@@ -107,6 +118,85 @@ import jax.numpy as np
 cons = Conservation(A=np.array([[1.0, 1.0]]), p=np.array([1.0]))
 
 model = ODEInformation(vf, E0, E1, constraints=[cons])
+```
+
+### Black-Box Measurement Models
+
+For cases where the standard ODE structure doesn't fit, use `BlackBoxMeasurement`
+to define an arbitrary differentiable measurement function. The Jacobian is
+computed automatically via JAX autodiff:
+
+```python
+from ode_filters.measurement import BlackBoxMeasurement
+import jax.numpy as np
+
+# Custom nonlinear observation: observe squared position and velocity
+def custom_g(state, *, t):
+    x, v = state[0], state[1]
+    return np.array([x**2, v])
+
+model = BlackBoxMeasurement(
+    g_func=custom_g,
+    state_dim=6,      # full state dimension (e.g., q=2, d=2 -> D=6)
+    obs_dim=2,        # observation dimension
+    noise=0.01        # measurement noise variance
+)
+
+# Use like any other measurement model
+H, c = model.linearize(state, t=0.0)
+R = model.get_noise(t=0.0)
+```
+
+### Transformed Measurement Models
+
+`TransformedMeasurement` wraps any existing measurement model with a nonlinear
+state transformation `sigma(state)`. The Jacobian is computed correctly via
+the chain rule: `J_total = J_g(sigma(state)) @ J_sigma(state)`.
+
+This is useful for:
+
+- Nonlinear coordinate transformations (e.g., polar to Cartesian)
+- Applying constraints like softmax normalization
+- Feature extraction before measurement
+
+```python
+from ode_filters.measurement import ODEInformation, TransformedMeasurement
+from ode_filters.priors import IWP
+import jax
+import jax.numpy as np
+
+# Base ODE model
+def vf(x, *, t):
+    return -x
+
+prior = IWP(q=2, d=2)
+base_model = ODEInformation(vf, prior.E0, prior.E1)
+
+# Apply softmax to ensure state components sum to 1
+def softmax_transform(state):
+    x = state[:2]  # extract position components
+    x_normalized = jax.nn.softmax(x)
+    return state.at[:2].set(x_normalized)
+
+model = TransformedMeasurement(base_model, softmax_transform)
+
+# Jacobian includes chain rule automatically
+H, c = model.linearize(state, t=0.0)
+```
+
+For performance-critical applications, you can provide an explicit Jacobian:
+
+```python
+def sigma_jacobian(state):
+    # Custom Jacobian implementation
+    ...
+
+model = TransformedMeasurement(
+    base_model,
+    softmax_transform,
+    use_autodiff_jacobian=False,
+    sigma_jacobian=sigma_jacobian
+)
 ```
 
 ---

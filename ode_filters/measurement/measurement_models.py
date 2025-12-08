@@ -525,6 +525,290 @@ class SecondOrderODEInformationWithHidden(BaseODEInformation):
 
 
 # =============================================================================
+# Black-box and transformed measurement models
+# =============================================================================
+
+
+class BlackBoxMeasurement:
+    """Black-box measurement model with autodiff Jacobian computation.
+
+    Allows users to define an arbitrary measurement function g(state, *, t)
+    and automatically computes the Jacobian via JAX autodiff.
+
+    Args:
+        g_func: Measurement function g(state, *, t) -> observation.
+            Must be a differentiable function compatible with JAX.
+        state_dim: Dimension of the state vector.
+        obs_dim: Dimension of the observation vector.
+        noise: Measurement noise (scalar, 1D diagonal, or 2D covariance matrix).
+            Default is 0.0 (no noise).
+
+    Example:
+        >>> def custom_g(state, *, t):
+        ...     # Nonlinear observation: squared position + velocity
+        ...     return jnp.array([state[0]**2, state[1]])
+        >>> measure = BlackBoxMeasurement(custom_g, state_dim=4, obs_dim=2)
+    """
+
+    def __init__(
+        self,
+        g_func: Callable[[Array], Array],
+        state_dim: int,
+        obs_dim: int,
+        noise: float | ArrayLike = 0.0,
+    ):
+        if not callable(g_func):
+            raise TypeError("'g_func' must be callable.")
+        if not isinstance(state_dim, int) or state_dim <= 0:
+            raise ValueError("'state_dim' must be a positive integer.")
+        if not isinstance(obs_dim, int) or obs_dim <= 0:
+            raise ValueError("'obs_dim' must be a positive integer.")
+
+        self._g_func = g_func
+        self._state_dim = state_dim
+        self._obs_dim = obs_dim
+        self._jacobian_g_func = jax.jacfwd(lambda s, t: g_func(s, t=t))
+
+        # Initialize noise matrix
+        noise_arr = np.asarray(noise)
+        if noise_arr.ndim == 0:
+            self._R = float(noise_arr) * np.eye(obs_dim)
+        elif noise_arr.ndim == 1:
+            if noise_arr.shape[0] != obs_dim:
+                raise ValueError(
+                    f"Diagonal noise must have length {obs_dim}, got {noise_arr.shape[0]}."
+                )
+            self._R = np.diag(noise_arr)
+        elif noise_arr.ndim == 2:
+            if noise_arr.shape != (obs_dim, obs_dim):
+                raise ValueError(
+                    f"Noise matrix must have shape ({obs_dim}, {obs_dim}), "
+                    f"got {noise_arr.shape}."
+                )
+            self._R = noise_arr
+        else:
+            raise ValueError("'noise' must be scalar, 1D, or 2D array.")
+
+    @property
+    def R(self) -> Array:
+        """Measurement noise covariance matrix."""
+        return self._R
+
+    @R.setter
+    def R(self, value: ArrayLike) -> None:
+        """Set the measurement noise covariance matrix."""
+        R_arr = np.asarray(value)
+        if R_arr.ndim == 0:
+            self._R = float(R_arr) * np.eye(self._obs_dim)
+        elif R_arr.ndim == 1:
+            if R_arr.shape[0] != self._obs_dim:
+                raise ValueError(
+                    f"Diagonal noise must have length {self._obs_dim}, "
+                    f"got {R_arr.shape[0]}."
+                )
+            self._R = np.diag(R_arr)
+        elif R_arr.ndim == 2:
+            if R_arr.shape != (self._obs_dim, self._obs_dim):
+                raise ValueError(
+                    f"Noise matrix must have shape ({self._obs_dim}, {self._obs_dim}), "
+                    f"got {R_arr.shape}."
+                )
+            self._R = R_arr
+        else:
+            raise ValueError("'noise' must be scalar, 1D, or 2D array.")
+
+    def g(self, state: Array, *, t: float) -> Array:
+        """Evaluate the measurement function.
+
+        Args:
+            state: State vector of length state_dim.
+            t: Current time.
+
+        Returns:
+            Observation vector of length obs_dim.
+        """
+        state_arr = self._validate_state(state)
+        return self._g_func(state_arr, t=t)
+
+    def jacobian_g(self, state: Array, *, t: float) -> Array:
+        """Compute Jacobian of the measurement function via autodiff.
+
+        Args:
+            state: State vector of length state_dim.
+            t: Current time.
+
+        Returns:
+            Jacobian matrix of shape (obs_dim, state_dim).
+        """
+        state_arr = self._validate_state(state)
+        return self._jacobian_g_func(state_arr, t)
+
+    def get_noise(self, *, t: float) -> Array:
+        """Return the measurement noise matrix.
+
+        Args:
+            t: Current time (unused, included for API consistency).
+
+        Returns:
+            Measurement noise covariance matrix.
+        """
+        return self._R
+
+    def linearize(self, state: Array, *, t: float) -> tuple[Array, Array]:
+        """Linearize the measurement model around the given state.
+
+        Args:
+            state: State vector to linearize around.
+            t: Current time.
+
+        Returns:
+            Tuple of (H_t, c_t) where:
+            - H_t is the Jacobian matrix (shape [obs_dim, state_dim])
+            - c_t is the constant term (observation offset)
+        """
+        state_arr = self._validate_state(state)
+        H_t = self.jacobian_g(state_arr, t=t)
+        c_t = self.g(state_arr, t=t) - H_t @ state_arr
+        return H_t, c_t
+
+    def _validate_state(self, state: Array) -> Array:
+        """Validate and convert state to required format."""
+        state_arr = np.asarray(state, dtype=np.float32)
+        if state_arr.ndim != 1:
+            raise ValueError("'state' must be a one-dimensional array.")
+        if state_arr.shape[0] != self._state_dim:
+            raise ValueError(
+                f"'state' must have length {self._state_dim}, got {state_arr.shape[0]}."
+            )
+        return state_arr
+
+
+class TransformedMeasurement:
+    """Wrapper that applies a nonlinear state transformation before measurement.
+
+    Given a base measurement model and a transformation sigma(state),
+    this class computes g(sigma(state)) with proper chain-rule Jacobian:
+        J_total = J_g(sigma(state)) @ J_sigma(state)
+
+    This is useful for:
+    - Nonlinear coordinate transformations
+    - Feature extraction before measurement
+    - Applying learned transformations to the state
+
+    Args:
+        base_model: Base measurement model with g, jacobian_g, get_noise, linearize.
+        sigma: State transformation function sigma(state) -> transformed_state.
+            Must be differentiable and compatible with JAX.
+        use_autodiff_jacobian: If True (default), compute J_sigma via autodiff.
+            If False, expect sigma_jacobian to be provided.
+        sigma_jacobian: Optional explicit Jacobian function for sigma.
+            If provided and use_autodiff_jacobian=False, this will be used
+            instead of autodiff.
+
+    Example:
+        >>> # Apply softmax transformation to state before ODE measurement
+        >>> def softmax_transform(state):
+        ...     # Transform first 3 components via softmax
+        ...     x = state[:3]
+        ...     x_soft = jax.nn.softmax(x)
+        ...     return state.at[:3].set(x_soft)
+        >>> base = ODEInformation(vf, E0, E1)
+        >>> transformed = TransformedMeasurement(base, softmax_transform)
+    """
+
+    def __init__(
+        self,
+        base_model: BaseODEInformation | BlackBoxMeasurement,
+        sigma: Callable[[Array], Array],
+        use_autodiff_jacobian: bool = True,
+        sigma_jacobian: Callable[[Array], Array] | None = None,
+    ):
+        if not callable(sigma):
+            raise TypeError("'sigma' must be callable.")
+
+        self._base = base_model
+        self._sigma = sigma
+        self._use_autodiff = use_autodiff_jacobian
+
+        if use_autodiff_jacobian:
+            self._jacobian_sigma = jax.jacfwd(sigma)
+        elif sigma_jacobian is not None:
+            self._jacobian_sigma = sigma_jacobian
+        else:
+            raise ValueError(
+                "Must provide 'sigma_jacobian' when 'use_autodiff_jacobian=False'."
+            )
+
+    @property
+    def R(self) -> Array:
+        """Measurement noise covariance matrix (delegated to base model)."""
+        return self._base.R
+
+    @R.setter
+    def R(self, value: ArrayLike) -> None:
+        """Set the measurement noise covariance matrix on the base model."""
+        self._base.R = value
+
+    def g(self, state: Array, *, t: float) -> Array:
+        """Evaluate the measurement function on transformed state.
+
+        Computes g(sigma(state), t).
+
+        Args:
+            state: Original state vector.
+            t: Current time.
+
+        Returns:
+            Observation vector.
+        """
+        transformed = self._sigma(state)
+        return self._base.g(transformed, t=t)
+
+    def jacobian_g(self, state: Array, *, t: float) -> Array:
+        """Compute Jacobian with chain rule: J_g(sigma(state)) @ J_sigma(state).
+
+        Args:
+            state: Original state vector.
+            t: Current time.
+
+        Returns:
+            Jacobian matrix of the composed measurement model.
+        """
+        transformed = self._sigma(state)
+        J_base = self._base.jacobian_g(transformed, t=t)
+        J_sigma = self._jacobian_sigma(state)
+        return J_base @ J_sigma
+
+    def get_noise(self, *, t: float) -> Array:
+        """Return the measurement noise matrix (delegated to base model).
+
+        Args:
+            t: Current time.
+
+        Returns:
+            Measurement noise covariance matrix.
+        """
+        return self._base.get_noise(t=t)
+
+    def linearize(self, state: Array, *, t: float) -> tuple[Array, Array]:
+        """Linearize the transformed measurement model.
+
+        Args:
+            state: Original state vector to linearize around.
+            t: Current time.
+
+        Returns:
+            Tuple of (H_t, c_t) where:
+            - H_t is the Jacobian of the composed model
+            - c_t is the constant term (observation offset)
+        """
+        H_t = self.jacobian_g(state, t=t)
+        g_val = self.g(state, t=t)
+        c_t = g_val - H_t @ state
+        return H_t, c_t
+
+
+# =============================================================================
 # Convenience factory functions for backward compatibility
 # =============================================================================
 
