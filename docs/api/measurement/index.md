@@ -24,10 +24,10 @@ hidden states are present:
 
 ### Flexible Measurement Classes
 
-| Class                    | Description                                              |
-| ------------------------ | -------------------------------------------------------- |
-| `BlackBoxMeasurement`    | User-defined `g(state, t)` with autodiff Jacobian        |
-| `TransformedMeasurement` | Wraps any model with nonlinear state transformation      |
+| Class                    | Description                                         |
+| ------------------------ | --------------------------------------------------- |
+| `BlackBoxMeasurement`    | User-defined `g(state, t)` with autodiff Jacobian   |
+| `TransformedMeasurement` | Wraps any model with nonlinear state transformation |
 
 This separation ensures:
 
@@ -122,9 +122,9 @@ model = ODEInformation(vf, E0, E1, constraints=[cons])
 
 ### Black-Box Measurement Models
 
-For cases where the standard ODE structure doesn't fit, use `BlackBoxMeasurement`
-to define an arbitrary differentiable measurement function. The Jacobian is
-computed automatically via JAX autodiff:
+For cases where the standard ODE structure doesn't fit, use `BlackBoxMeasurement` to define an arbitrary differentiable measurement function. The Jacobian is computed automatically via JAX autodiff.
+
+**Example:**
 
 ```python
 from ode_filters.measurement import BlackBoxMeasurement
@@ -149,15 +149,15 @@ R = model.get_noise(t=0.0)
 
 ### Transformed Measurement Models
 
-`TransformedMeasurement` wraps any existing measurement model with a nonlinear
-state transformation `sigma(state)`. The Jacobian is computed correctly via
-the chain rule: `J_total = J_g(sigma(state)) @ J_sigma(state)`.
+`TransformedMeasurement` wraps any existing measurement model with a nonlinear state transformation `sigma(state)`. The Jacobian is computed correctly via the chain rule: `J_total = J_g(sigma(state)) @ J_sigma(state)`.
 
-This is useful for:
+**Use cases:**
 
 - Nonlinear coordinate transformations (e.g., polar to Cartesian)
 - Applying constraints like softmax normalization
 - Feature extraction before measurement
+
+**Example with autodiff Jacobian:**
 
 ```python
 from ode_filters.measurement import ODEInformation, TransformedMeasurement
@@ -184,12 +184,14 @@ model = TransformedMeasurement(base_model, softmax_transform)
 H, c = model.linearize(state, t=0.0)
 ```
 
-For performance-critical applications, you can provide an explicit Jacobian:
+**Example with explicit Jacobian:**
+
+For performance-critical applications, you can provide a custom Jacobian:
 
 ```python
 def sigma_jacobian(state):
     # Custom Jacobian implementation
-    ...
+    return jax.jacfwd(softmax_transform)(state)
 
 model = TransformedMeasurement(
     base_model,
@@ -204,9 +206,9 @@ model = TransformedMeasurement(
 ## API Reference
 
 ::: ode_filters.measurement
-    handler: python
-    options:
-        show_object_full_path: true
-        show_source: false
-        members_order: source
-        show_signature_annotations: true
+handler: python
+options:
+show_object_full_path: true
+show_source: false
+members_order: source
+show_signature_annotations: true
