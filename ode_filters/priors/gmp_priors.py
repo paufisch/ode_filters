@@ -41,6 +41,7 @@ class BasePrior(ABC):
         basis = np.eye(q + 1)
         self._E0 = np.kron(basis[0:1], eye_d)
         self._E1 = np.kron(basis[1:2], eye_d)
+        self._E2 = np.kron(basis[2:3], eye_d) if q >= 2 else None
 
     @property
     def E0(self) -> Array:
@@ -49,8 +50,13 @@ class BasePrior(ABC):
 
     @property
     def E1(self) -> Array:
-        """Derivative extraction matrix (shape [d, (q+1)*d])."""
+        """First derivative extraction matrix (shape [d, (q+1)*d])."""
         return self._E1
+
+    @property
+    def E2(self) -> Array | None:
+        """Second derivative extraction matrix (shape [d, (q+1)*d]), or None if q < 2."""
+        return self._E2
 
     @staticmethod
     def _validate_h(h: float) -> float:
@@ -72,15 +78,24 @@ class BasePrior(ABC):
 
 
 def taylor_mode_initialization(
-    vf: VectorField, inits: ArrayLike, q: int, t0: float = 0.0
+    vf: VectorField,
+    inits: ArrayLike | tuple[ArrayLike, ...],
+    q: int,
+    t0: float = 0.0,
+    order: int = 1,
 ) -> tuple[Array, Array]:
     """Return flattened Taylor-mode coefficients produced via JAX Jet.
 
     Args:
         vf: Vector field whose Taylor coefficients are required.
-        inits: Initial value around which the expansion takes place.
+            For order=1: vf(x, *, t) -> dx/dt
+            For order=2: vf(x, dx, *, t) -> d²x/dt²
+        inits: Initial value(s) around which the expansion takes place.
+            For order=1: x0 (initial state)
+            For order=2: (x0, dx0) tuple of initial state and velocity
         q: Number of higher-order coefficients to compute.
         t0: Initial time for Taylor expansion (default 0.0).
+        order: ODE order (1 or 2, default 1).
 
     Returns:
         Tuple of (coefficients, covariance) where:
@@ -92,17 +107,39 @@ def taylor_mode_initialization(
     q = index(q)
     if q < 0:
         raise ValueError("q must be a non-negative integer.")
+    order = index(order)
+    if order not in (1, 2):
+        raise ValueError("order must be 1 or 2.")
 
-    def _vf(x):
-        return vf(x, t=t0)
+    # Normalize inits to a tuple of initial derivatives: (x0,) or (x0, dx0)
+    if order == 1:
+        init_derivs = (np.asarray(inits),)
+    else:
+        if not isinstance(inits, (tuple, list)) or len(inits) != order:
+            raise ValueError(
+                f"For order={order}, inits must be a tuple of {order} arrays."
+            )
+        init_derivs = tuple(np.asarray(x) for x in inits)
+        if not all(x.shape == init_derivs[0].shape for x in init_derivs):
+            raise ValueError("All initial derivatives must have the same shape.")
 
-    base_state = np.asarray(inits)
-    coefficients: list[Array] = [base_state]
+    d = init_derivs[0].shape[0]
+
+    # Augmented state: [x0, dx0, ...] and augmented vector field
+    # For order k: y = [x, v1, ..., v_{k-1}], dy/dt = [v1, ..., v_{k-1}, vf(...)]
+    base_state = np.concatenate(init_derivs)
+
+    def aug_vf(y):
+        derivs = [y[i * d : (i + 1) * d] for i in range(order)]
+        highest_deriv = vf(*derivs, t=t0)
+        return np.concatenate([*derivs[1:], highest_deriv])
+
+    coefficients: list[Array] = [init_derivs[0]]
     series_terms: list[Array] = []
 
-    for _order in range(q):
+    for _ in range(q):
         primals_out, series_out = jax.experimental.jet.jet(
-            _vf,
+            aug_vf,
             primals=(base_state,),
             series=(tuple(series_terms),),
         )
@@ -111,7 +148,8 @@ def taylor_mode_initialization(
         updated_series.extend(np.asarray(term) for term in series_out)
         series_terms = updated_series
 
-        coefficients.append(series_terms[-1])
+        # Extract x-part (first d components) from the augmented derivative
+        coefficients.append(series_terms[-1][:d])
 
     leaves = jax.tree_util.tree_leaves(coefficients)
     init = np.concatenate([np.ravel(arr) for arr in leaves])
@@ -463,15 +501,26 @@ class MaternPrior(BasePrior):
 
 
 class JointPrior(BasePrior):
-    """Joint prior combining independent state (x) and input (u) priors.
+    """Joint prior combining independent state (x) and hidden/input (u) priors.
 
-    Creates a block-diagonal prior structure where state and input evolution
+    Creates a block-diagonal prior structure where state and hidden evolution
     are independent. The resulting matrices are block-diagonal with zeros
     in the off-diagonal blocks.
 
+    For joint state-parameter estimation, the hidden state u can represent
+    unknown parameters that appear in the ODE but evolve according to their
+    own prior (e.g., IWP or Matern).
+
+    Projection matrices:
+        E0: Extracts [x, u] - zeroth derivatives of both (shape [d_x + d_u, D])
+        E0_x: Extracts x only - zeroth derivative of state (shape [d_x, D])
+        E0_hidden: Extracts u only - zeroth derivative of hidden (shape [d_u, D])
+        E1: Extracts dx/dt - first derivative of state x (shape [d_x, D])
+        E2: Extracts d^2x/dt^2 - second derivative of x (shape [d_x, D]), if q >= 2
+
     Args:
         prior_x: BasePrior instance for state evolution.
-        prior_u: BasePrior instance for input evolution.
+        prior_u: BasePrior instance for hidden/input evolution.
     """
 
     def __init__(self, prior_x: BasePrior, prior_u: BasePrior) -> None:
@@ -489,8 +538,39 @@ class JointPrior(BasePrior):
         self._zeros = np.zeros((_D_x, _D_u))
         zeros_up = np.zeros((prior_x._dim, _D_u))
         zeros_down = np.zeros((prior_u._dim, _D_x))
+
+        # E0 extracts [x, u] - both zeroth derivatives (for measurements on both)
         self._E0 = np.block([[prior_x.E0, zeros_up], [zeros_down, prior_u.E0]])
+
+        # E0_x extracts x only (for ODE vector field)
+        self._E0_x = np.block([[prior_x.E0, zeros_up]])
+
+        # E0_hidden extracts u only (for hidden states in vector field)
+        self._E0_hidden = np.block([[zeros_down, prior_u.E0]])
+
+        # E1 extracts dx/dt (first derivative of x, for ODE constraint)
         self._E1 = np.block([[prior_x.E1, zeros_up]])
+
+        # E2 for second-order systems (extracts d^2x/dt^2 from state x)
+        self._E2 = (
+            np.block([[prior_x.E2, zeros_up]]) if prior_x.E2 is not None else None
+        )
+
+    @property
+    def E0_x(self) -> Array:
+        """State extraction matrix for x only (shape [d_x, D]).
+
+        Use this as E0 in the measurement model when you have hidden states.
+        """
+        return self._E0_x
+
+    @property
+    def E0_hidden(self) -> Array:
+        """Hidden state extraction matrix for u only (shape [d_u, D]).
+
+        Use this as E0_hidden in the measurement model.
+        """
+        return self._E0_hidden
 
     def A(self, h: float) -> Array:
         """Return the block-diagonal state transition matrix.
