@@ -49,10 +49,21 @@ class Conservation:
 class Measurement:
     """Time-varying linear measurement: A @ x = z[t] (active only at specified times).
 
+    This constraint is only active when the filter's current time matches one of
+    the measurement times in z_t. Time matching uses tolerance-based comparison
+    (not exact equality) to handle floating-point discrepancies.
+
+    Important:
+        When creating time grids, use the same linspace implementation (preferably
+        jax.numpy.linspace) for both measurement times (z_t) and filter time steps.
+        NumPy and JAX linspace can produce slightly different values (~1e-8 differences)
+        which may cause measurements to be missed with exact comparison.
+
     Args:
         A: Measurement matrix (shape [k, d]).
         z: Measurement values (shape [n, k]).
-        z_t: Measurement times (shape [n]).
+        z_t: Measurement times (shape [n]). Should use jax.numpy.linspace for
+            consistency with the filter's internal time grid.
         noise: Measurement noise variance (scalar or [k] or [k, k]).
     """
 
@@ -68,32 +79,40 @@ class Measurement:
             raise ValueError(
                 f"'z' must be 2D with shape (n, {self.A.shape[0]}), got {self.z.shape}."
             )
+        # Normalize z_t to 1D
         z_t = self.z_t
         if z_t.ndim == 2 and z_t.shape[1] == 1:
-            # Allow (n, 1) shape, will be reshaped on access
-            pass
+            object.__setattr__(self, "z_t", z_t.reshape(-1))
         elif z_t.ndim != 1:
             raise ValueError(
                 f"'z_t' must be 1D shape (n,) or 2D shape (n, 1), got {z_t.shape}."
             )
-        if self._get_times().shape[0] != self.z.shape[0]:
+        if self.z_t.shape[0] != self.z.shape[0]:
             raise ValueError(
                 f"'z_t' length must match number of measurements {self.z.shape[0]}, "
-                f"got {self._get_times().shape[0]}."
+                f"got {self.z_t.shape[0]}."
             )
 
-    def _get_times(self) -> Array:
-        """Get times array, handling (n, 1) shape."""
-        if self.z_t.ndim == 2:
-            return self.z_t.reshape(-1)
-        return self.z_t
+    def find_index(
+        self, t: float, rtol: float = 1e-5, atol: float = 1e-7
+    ) -> int | None:
+        """Find measurement index for time t, or None if not found.
 
-    def find_index(self, t: float) -> int | None:
-        """Find measurement index for time t, or None if not found."""
-        matches = np.where(self._get_times() == t)[0]
-        if matches.size == 0:
-            return None
-        return int(matches[0])
+        Uses binary search with tolerance for robust floating-point comparison.
+        Times are assumed to be sorted.
+
+        Note: Default tolerances (rtol=1e-5, atol=1e-7) are set to handle
+        discrepancies between NumPy and JAX linspace implementations, which
+        can differ by ~1e-8 for typical time grids.
+        """
+        idx = np.searchsorted(self.z_t, t)
+        # Check the found position and neighbors for a close match
+        for i in [idx, idx - 1]:
+            if 0 <= i < len(self.z_t) and np.isclose(
+                self.z_t[i], t, rtol=rtol, atol=atol
+            ):
+                return int(i)
+        return None
 
     def residual(self, x: Array, t: float) -> Array | None:
         """Compute residual: A @ x - z[t], or None if no measurement at t."""
