@@ -608,3 +608,154 @@ class JointPrior(BasePrior):
         return np.block(
             [[self._prior_x.Q(h), self._zeros], [self._zeros.T, self._prior_u.Q(h)]]
         )
+
+
+class PrecondJointPrior:
+    """Joint prior for preconditioned priors combining state (x) and hidden (u).
+
+    This is the preconditioned version of JointPrior, designed specifically for
+    PrecondIWP priors. The matrices A(), b(), Q() are constant (stepsize-independent),
+    with the stepsize dependence absorbed into T(h).
+
+    Note: Mixing preconditioned and non-preconditioned priors is not supported
+    and would lead to inconsistent filter behavior.
+
+    Projection matrices:
+        E0: Extracts [x, u] - zeroth derivatives of both (shape [d_x + d_u, D])
+        E0_x: Extracts x only - zeroth derivative of state (shape [d_x, D])
+        E0_hidden: Extracts u only - zeroth derivative of hidden (shape [d_u, D])
+        E1: Extracts dx/dt - first derivative of state x (shape [d_x, D])
+        E2: Extracts d^2x/dt^2 - second derivative of x (shape [d_x, D]), if q >= 2
+
+    Args:
+        prior_x: PrecondIWP instance for state evolution.
+        prior_u: PrecondIWP instance for hidden/input evolution.
+
+    Example:
+        >>> prior_x = PrecondIWP(q=2, d=2)
+        >>> prior_u = PrecondIWP(q=1, d=1)
+        >>> joint = PrecondJointPrior(prior_x, prior_u)
+        >>> A = joint.A()      # Constant transition matrix
+        >>> T_h = joint.T(0.1) # Stepsize-dependent transformation
+    """
+
+    def __init__(self, prior_x: PrecondIWP, prior_u: PrecondIWP) -> None:
+        if not isinstance(prior_x, PrecondIWP):
+            raise TypeError(
+                f"prior_x must be PrecondIWP instance, got {type(prior_x)}. "
+                "Use JointPrior for non-preconditioned priors."
+            )
+        if not isinstance(prior_u, PrecondIWP):
+            raise TypeError(
+                f"prior_u must be PrecondIWP instance, got {type(prior_u)}. "
+                "Use JointPrior for non-preconditioned priors."
+            )
+
+        self._prior_x = prior_x
+        self._prior_u = prior_u
+
+        # Store dimensions
+        self.q = prior_x.q  # Use state prior's q for compatibility
+        self._dim = prior_x._dim + prior_u._dim
+
+        # Precompute dimensions and zero blocks for efficiency
+        _D_x = (prior_x.q + 1) * prior_x._dim
+        _D_u = (prior_u.q + 1) * prior_u._dim
+        self._D_x = _D_x
+        self._D_u = _D_u
+        self._zeros = np.zeros((_D_x, _D_u))
+        zeros_up = np.zeros((prior_x._dim, _D_u))
+        zeros_down = np.zeros((prior_u._dim, _D_x))
+
+        # E0 extracts [x, u] - both zeroth derivatives (for measurements on both)
+        self._E0 = np.block([[prior_x.E0, zeros_up], [zeros_down, prior_u.E0]])
+
+        # E0_x extracts x only (for ODE vector field)
+        self._E0_x = np.block([[prior_x.E0, zeros_up]])
+
+        # E0_hidden extracts u only (for hidden states in vector field)
+        self._E0_hidden = np.block([[zeros_down, prior_u.E0]])
+
+        # E1 extracts dx/dt (first derivative of x, for ODE constraint)
+        self._E1 = np.block([[prior_x.E1, zeros_up]])
+
+        # E2 for second-order systems (extracts d^2x/dt^2 from state x)
+        self._E2 = (
+            np.block([[prior_x.E2, zeros_up]]) if prior_x.E2 is not None else None
+        )
+
+        # Precompute drift vector (always zero for IWP)
+        self._b = np.zeros(_D_x + _D_u)
+
+    @property
+    def E0(self) -> Array:
+        """Combined state extraction matrix (shape [d_x + d_u, D])."""
+        return self._E0
+
+    @property
+    def E0_x(self) -> Array:
+        """State extraction matrix for x only (shape [d_x, D]).
+
+        Use this as E0 in the measurement model when you have hidden states.
+        """
+        return self._E0_x
+
+    @property
+    def E0_hidden(self) -> Array:
+        """Hidden state extraction matrix for u only (shape [d_u, D]).
+
+        Use this as E0_hidden in the measurement model.
+        """
+        return self._E0_hidden
+
+    @property
+    def E1(self) -> Array:
+        """First derivative extraction matrix for x (shape [d_x, D])."""
+        return self._E1
+
+    @property
+    def E2(self) -> Array | None:
+        """Second derivative extraction matrix for x (shape [d_x, D]), or None."""
+        return self._E2
+
+    def A(self) -> Array:
+        """Return the constant block-diagonal transition matrix.
+
+        Returns:
+            Block-diagonal transition matrix with state and hidden blocks.
+        """
+        return np.block(
+            [[self._prior_x.A(), self._zeros], [self._zeros.T, self._prior_u.A()]]
+        )
+
+    def b(self) -> Array:
+        """Return the zero drift vector.
+
+        Returns:
+            Zero drift vector (shape [D_x + D_u]).
+        """
+        return self._b
+
+    def Q(self) -> Array:
+        """Return the constant block-diagonal diffusion matrix.
+
+        Returns:
+            Block-diagonal diffusion matrix with state and hidden blocks.
+        """
+        return np.block(
+            [[self._prior_x.Q(), self._zeros], [self._zeros.T, self._prior_u.Q()]]
+        )
+
+    def T(self, h: float) -> Array:
+        """Return the stepsize-dependent block-diagonal transformation matrix.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Block-diagonal preconditioning transformation matrix.
+        """
+        T_x = self._prior_x.T(h)
+        T_u = self._prior_u.T(h)
+        zeros_xu = np.zeros((self._D_x, self._D_u))
+        return np.block([[T_x, zeros_xu], [zeros_xu.T, T_u]])
