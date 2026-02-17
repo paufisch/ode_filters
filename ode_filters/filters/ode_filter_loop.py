@@ -27,6 +27,7 @@ LoopResult = tuple[
     Array,
     Array,
     Array,
+    float,
 ]
 
 
@@ -49,7 +50,7 @@ def ekf1_sqr_loop(
         N: Number of filter steps.
 
     Returns:
-        Tuple of 9 arrays containing filtered estimates and intermediate results.
+        Tuple of 9 arrays and a scalar log marginal likelihood.
     """
 
     m_seq = [mu_0]
@@ -67,6 +68,8 @@ def ekf1_sqr_loop(
     b_h = prior.b(h)
     Q_h_sqr = np.linalg.cholesky(prior.Q(h)).T
 
+    log_likelihood = 0.0
+
     for i in range(N):
         (
             (m_pred, P_pred_sqr),
@@ -82,6 +85,12 @@ def ekf1_sqr_loop(
             measure,
             t=ts[i + 1],
         )
+
+        Pz = Pz_sqr.T @ Pz_sqr
+        log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
+        maha = mz @ np.linalg.solve(Pz, mz)
+        obs_dim = mz.shape[0]
+        log_likelihood += -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
 
         m_pred_seq.append(m_pred)
         P_pred_seq_sqr.append(P_pred_sqr)
@@ -103,6 +112,7 @@ def ekf1_sqr_loop(
         P_back_seq_sqr,
         mz_seq,
         Pz_seq_sqr,
+        log_likelihood,
     )
 
 
@@ -167,6 +177,8 @@ def ekf1_sqr_loop_preconditioned(
     Array,
     Array,
     Array,
+    Array,
+    float,
 ]:
     """Run a preconditioned square-root EKF over ``N`` observation steps.
 
@@ -179,7 +191,8 @@ def ekf1_sqr_loop_preconditioned(
         N: Number of filter steps.
 
     Returns:
-        Tuple of 11 arrays containing original and preconditioned estimates.
+        Tuple of 11 arrays, preconditioning matrix, and scalar log marginal
+        likelihood.
     """
 
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
@@ -202,6 +215,8 @@ def ekf1_sqr_loop_preconditioned(
     mz_seq = []
     Pz_seq_sqr = []
 
+    log_likelihood = 0.0
+
     for i in range(N):
         (
             (m_pred_seq_bar_i, P_pred_seq_sqr_bar_i),
@@ -219,6 +234,12 @@ def ekf1_sqr_loop_preconditioned(
             measure,
             t=ts[i + 1],
         )
+
+        Pz = Pz_seq_sqr_i.T @ Pz_seq_sqr_i
+        log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_seq_sqr_i))))
+        maha = mz_seq_i @ np.linalg.solve(Pz, mz_seq_i)
+        obs_dim = mz_seq_i.shape[0]
+        log_likelihood += -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
 
         m_pred_seq_bar.append(m_pred_seq_bar_i)
         P_pred_seq_sqr_bar.append(P_pred_seq_sqr_bar_i)
@@ -245,6 +266,7 @@ def ekf1_sqr_loop_preconditioned(
         mz_seq,
         Pz_seq_sqr,
         T_h,
+        log_likelihood,
     )
 
 
