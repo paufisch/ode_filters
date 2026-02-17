@@ -329,14 +329,12 @@ class PrecondIWP(BasePrior):
 def _matern_companion_form(length_scale: float, q: int) -> tuple[Array, Array, float]:
     """Construct the companion form matrices for a Matern GP prior.
 
-    Reference: Sarkka & Hartikainen (2010, equations 12.34-12.35)
-
     Parameters
     ----------
     length_scale : float
         Length scale parameter.
     q : int
-        Smoothness parameter exponent (nu = q + 1/2, q in Z).
+        Smoothness parameter exponent (nu = q + 1/2, q in 1,2,3,...).
 
     Returns
     -------
@@ -472,7 +470,7 @@ class MaternPrior(BasePrior):
         Returns:
             State transition matrix (shape [n, n]).
         """
-        A_h, _ = self.A_and_Q(self._validate_h(h))
+        A_h, _ = self.A_and_Q(h)
         return np.kron(A_h, self._id)
 
     def b(self, h: float) -> Array:
@@ -495,7 +493,7 @@ class MaternPrior(BasePrior):
         Returns:
             Diffusion matrix (shape [n, n]).
         """
-        _, Q_h = self.A_and_Q(self._validate_h(h))
+        _, Q_h = self.A_and_Q(h)
         Q_h = 0.5 * (Q_h + Q_h.T)
         return np.kron(Q_h, self.xi)
 
