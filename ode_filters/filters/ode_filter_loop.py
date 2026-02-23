@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import jax
 import jax.numpy as np
 from jax import Array
 
@@ -86,9 +87,9 @@ def ekf1_sqr_loop(
             t=ts[i + 1],
         )
 
-        Pz = Pz_sqr.T @ Pz_sqr
         log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
-        maha = mz @ np.linalg.solve(Pz, mz)
+        v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
+        maha = v @ v
         obs_dim = mz.shape[0]
         log_likelihood += -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
 
@@ -235,9 +236,9 @@ def ekf1_sqr_loop_preconditioned(
             t=ts[i + 1],
         )
 
-        Pz = Pz_seq_sqr_i.T @ Pz_seq_sqr_i
         log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_seq_sqr_i))))
-        maha = mz_seq_i @ np.linalg.solve(Pz, mz_seq_i)
+        v = jax.scipy.linalg.solve_triangular(Pz_seq_sqr_i.T, mz_seq_i, lower=True)
+        maha = v @ v
         obs_dim = mz_seq_i.shape[0]
         log_likelihood += -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
 
