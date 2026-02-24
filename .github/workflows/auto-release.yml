@@ -87,4 +87,5 @@ jobs:
         with:
           tag_name: v${{ steps.current_version.outputs.version }}
           name: Release v${{ steps.current_version.outputs.version }}
+          draft: false
           generate_release_notes: true # Auto-generates notes from commits/PRs
