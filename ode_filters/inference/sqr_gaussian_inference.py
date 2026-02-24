@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import jax.numpy as np
+import jax.scipy.linalg
 from jax import Array
 
 
@@ -104,10 +105,13 @@ def sqr_inversion(
     n_state = A.shape[1]
 
     Sigma_z_sqr = np.atleast_2d(Sigma_z_sqr)
-    Sigma_z = Sigma_z_sqr.T @ Sigma_z_sqr
-    Sigma = Sigma_sqr.T @ Sigma_sqr
-
-    K = np.linalg.solve(Sigma_z, A @ Sigma).T
+    # old update
+    # Sigma_z = Sigma_z_sqr.T @ Sigma_z_sqr
+    # Sigma = Sigma_sqr.T @ Sigma_sqr
+    # K = np.linalg.solve(Sigma_z, A @ Sigma).T
+    cross = (A @ Sigma_sqr.T) @ Sigma_sqr
+    Z = jax.scipy.linalg.solve_triangular(Sigma_z_sqr.T, cross, lower=True)
+    K = jax.scipy.linalg.solve_triangular(Sigma_z_sqr, Z, lower=False).T
     d = mu - K @ mu_z
     B = np.eye(n_state) - K @ A
     C = np.concatenate([Sigma_sqr @ B.T, (Q_sqr @ K.T).reshape(-1, n_state)], axis=0)

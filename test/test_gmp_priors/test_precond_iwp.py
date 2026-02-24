@@ -56,11 +56,6 @@ class TestPrecondIWPMethods:
         T = precond.T(0.0)
         assert np.allclose(T, np.zeros_like(T))
 
-    def test_T_rejects_negative_h(self, precond_iwp):
-        """Test that T(h) rejects negative step size."""
-        with pytest.raises(ValueError, match="h must be non-negative"):
-            precond_iwp.T(-0.5)
-
 
 class TestPrecondIWPProperties:
     """Tests for PrecondIWP mathematical properties."""

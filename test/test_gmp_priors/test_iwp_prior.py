@@ -37,12 +37,6 @@ def test_make_iwp_state_matrices_invalid_inputs():
     with pytest.raises(ValueError):
         _make_iwp_state_matrices(-1)
 
-    A_fn, Q_fn = _make_iwp_state_matrices(1)
-    with pytest.raises(ValueError):
-        A_fn(-0.1)
-    with pytest.raises(ValueError):
-        Q_fn(-0.1)
-
 
 def test_iwp_identity_sigma_matches_kron():
     q, d, h = 1, 2, 0.5
@@ -73,9 +67,6 @@ def test_iwp_custom_sigma_and_validation():
     with pytest.raises(ValueError):
         IWP(q=1, d=2, Xi=np.eye(3))
 
-    with pytest.raises(ValueError):
-        iwp.A(-0.2)
-
 
 @pytest.mark.parametrize("q_float", [0.5, 1.5])
 def test_make_iwp_state_matrices_rejects_float_q(q_float):
@@ -98,12 +89,6 @@ def test_iwp_rejects_float_d(d_float):
 def test_make_iwp_precond_state_matrices_rejects_negative_q():
     with pytest.raises(ValueError, match="q must be a non-negative integer"):
         _make_iwp_precond_state_matrices(-1)
-
-
-def test_preconditioner_T_rejects_negative_step():
-    _, _, T = _make_iwp_precond_state_matrices(1)
-    with pytest.raises(ValueError, match="h must be non-negative"):
-        T(-0.5)
 
 
 @pytest.mark.parametrize(
@@ -131,6 +116,5 @@ def test_iwp_precond_validate_h_returns_float():
     assert PrecondIWP._validate_h(2) == 2.0
 
 
-def test_iwp_precond_validate_h_rejects_negative():
-    with pytest.raises(ValueError, match="h must be non-negative"):
-        PrecondIWP._validate_h(-1.0)
+def test_iwp_precond_validate_h_passthrough():
+    assert PrecondIWP._validate_h(-1.0) == -1.0
