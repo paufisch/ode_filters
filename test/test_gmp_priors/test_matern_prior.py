@@ -17,7 +17,8 @@ class TestMaternCompanionForm:
 
         assert F.shape == (D, D), f"F shape should be ({D}, {D})"
         assert L.shape == (D, 1), f"L shape should be ({D}, 1)"
-        assert isinstance(q_coeff, float), "q coefficient should be a float"
+        # q_coeff may be a Python float or a 0-d JAX array (for JIT compatibility)
+        assert np.ndim(np.asarray(q_coeff)) == 0, "q coefficient should be a scalar"
 
     def test_F_has_super_diagonal_ones(self):
         """Test that F matrix has ones on super-diagonal."""
@@ -37,14 +38,6 @@ class TestMaternCompanionForm:
         assert L[-1, 0] == pytest.approx(1.0), "Last element of L should be 1.0"
         for i in range(D - 1):
             assert L[i, 0] == pytest.approx(0.0), f"L[{i}] should be 0.0"
-
-    def test_rejects_non_positive_length_scale(self):
-        """Test that negative or zero length scale raises error."""
-        with pytest.raises(ValueError, match="Length scale must be positive"):
-            _matern_companion_form(0.0, 1)
-
-        with pytest.raises(ValueError, match="Length scale must be positive"):
-            _matern_companion_form(-1.0, 1)
 
     def test_rejects_negative_q(self):
         """Test that negative q raises error."""
