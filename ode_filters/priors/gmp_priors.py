@@ -336,8 +336,6 @@ def _matern_companion_form(length_scale: float, q: int) -> tuple[Array, Array, f
     q_coeff : float
         Diffusion coefficient.
     """
-    if length_scale <= 0:
-        raise ValueError("Length scale must be positive.")
     if not isinstance(q, int) or q < 0:
         raise ValueError("Smoothness exponent q must be a non-negative integer.")
 
@@ -368,9 +366,9 @@ def _matern_companion_form(length_scale: float, q: int) -> tuple[Array, Array, f
     # assuming sigma = 1
     numerator = float(factorial(D - 1) ** 2)
     denominator = float(factorial(2 * D - 2))
-    q = (numerator / denominator) * ((2.0 * lam) ** (2 * D - 1))
+    q_coeff = (numerator / denominator) * ((2.0 * lam) ** (2 * D - 1))
 
-    return F, L, float(q)
+    return F, L, q_coeff
 
 
 class MaternPrior(BasePrior):
