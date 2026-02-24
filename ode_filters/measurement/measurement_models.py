@@ -136,7 +136,7 @@ class Measurement:
         """Get noise covariance matrix."""
         noise = np.asarray(self.noise)
         if noise.ndim == 0:
-            return float(noise) * np.eye(self.dim)
+            return noise * np.eye(self.dim)
         elif noise.ndim == 1:
             return np.diag(noise)
         return noise
@@ -223,7 +223,7 @@ class BaseODEInformation(ABC):
         expected_dim = self._base_R.shape[0]
 
         if R_arr.ndim == 0:
-            self._base_R = float(R_arr) * np.eye(expected_dim)
+            self._base_R = R_arr * np.eye(expected_dim)
         elif R_arr.ndim == 1:
             if R_arr.shape[0] != expected_dim:
                 raise ValueError(
@@ -591,7 +591,7 @@ class BlackBoxMeasurement:
         # Initialize noise matrix
         noise_arr = np.asarray(noise)
         if noise_arr.ndim == 0:
-            self._R = float(noise_arr) * np.eye(obs_dim)
+            self._R = noise_arr * np.eye(obs_dim)
         elif noise_arr.ndim == 1:
             if noise_arr.shape[0] != obs_dim:
                 raise ValueError(
@@ -618,7 +618,7 @@ class BlackBoxMeasurement:
         """Set the measurement noise covariance matrix."""
         R_arr = np.asarray(value)
         if R_arr.ndim == 0:
-            self._R = float(R_arr) * np.eye(self._obs_dim)
+            self._R = R_arr * np.eye(self._obs_dim)
         elif R_arr.ndim == 1:
             if R_arr.shape[0] != self._obs_dim:
                 raise ValueError(
