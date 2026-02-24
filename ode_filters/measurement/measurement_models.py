@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import jax
 import jax.numpy as np
@@ -11,6 +12,40 @@ from jax.typing import ArrayLike
 
 # Default measurement noise for observations
 DEFAULT_MEASUREMENT_NOISE = 1e-6
+
+# Large variance for inactive measurement rows (effectively disables them)
+_INACTIVE_VARIANCE = 1e12
+
+
+class ScanData(NamedTuple):
+    """Pre-computed data for scan-based filtering.
+
+    This structure holds all measurement-related data pre-computed for each
+    time step, enabling efficient use with jax.lax.scan.
+
+    Attributes:
+        H_meas: Measurement Jacobians, shape [N, max_meas_dim, state_dim].
+            Zero rows for inactive measurements.
+        c_meas: Measurement residual offsets, shape [N, max_meas_dim].
+            Zero for inactive measurements.
+        R_meas: Measurement noise covariance (NOT square root),
+            shape [N, max_meas_dim, max_meas_dim]. Large variance for inactive.
+            Note: This matches the original get_noise() behavior which returns
+            the full covariance matrix, not its square root.
+        obs_mask: Boolean mask for active observations, shape [N, max_obs_dim].
+            True for active rows (ODE + Conservation always active).
+        max_obs_dim: Total observation dimension (d + cons_dim + max_meas_dim).
+        fixed_dim: Fixed observation dimension (d + cons_dim, always active).
+        ts: Time values for each step, shape [N].
+    """
+
+    H_meas: Array
+    c_meas: Array
+    R_meas: Array
+    obs_mask: Array
+    max_obs_dim: int
+    fixed_dim: int
+    ts: Array
 
 
 @dataclass(frozen=True)
@@ -340,6 +375,206 @@ class BaseODEInformation(ABC):
                 f"'state' must have length {self._state_dim}, got {state_arr.shape[0]}."
             )
         return state_arr
+
+    # =========================================================================
+    # Scan-compatible methods for jax.lax.scan
+    # =========================================================================
+
+    def _get_fixed_dim(self) -> int:
+        """Get the fixed observation dimension (ODE + Conservation)."""
+        conservations = [c for c in self._constraints if isinstance(c, Conservation)]
+        cons_dim = sum(c.dim for c in conservations)
+        return self._d + cons_dim
+
+    def _get_max_meas_dim(self) -> int:
+        """Get the maximum measurement dimension across all Measurement constraints."""
+        measurements = [c for c in self._constraints if isinstance(c, Measurement)]
+        return sum(m.dim for m in measurements)
+
+    def _linearize_fixed(self, state: Array, *, t: float) -> tuple[Array, Array]:
+        """Linearize ODE + Conservation parts only (fixed shape, no find_index).
+
+        This method computes the Jacobian and residual for the ODE constraint
+        and any Conservation constraints, which have fixed dimensions regardless
+        of time. It does not include Measurement constraints.
+
+        Args:
+            state: State vector to linearize around.
+            t: Current time.
+
+        Returns:
+            Tuple of (H_fixed, c_fixed) where:
+            - H_fixed has shape [fixed_dim, state_dim]
+            - c_fixed has shape [fixed_dim]
+        """
+        state_arr = self._validate_state(state)
+        x = self._E0 @ state_arr
+
+        # ODE Jacobian and residual
+        H_ode = self._ode_jacobian(state_arr, t=t)
+        g_ode = self._ode_residual(state_arr, t=t)
+
+        jacobians = [H_ode]
+        residuals = [g_ode]
+
+        # Conservation constraints (always active, constant Jacobian)
+        conservations = [c for c in self._constraints if isinstance(c, Conservation)]
+        for c in conservations:
+            jacobians.append(c.jacobian() @ self._E0)
+            residuals.append(c.residual(x))
+
+        if len(jacobians) > 1:
+            H_fixed = np.concatenate(jacobians, axis=0)
+            g_fixed = np.concatenate(residuals)
+        else:
+            H_fixed = jacobians[0]
+            g_fixed = residuals[0]
+
+        c_fixed = g_fixed - H_fixed @ state_arr
+        return H_fixed, c_fixed
+
+    def _get_fixed_noise(self) -> Array:
+        """Get the noise matrix for fixed observations (ODE + Conservation).
+
+        Note: Returns the full covariance matrix (not square root) to match
+        the behavior of get_noise() which is passed directly to sqr_marginalization.
+        """
+        fixed_dim = self._get_fixed_dim()
+        R_fixed = np.zeros((fixed_dim, fixed_dim))
+        R_fixed = R_fixed.at[: self._d, : self._d].set(self._base_R)
+        return R_fixed
+
+    def prepare_scan_data(self, ts: Array) -> ScanData:
+        """Pre-compute measurement data for all time steps.
+
+        This method iterates over the time array with concrete Python values,
+        calling find_index normally. The result is a ScanData structure with
+        padded arrays suitable for use with jax.lax.scan.
+
+        Args:
+            ts: Time array of shape [N+1] (includes initial time t0).
+                The filter uses ts[1:] for the N filter steps.
+
+        Returns:
+            ScanData with pre-computed measurement Jacobians, residuals,
+            noise matrices, and active masks for each time step.
+        """
+        N = len(ts) - 1
+        fixed_dim = self._get_fixed_dim()
+        max_meas_dim = self._get_max_meas_dim()
+        max_obs_dim = fixed_dim + max_meas_dim
+
+        # Get all Measurement constraints
+        measurements = [c for c in self._constraints if isinstance(c, Measurement)]
+
+        # Pre-allocate arrays
+        H_meas_list = []
+        c_meas_list = []
+        R_meas_list = []
+        obs_mask_list = []
+
+        for i in range(N):
+            t = float(ts[i + 1])
+
+            # Build measurement Jacobian and residual for this time step
+            H_meas_i = np.zeros((max_meas_dim, self._state_dim))
+            c_meas_i = np.zeros(max_meas_dim)
+            R_meas_i = _INACTIVE_VARIANCE * np.eye(max_meas_dim)
+            meas_mask_i = np.zeros(max_meas_dim, dtype=bool)
+
+            offset = 0
+            for m in measurements:
+                idx = m.find_index(t)
+                if idx is not None:
+                    # Measurement is active at this time
+                    H_m = m.A @ self._E0
+                    c_m = -m.z[idx]  # residual offset: A @ x - z[idx]
+                    R_m = m.get_noise_matrix()
+
+                    H_meas_i = H_meas_i.at[offset : offset + m.dim, :].set(H_m)
+                    c_meas_i = c_meas_i.at[offset : offset + m.dim].set(c_m)
+                    R_meas_i = R_meas_i.at[
+                        offset : offset + m.dim, offset : offset + m.dim
+                    ].set(R_m)
+                    meas_mask_i = meas_mask_i.at[offset : offset + m.dim].set(True)
+
+                offset += m.dim
+
+            # Build full observation mask (ODE + Conservation always active)
+            obs_mask_i = np.concatenate([np.ones(fixed_dim, dtype=bool), meas_mask_i])
+
+            H_meas_list.append(H_meas_i)
+            c_meas_list.append(c_meas_i)
+            R_meas_list.append(R_meas_i)
+            obs_mask_list.append(obs_mask_i)
+
+        return ScanData(
+            H_meas=np.stack(H_meas_list)
+            if H_meas_list
+            else np.zeros((0, max_meas_dim, self._state_dim)),
+            c_meas=np.stack(c_meas_list)
+            if c_meas_list
+            else np.zeros((0, max_meas_dim)),
+            R_meas=np.stack(R_meas_list)
+            if R_meas_list
+            else np.zeros((0, max_meas_dim, max_meas_dim)),
+            obs_mask=np.stack(obs_mask_list)
+            if obs_mask_list
+            else np.zeros((0, max_obs_dim), dtype=bool),
+            max_obs_dim=max_obs_dim,
+            fixed_dim=fixed_dim,
+            ts=ts[1:],
+        )
+
+    def linearize_scan(
+        self, state: Array, step_idx: int, scan_data: ScanData
+    ) -> tuple[Array, Array, Array]:
+        """Linearize the observation model for use in jax.lax.scan.
+
+        This method computes the full linearization by combining:
+        1. State-dependent ODE + Conservation rows (computed fresh)
+        2. Pre-computed measurement rows (indexed from scan_data)
+
+        Args:
+            state: State vector to linearize around.
+            step_idx: Current step index (0 to N-1).
+            scan_data: Pre-computed measurement data from prepare_scan_data.
+
+        Returns:
+            Tuple of (H_full, c_full, R_full) where:
+            - H_full has shape [max_obs_dim, state_dim]
+            - c_full has shape [max_obs_dim]
+            - R_full has shape [max_obs_dim, max_obs_dim] (full covariance, not sqrt)
+
+        Note:
+            R_full is the full covariance matrix, not its square root. This matches
+            the behavior of get_noise() which returns the full covariance.
+        """
+        t = scan_data.ts[step_idx]
+
+        # Compute state-dependent fixed part (ODE + Conservation)
+        H_fixed, c_fixed = self._linearize_fixed(state, t=t)
+
+        # Get pre-computed measurement part
+        H_meas = scan_data.H_meas[step_idx]
+        c_meas = scan_data.c_meas[step_idx]
+        R_meas = scan_data.R_meas[step_idx]
+
+        # Concatenate to form full observation model
+        H_full = np.concatenate([H_fixed, H_meas], axis=0)
+        c_full = np.concatenate([c_fixed, c_meas])
+
+        # Build block-diagonal noise matrix (full covariance, not sqrt)
+        # Use array shapes to infer dimensions (avoids tracing issues with JIT)
+        R_fixed = self._get_fixed_noise()
+        fixed_dim = H_fixed.shape[0]
+        max_meas_dim = H_meas.shape[0]
+        max_obs_dim = fixed_dim + max_meas_dim
+        R_full = np.zeros((max_obs_dim, max_obs_dim))
+        R_full = R_full.at[:fixed_dim, :fixed_dim].set(R_fixed)
+        R_full = R_full.at[fixed_dim:, fixed_dim:].set(R_meas)
+
+        return H_full, c_full, R_full
 
 
 # =============================================================================
