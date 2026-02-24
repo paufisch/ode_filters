@@ -340,3 +340,115 @@ def test_sqr_inversion_preserves_covariance_properties():
     assert np.trace(Lambda) <= np.trace(Sigma.T @ Sigma) + 1e-10, (
         "Posterior covariance trace should be <= prior covariance trace"
     )
+
+
+# ==============================================================================
+# EQUIVALENCE TESTS: TRIANGULAR SOLVE vs GENERAL SOLVE
+# ==============================================================================
+
+
+def _sqr_inversion_general_solve(A, mu, Sigma_sqr, mu_z, Sigma_z_sqr, Q_sqr=None):
+    """Reference implementation using np.linalg.solve (pre-optimization)."""
+    if Q_sqr is None:
+        Q_sqr = np.zeros_like(Sigma_z_sqr)
+
+    n_state = A.shape[1]
+
+    Sigma_z_sqr = np.atleast_2d(Sigma_z_sqr)
+    Sigma_z = Sigma_z_sqr.T @ Sigma_z_sqr
+    Sigma = Sigma_sqr.T @ Sigma_sqr
+
+    K = np.linalg.solve(Sigma_z, A @ Sigma).T
+    d = mu - K @ mu_z
+    B = np.eye(n_state) - K @ A
+    C = np.concatenate([Sigma_sqr @ B.T, (Q_sqr @ K.T).reshape(-1, n_state)], axis=0)
+    _, Lambda_sqr = np.linalg.qr(C)
+
+    return K, d, Lambda_sqr
+
+
+@parametrize_with_cases(
+    "A,mu,Sigma,mu_z,Sigma_z",
+    cases=[
+        case_simple_1d_observation,
+        case_2d_state_1d_observation,
+        case_3d_state_2d_observation,
+        case_identity_matrix,
+        case_diagonal_matrices,
+        case_full_rank_covariance,
+    ],
+)
+def test_triangular_solve_matches_general_solve(A, mu, Sigma, mu_z, Sigma_z):
+    """Test that the triangular-solve implementation matches the original general-solve."""
+    Sigma = np.linalg.cholesky(Sigma).T
+    Sigma_z = np.linalg.cholesky(Sigma_z).T
+
+    G_tri, d_tri, Lambda_tri = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G_gen, d_gen, Lambda_gen = _sqr_inversion_general_solve(A, mu, Sigma, mu_z, Sigma_z)
+
+    assert np.allclose(G_tri, G_gen, atol=1e-6), (
+        f"Kalman gain mismatch:\ntriangular={G_tri}\ngeneral={G_gen}"
+    )
+    assert np.allclose(d_tri, d_gen, atol=1e-6), (
+        f"Posterior offset mismatch:\ntriangular={d_tri}\ngeneral={d_gen}"
+    )
+    Lambda_full_tri = Lambda_tri.T @ Lambda_tri
+    Lambda_full_gen = Lambda_gen.T @ Lambda_gen
+    assert np.allclose(Lambda_full_tri, Lambda_full_gen, atol=1e-6), (
+        f"Posterior covariance mismatch:\ntriangular={Lambda_full_tri}\ngeneral={Lambda_full_gen}"
+    )
+
+
+@parametrize_with_cases(
+    "A,mu,Sigma,mu_z,Sigma_z",
+    cases=[
+        case_zero_offset_mean,
+        case_negative_values,
+        case_small_observation_noise,
+        case_large_observation_noise,
+    ],
+)
+def test_triangular_solve_matches_general_solve_edge_cases(A, mu, Sigma, mu_z, Sigma_z):
+    """Test triangular-solve equivalence for edge cases."""
+    Sigma = np.linalg.cholesky(Sigma).T
+    Sigma_z = np.linalg.cholesky(Sigma_z).T
+
+    G_tri, d_tri, Lambda_tri = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z)
+    G_gen, d_gen, Lambda_gen = _sqr_inversion_general_solve(A, mu, Sigma, mu_z, Sigma_z)
+
+    assert np.allclose(G_tri, G_gen, atol=1e-6), "Kalman gain mismatch in edge case"
+    assert np.allclose(d_tri, d_gen, atol=1e-6), (
+        "Posterior offset mismatch in edge case"
+    )
+    Lambda_full_tri = Lambda_tri.T @ Lambda_tri
+    Lambda_full_gen = Lambda_gen.T @ Lambda_gen
+    assert np.allclose(Lambda_full_tri, Lambda_full_gen, atol=1e-6), (
+        "Posterior covariance mismatch in edge case"
+    )
+
+
+def test_triangular_solve_matches_general_solve_with_Q():
+    """Test equivalence when explicit measurement noise Q_sqr is provided."""
+    A = np.array([[1.0, 0.5]])
+    mu = np.array([1.0, 2.0])
+    Sigma = np.array([[1.0, 0.1], [0.1, 1.1]])
+    mu_z = np.array([2.0])
+    Sigma_z = np.array([[1.5]])
+    Q = np.array([[0.3]])
+
+    Sigma = np.linalg.cholesky(Sigma).T
+    Sigma_z = np.linalg.cholesky(Sigma_z).T
+    Q = np.linalg.cholesky(Q).T
+
+    G_tri, d_tri, Lambda_tri = sqr_inversion(A, mu, Sigma, mu_z, Sigma_z, Q)
+    G_gen, d_gen, Lambda_gen = _sqr_inversion_general_solve(
+        A, mu, Sigma, mu_z, Sigma_z, Q
+    )
+
+    assert np.allclose(G_tri, G_gen, atol=1e-6), "Kalman gain mismatch with Q_sqr"
+    assert np.allclose(d_tri, d_gen, atol=1e-6), "Posterior offset mismatch with Q_sqr"
+    Lambda_full_tri = Lambda_tri.T @ Lambda_tri
+    Lambda_full_gen = Lambda_gen.T @ Lambda_gen
+    assert np.allclose(Lambda_full_tri, Lambda_full_gen, atol=1e-6), (
+        "Posterior covariance mismatch with Q_sqr"
+    )

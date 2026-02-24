@@ -60,9 +60,7 @@ class BasePrior(ABC):
 
     @staticmethod
     def _validate_h(h: float) -> float:
-        if h < 0:
-            raise ValueError("h must be non-negative.")
-        return float(h)
+        return h
 
     @abstractmethod
     def A(self, h: float) -> Array:
@@ -178,8 +176,6 @@ def _make_iwp_state_matrices(q: int) -> tuple[MatrixFunction, MatrixFunction]:
     dim = q + 1
 
     def A(h: float) -> Array:
-        if h < 0:
-            raise ValueError("h must be non-negative.")
         mat = np.zeros((dim, dim), dtype=float)
         for i in range(dim):
             for j in range(i, dim):
@@ -187,8 +183,6 @@ def _make_iwp_state_matrices(q: int) -> tuple[MatrixFunction, MatrixFunction]:
         return mat
 
     def Q(h: float) -> Array:
-        if h < 0:
-            raise ValueError("h must be non-negative.")
         mat = np.zeros((dim, dim), dtype=float)
         for i in range(dim):
             for j in range(dim):
@@ -226,9 +220,6 @@ def _make_iwp_precond_state_matrices(
     factorials = np.array([float(factorial(q - idx)) for idx in range(dim)])
 
     def T(h: float) -> Array:
-        if h < 0:
-            raise ValueError("h must be non-negative.")
-        h = float(h)
         sqrt_h = np.sqrt(h)
         powers = q - np.arange(dim)
         diag_entries = sqrt_h * (h**powers) / factorials

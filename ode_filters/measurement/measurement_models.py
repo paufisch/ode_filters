@@ -332,7 +332,7 @@ class BaseODEInformation(ABC):
 
     def _validate_state(self, state: Array) -> Array:
         """Validate and convert state to required format."""
-        state_arr = np.asarray(state, dtype=np.float32)
+        state_arr = np.asarray(state)
         if state_arr.ndim != 1:
             raise ValueError("'state' must be a one-dimensional array.")
         if state_arr.shape[0] != self._state_dim:
@@ -692,7 +692,7 @@ class BlackBoxMeasurement:
 
     def _validate_state(self, state: Array) -> Array:
         """Validate and convert state to required format."""
-        state_arr = np.asarray(state, dtype=np.float32)
+        state_arr = np.asarray(state)
         if state_arr.ndim != 1:
             raise ValueError("'state' must be a one-dimensional array.")
         if state_arr.shape[0] != self._state_dim:

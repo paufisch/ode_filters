@@ -121,12 +121,6 @@ class TestMaternPrior:
         eigenvalues = np.linalg.eigvalsh(Q)
         assert np.all(eigenvalues >= -1e-10), "Q should be positive semi-definite"
 
-    def test_rejects_negative_h(self):
-        """Test that negative step size raises error."""
-        prior = MaternPrior(q=2, d=1, length_scale=1.0)
-        with pytest.raises(ValueError, match="h must be non-negative"):
-            prior.A(-0.5)
-
     @pytest.mark.parametrize("h", [0.1, 0.5, 1.0, 2.0])
     def test_A_h_zero_is_identity(self, h):
         """Test that A(0) is identity matrix."""

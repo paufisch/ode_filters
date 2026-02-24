@@ -59,3 +59,4 @@ docs/examples/additional_info.ipynb
 site/*
 
 .cursorrules
+benchmarks/*.png
