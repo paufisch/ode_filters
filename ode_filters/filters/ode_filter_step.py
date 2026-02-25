@@ -5,7 +5,7 @@ from collections.abc import Callable
 from jax import Array
 
 from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
-from ..measurement.measurement_models import BaseODEInformation
+from ..measurement.measurement_models import BaseODEInformation, ScanData
 
 StateFunction = Callable[[Array], Array]
 JacobianFunction = Callable[[Array], Array]
@@ -188,3 +188,71 @@ def rts_sqr_smoother_step_preconditioned(
     m_s_prev = T_t @ m_s_prev_bar
     P_s_prev_sqr = P_s_prev_sqr_bar @ T_t.T
     return (m_s_prev_bar, P_s_prev_sqr_bar), (m_s_prev, P_s_prev_sqr)
+
+
+# =============================================================================
+# Scan-compatible filter step functions
+# =============================================================================
+
+
+ScanFilterStepResult = tuple[
+    tuple[Array, Array],  # (m_pred, P_pred_sqr)
+    tuple[Array, Array, Array],  # (G_back, d_back, P_back_sqr)
+    tuple[Array, Array],  # (mz, Pz_sqr) - padded to max_obs_dim
+    tuple[Array, Array],  # (m, P_sqr)
+]
+
+
+def ekf1_sqr_filter_step_scan(
+    A_t: Array,
+    b_t: Array,
+    Q_t_sqr: Array,
+    m_prev: Array,
+    P_prev_sqr: Array,
+    measure: BaseODEInformation,
+    step_idx: int,
+    scan_data: ScanData,
+) -> ScanFilterStepResult:
+    """Perform a single square-root EKF step using pre-computed scan data.
+
+    This function is designed for use inside jax.lax.scan. It uses linearize_scan
+    to get fixed-shape Jacobians by indexing into pre-computed measurement data.
+
+    Args:
+        A_t: State transition matrix for current step.
+        b_t: Drift vector for current step.
+        Q_t_sqr: Square-root of process noise covariance.
+        m_prev: Previous state mean estimate.
+        P_prev_sqr: Previous state covariance (square-root form).
+        measure: Measurement model (e.g., ODEInformation or subclass).
+        step_idx: Current step index (0 to N-1).
+        scan_data: Pre-computed measurement data from prepare_scan_data.
+
+    Returns:
+        Tuple of 4 tuples containing prediction, backward pass, and update results.
+        The observation marginal (mz, Pz_sqr) has fixed shape [max_obs_dim].
+    """
+    # Prediction step
+    m_pred, P_pred_sqr = sqr_marginalization(A_t, b_t, Q_t_sqr, m_prev, P_prev_sqr)
+
+    # Backward pass gain (for smoother)
+    G_back, d_back, P_back_sqr = sqr_inversion(
+        A_t, m_prev, P_prev_sqr, m_pred, P_pred_sqr, Q_t_sqr
+    )
+
+    # Get linearization using scan data (fixed shape)
+    H_t, c_t, R_t_sqr = measure.linearize_scan(m_pred, step_idx, scan_data)
+
+    # Observation marginal
+    m_z, P_z_sqr = sqr_marginalization(H_t, c_t, R_t_sqr, m_pred, P_pred_sqr)
+
+    # Update step
+    _, d, P_t_sqr = sqr_inversion(H_t, m_pred, P_pred_sqr, m_z, P_z_sqr, R_t_sqr)
+    m_t = d
+
+    return (
+        (m_pred, P_pred_sqr),
+        (G_back, d_back, P_back_sqr),
+        (m_z, P_z_sqr),
+        (m_t, P_t_sqr),
+    )
