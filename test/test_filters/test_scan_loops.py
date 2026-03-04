@@ -188,9 +188,11 @@ class TestScanDataStructure:
         scan_data = measure.prepare_scan_data(ts)
 
         assert isinstance(scan_data, ScanData)
-        assert scan_data.H_meas.shape == (N, 0, prior.E0.shape[1])
+        assert scan_data.H_meas.shape == (0, prior.E0.shape[1])
+        assert scan_data.H_cons.shape == (0, prior.E0.shape[1])
         assert scan_data.c_meas.shape == (N, 0)
-        assert scan_data.R_meas.shape == (N, 0, 0)
+        assert scan_data.R_meas_sqr.shape == (N, 0, 0)
+        assert scan_data.R_fixed_sqr.shape == (d, d)
         assert scan_data.obs_mask.shape == (N, d)
         assert scan_data.max_obs_dim == d
         assert scan_data.fixed_dim == d
@@ -215,9 +217,9 @@ class TestScanDataStructure:
 
         scan_data = measure.prepare_scan_data(ts)
 
-        assert scan_data.H_meas.shape == (N, 1, prior.E0.shape[1])
+        assert scan_data.H_meas.shape == (1, prior.E0.shape[1])
         assert scan_data.c_meas.shape == (N, 1)
-        assert scan_data.R_meas.shape == (N, 1, 1)
+        assert scan_data.R_meas_sqr.shape == (N, 1, 1)
         assert scan_data.obs_mask.shape == (N, d + 1)
         assert scan_data.max_obs_dim == d + 1
         assert scan_data.fixed_dim == d

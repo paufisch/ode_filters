@@ -265,8 +265,9 @@ class TestODEInformationGetNoise:
         # Modify noise via property
         model.R = 0.1
 
-        R = model.get_noise(t=0.0)
-        assert R[0, 0] == pytest.approx(0.1)
+        R_sqr = model.get_noise(t=0.0)
+        R_reconstructed = R_sqr.T @ R_sqr
+        assert R_reconstructed[0, 0] == pytest.approx(0.1)
 
 
 class TestNoisePropertyAndSetters:
@@ -381,9 +382,10 @@ class TestMeasurementNoiseDefaults:
 
         model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
 
-        R_meas = model.get_noise(t=0.5)
-        # ODE part (1x1) should be zero, measurement part should be non-zero
-        assert R_meas[0, 0] == pytest.approx(0.0)  # ODE noise
+        R_sqr = model.get_noise(t=0.5)
+        R_meas = R_sqr.T @ R_sqr
+        # ODE part (1x1) should be ~zero, measurement part should be non-zero
+        assert R_meas[0, 0] == pytest.approx(0.0, abs=1e-20)  # ODE noise
         assert R_meas[1, 1] == pytest.approx(1e-6)  # Default measurement noise
 
     def test_custom_measurement_noise_at_construction(self):
@@ -401,7 +403,8 @@ class TestMeasurementNoiseDefaults:
             vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t, measurement_noise=0.01
         )
 
-        R_meas = model.get_noise(t=0.5)
+        R_sqr = model.get_noise(t=0.5)
+        R_meas = R_sqr.T @ R_sqr
         assert R_meas[1, 1] == pytest.approx(0.01)
 
 
