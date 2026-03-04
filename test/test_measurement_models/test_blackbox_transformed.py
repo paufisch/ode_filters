@@ -169,10 +169,11 @@ class TestBlackBoxMeasurementMethods:
         assert jacobian[1, 1] == pytest.approx(1.0)
 
     def test_get_noise(self, bb_model):
-        """Test get_noise returns R matrix."""
-        R = bb_model.get_noise(t=0.0)
-        assert R.shape == (2, 2)
-        assert np.allclose(R, 0.01 * np.eye(2))
+        """Test get_noise returns square root of R matrix."""
+        R_sqr = bb_model.get_noise(t=0.0)
+        assert R_sqr.shape == (2, 2)
+        # R_sqr.T @ R_sqr should reconstruct the noise covariance
+        assert np.allclose(R_sqr.T @ R_sqr, 0.01 * np.eye(2), atol=1e-10)
 
     def test_linearize(self, bb_model):
         """Test linearize method."""
