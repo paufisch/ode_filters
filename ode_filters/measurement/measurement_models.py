@@ -361,8 +361,30 @@ class BaseODEInformation(ABC):
             - c_t is the constant term (observation offset)
         """
         state_arr = self._validate_state(state)
-        H_t = self.jacobian_g(state_arr, t=t)
-        c_t = self.g(state_arr, t=t) - H_t @ state_arr
+        x = self._E0 @ state_arr
+
+        # ODE part (single evaluation of vf)
+        H_ode = self._ode_jacobian(state_arr, t=t)
+        g_ode = self._ode_residual(state_arr, t=t)
+        jacobians = [H_ode]
+        residuals = [g_ode]
+
+        # Constraints (single iteration)
+        conservations, measurements = self._get_active_constraints(t)
+        for c in conservations:
+            jacobians.append(c.jacobian() @ self._E0)
+            residuals.append(c.residual(x))
+        for m in measurements:
+            jac = m.jacobian(t)
+            if jac is not None:
+                jacobians.append(jac @ self._E0)
+                res = m.residual(x, t)
+                if res is not None:
+                    residuals.append(res)
+
+        H_t = np.concatenate(jacobians) if len(jacobians) > 1 else jacobians[0]
+        g_val = np.concatenate(residuals) if len(residuals) > 1 else residuals[0]
+        c_t = g_val - H_t @ state_arr
         return H_t, c_t
 
     def _validate_state(self, state: Array) -> Array:
@@ -467,6 +489,10 @@ class BaseODEInformation(ABC):
         # Get all Measurement constraints
         measurements = [c for c in self._constraints if isinstance(c, Measurement)]
 
+        # Pre-compute constant Jacobians and noise matrices (invariant across time)
+        meas_jacobians = [m.A @ self._E0 for m in measurements]
+        meas_noises = [m.get_noise_matrix() for m in measurements]
+
         # Pre-allocate arrays
         H_meas_list = []
         c_meas_list = []
@@ -483,13 +509,13 @@ class BaseODEInformation(ABC):
             meas_mask_i = np.zeros(max_meas_dim, dtype=bool)
 
             offset = 0
-            for m in measurements:
+            for j, m in enumerate(measurements):
                 idx = m.find_index(t)
                 if idx is not None:
                     # Measurement is active at this time
-                    H_m = m.A @ self._E0
+                    H_m = meas_jacobians[j]
                     c_m = -m.z[idx]  # residual offset: A @ x - z[idx]
-                    R_m = m.get_noise_matrix()
+                    R_m = meas_noises[j]
 
                     H_meas_i = H_meas_i.at[offset : offset + m.dim, :].set(H_m)
                     c_meas_i = c_meas_i.at[offset : offset + m.dim].set(c_m)
@@ -821,7 +847,7 @@ class BlackBoxMeasurement:
         self._g_func = g_func
         self._state_dim = state_dim
         self._obs_dim = obs_dim
-        self._jacobian_g_func = jax.jacfwd(lambda s, t: g_func(s, t=t))
+        self._jacobian_g_func = jax.jacrev(lambda s, t: g_func(s, t=t))
 
         # Initialize noise matrix
         noise_arr = np.asarray(noise)
@@ -921,8 +947,10 @@ class BlackBoxMeasurement:
             - c_t is the constant term (observation offset)
         """
         state_arr = self._validate_state(state)
-        H_t = self.jacobian_g(state_arr, t=t)
-        c_t = self.g(state_arr, t=t) - H_t @ state_arr
+        # Use VJP to get value and Jacobian in a single forward pass
+        g_val, vjp_fn = jax.vjp(lambda s: self._g_func(s, t=t), state_arr)
+        H_t = jax.vmap(lambda v: vjp_fn(v)[0])(np.eye(self._obs_dim))
+        c_t = g_val - H_t @ state_arr
         return H_t, c_t
 
     def _validate_state(self, state: Array) -> Array:
@@ -1056,8 +1084,11 @@ class TransformedMeasurement:
             - H_t is the Jacobian of the composed model
             - c_t is the constant term (observation offset)
         """
-        H_t = self.jacobian_g(state, t=t)
-        g_val = self.g(state, t=t)
+        transformed = self._sigma(state)
+        J_sigma = self._jacobian_sigma(state)
+        J_base = self._base.jacobian_g(transformed, t=t)
+        g_val = self._base.g(transformed, t=t)
+        H_t = J_base @ J_sigma
         c_t = g_val - H_t @ state
         return H_t, c_t
 
