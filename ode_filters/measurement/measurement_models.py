@@ -74,12 +74,14 @@ class Conservation:
     """Conservation constraint: A @ x = p (always active).
 
     Args:
-        A: Constraint matrix (shape [k, d]).
+        A: Constraint matrix (shape [k, d] or [k, state_dim] if full_state=True).
         p: Target values (shape [k]).
+        full_state: If True, A operates on the full state X instead of x = E0 @ X.
     """
 
     A: Array
     p: Array
+    full_state: bool = False
 
     def __post_init__(self) -> None:
         if self.A.shape[0] != self.p.shape[0]:
@@ -116,17 +118,19 @@ class Measurement:
         which may cause measurements to be missed with exact comparison.
 
     Args:
-        A: Measurement matrix (shape [k, d]).
+        A: Measurement matrix (shape [k, d] or [k, state_dim] if full_state=True).
         z: Measurement values (shape [n, k]).
         z_t: Measurement times (shape [n]). Should use jax.numpy.linspace for
             consistency with the filter's internal time grid.
         noise: Measurement noise variance (scalar or [k] or [k, k]).
+        full_state: If True, A operates on the full state X instead of x = E0 @ X.
     """
 
     A: Array
     z: Array
     z_t: Array
     noise: float | Array = DEFAULT_MEASUREMENT_NOISE
+    full_state: bool = False
 
     def __post_init__(self) -> None:
         if self.A.ndim != 2:
@@ -217,16 +221,22 @@ class BaseODEInformation(ABC):
         """Initialize constraint list and validate."""
         self._constraints = constraints or []
         for c in self._constraints:
-            if isinstance(c, Conservation) and c.A.shape[1] != self._d:
-                raise ValueError(
-                    f"Conservation A.shape[1] ({c.A.shape[1]}) must match "
-                    f"state dimension ({self._d})."
-                )
-            if isinstance(c, Measurement) and c.A.shape[1] != self._d:
-                raise ValueError(
-                    f"Measurement A.shape[1] ({c.A.shape[1]}) must match "
-                    f"state dimension ({self._d})."
-                )
+            if isinstance(c, Conservation):
+                expected = self._state_dim if c.full_state else self._d
+                label = "full state" if c.full_state else "state"
+                if c.A.shape[1] != expected:
+                    raise ValueError(
+                        f"Conservation A.shape[1] ({c.A.shape[1]}) must match "
+                        f"{label} dimension ({expected})."
+                    )
+            if isinstance(c, Measurement):
+                expected = self._state_dim if c.full_state else self._d
+                label = "full state" if c.full_state else "state"
+                if c.A.shape[1] != expected:
+                    raise ValueError(
+                        f"Measurement A.shape[1] ({c.A.shape[1]}) must match "
+                        f"{label} dimension ({expected})."
+                    )
 
     def _get_active_constraints(
         self, t: float
@@ -324,9 +334,9 @@ class BaseODEInformation(ABC):
         # Constraint residuals
         conservations, measurements = self._get_active_constraints(t)
         for c in conservations:
-            residuals.append(c.residual(x))
+            residuals.append(c.residual(state_arr if c.full_state else x))
         for m in measurements:
-            res = m.residual(x, t)
+            res = m.residual(state_arr if m.full_state else x, t)
             if res is not None:
                 residuals.append(res)
 
@@ -347,14 +357,14 @@ class BaseODEInformation(ABC):
         # ODE Jacobian
         jacobians = [self._ode_jacobian(state_arr, t=t)]
 
-        # Constraint Jacobians (need to compose with E0)
+        # Constraint Jacobians (compose with E0 unless full_state)
         conservations, measurements = self._get_active_constraints(t)
         for c in conservations:
-            jacobians.append(c.jacobian() @ self._E0)
+            jacobians.append(c.jacobian() if c.full_state else c.jacobian() @ self._E0)
         for m in measurements:
             jac = m.jacobian(t)
             if jac is not None:
-                jacobians.append(jac @ self._E0)
+                jacobians.append(jac if m.full_state else jac @ self._E0)
 
         return np.concatenate(jacobians) if len(jacobians) > 1 else jacobians[0]
 
@@ -397,13 +407,13 @@ class BaseODEInformation(ABC):
         # Constraints (single iteration)
         conservations, measurements = self._get_active_constraints(t)
         for c in conservations:
-            jacobians.append(c.jacobian() @ self._E0)
-            residuals.append(c.residual(x))
+            jacobians.append(c.jacobian() if c.full_state else c.jacobian() @ self._E0)
+            residuals.append(c.residual(state_arr if c.full_state else x))
         for m in measurements:
             jac = m.jacobian(t)
             if jac is not None:
-                jacobians.append(jac @ self._E0)
-                res = m.residual(x, t)
+                jacobians.append(jac if m.full_state else jac @ self._E0)
+                res = m.residual(state_arr if m.full_state else x, t)
                 if res is not None:
                     residuals.append(res)
 
@@ -472,9 +482,15 @@ class BaseODEInformation(ABC):
             # Use pre-computed Jacobian if available, otherwise compute
             if H_cons is None:
                 H_cons = np.concatenate(
-                    [c.jacobian() @ self._E0 for c in conservations], axis=0
+                    [
+                        c.jacobian() if c.full_state else c.jacobian() @ self._E0
+                        for c in conservations
+                    ],
+                    axis=0,
                 )
-            g_cons = np.concatenate([c.residual(x) for c in conservations])
+            g_cons = np.concatenate(
+                [c.residual(state_arr if c.full_state else x) for c in conservations]
+            )
             H_fixed = np.concatenate([H_ode, H_cons], axis=0)
             g_fixed = np.concatenate([g_ode, g_cons])
         else:
@@ -522,14 +538,13 @@ class BaseODEInformation(ABC):
 
         # --- Constant data (computed once) ---
 
-        # Stacked measurement Jacobian: all m.A @ E0
+        # Stacked measurement Jacobian: m.A (full_state) or m.A @ E0
         H_meas_const = np.zeros((max_meas_dim, self._state_dim))
         R_meas_block = np.zeros((max_meas_dim, max_meas_dim))
         offset = 0
         for m in measurements:
-            H_meas_const = H_meas_const.at[offset : offset + m.dim, :].set(
-                m.A @ self._E0
-            )
+            H_m = m.A if m.full_state else m.A @ self._E0
+            H_meas_const = H_meas_const.at[offset : offset + m.dim, :].set(H_m)
             R_meas_block = R_meas_block.at[
                 offset : offset + m.dim, offset : offset + m.dim
             ].set(m.get_noise_matrix())
@@ -544,12 +559,13 @@ class BaseODEInformation(ABC):
         # Square root of inactive measurement noise (large variance)
         R_meas_sqr_inactive = np.sqrt(_INACTIVE_VARIANCE) * np.eye(max_meas_dim)
 
-        # Stacked conservation Jacobian: all c.A @ E0
+        # Stacked conservation Jacobian: c.A (full_state) or c.A @ E0
         cons_dim = sum(c.dim for c in conservations)
         H_cons = np.zeros((cons_dim, self._state_dim))
         offset = 0
         for c in conservations:
-            H_cons = H_cons.at[offset : offset + c.dim, :].set(c.jacobian() @ self._E0)
+            H_c = c.jacobian() if c.full_state else c.jacobian() @ self._E0
+            H_cons = H_cons.at[offset : offset + c.dim, :].set(H_c)
             offset += c.dim
 
         # Fixed noise square root (ODE + Conservation)
