@@ -16,22 +16,41 @@ DEFAULT_MEASUREMENT_NOISE = 1e-6
 # Large variance for inactive measurement rows (effectively disables them)
 _INACTIVE_VARIANCE = 1e12
 
+# Small jitter for Cholesky of PSD matrices with zero eigenvalues
+_JITTER = 1e-32
+
+
+def _safe_cholesky_sqr(R: Array, dim: int) -> Array:
+    """Upper-triangular Cholesky of a PSD matrix that may have zero eigenvalues.
+
+    Returns the upper-triangular square root L such that L.T @ L = R + jitter*I.
+    """
+    return np.linalg.cholesky(R + _JITTER * np.eye(dim)).T
+
 
 class ScanData(NamedTuple):
     """Pre-computed data for scan-based filtering.
 
     This structure holds all measurement-related data pre-computed for each
-    time step, enabling efficient use with jax.lax.scan.
+    time step, enabling efficient use with jax.lax.scan. Constant matrices
+    (measurement Jacobians, conservation Jacobians, noise) are stored once,
+    while only per-step data (measurement offsets, noise selection, masks) is
+    stored per time step.
 
     Attributes:
-        H_meas: Measurement Jacobians, shape [N, max_meas_dim, state_dim].
-            Zero rows for inactive measurements.
         c_meas: Measurement residual offsets, shape [N, max_meas_dim].
-            Zero for inactive measurements.
-        R_meas: Measurement noise covariance (NOT square root),
-            shape [N, max_meas_dim, max_meas_dim]. Large variance for inactive.
-            Note: This matches the original get_noise() behavior which returns
-            the full covariance matrix, not its square root.
+            Zero for inactive measurements. Per-step because z values differ.
+        R_meas_sqr: Square root of measurement noise covariance,
+            shape [N, max_meas_dim, max_meas_dim]. Per-step because active
+            rows use actual noise sqrt while inactive rows use large variance.
+        H_meas: Measurement Jacobians (constant across steps),
+            shape [max_meas_dim, state_dim]. Stacked m.A @ E0 for all
+            Measurement constraints.
+        H_cons: Conservation Jacobians (constant across steps),
+            shape [cons_dim, state_dim]. Stacked c.A @ E0 for all
+            Conservation constraints. Empty (0 rows) if no conservations.
+        R_fixed_sqr: Square root of fixed noise (ODE + Conservation),
+            shape [fixed_dim, fixed_dim]. Constant across steps.
         obs_mask: Boolean mask for active observations, shape [N, max_obs_dim].
             True for active rows (ODE + Conservation always active).
         max_obs_dim: Total observation dimension (d + cons_dim + max_meas_dim).
@@ -39,9 +58,11 @@ class ScanData(NamedTuple):
         ts: Time values for each step, shape [N].
     """
 
-    H_meas: Array
     c_meas: Array
-    R_meas: Array
+    R_meas_sqr: Array
+    H_meas: Array
+    H_cons: Array
+    R_fixed_sqr: Array
     obs_mask: Array
     max_obs_dim: int
     fixed_dim: int
@@ -53,12 +74,14 @@ class Conservation:
     """Conservation constraint: A @ x = p (always active).
 
     Args:
-        A: Constraint matrix (shape [k, d]).
+        A: Constraint matrix (shape [k, d] or [k, state_dim] if full_state=True).
         p: Target values (shape [k]).
+        full_state: If True, A operates on the full state X instead of x = E0 @ X.
     """
 
     A: Array
     p: Array
+    full_state: bool = False
 
     def __post_init__(self) -> None:
         if self.A.shape[0] != self.p.shape[0]:
@@ -95,17 +118,19 @@ class Measurement:
         which may cause measurements to be missed with exact comparison.
 
     Args:
-        A: Measurement matrix (shape [k, d]).
+        A: Measurement matrix (shape [k, d] or [k, state_dim] if full_state=True).
         z: Measurement values (shape [n, k]).
         z_t: Measurement times (shape [n]). Should use jax.numpy.linspace for
             consistency with the filter's internal time grid.
         noise: Measurement noise variance (scalar or [k] or [k, k]).
+        full_state: If True, A operates on the full state X instead of x = E0 @ X.
     """
 
     A: Array
     z: Array
     z_t: Array
     noise: float | Array = DEFAULT_MEASUREMENT_NOISE
+    full_state: bool = False
 
     def __post_init__(self) -> None:
         if self.A.ndim != 2:
@@ -196,16 +221,22 @@ class BaseODEInformation(ABC):
         """Initialize constraint list and validate."""
         self._constraints = constraints or []
         for c in self._constraints:
-            if isinstance(c, Conservation) and c.A.shape[1] != self._d:
-                raise ValueError(
-                    f"Conservation A.shape[1] ({c.A.shape[1]}) must match "
-                    f"state dimension ({self._d})."
-                )
-            if isinstance(c, Measurement) and c.A.shape[1] != self._d:
-                raise ValueError(
-                    f"Measurement A.shape[1] ({c.A.shape[1]}) must match "
-                    f"state dimension ({self._d})."
-                )
+            if isinstance(c, Conservation):
+                expected = self._state_dim if c.full_state else self._d
+                label = "full state" if c.full_state else "state"
+                if c.A.shape[1] != expected:
+                    raise ValueError(
+                        f"Conservation A.shape[1] ({c.A.shape[1]}) must match "
+                        f"{label} dimension ({expected})."
+                    )
+            if isinstance(c, Measurement):
+                expected = self._state_dim if c.full_state else self._d
+                label = "full state" if c.full_state else "state"
+                if c.A.shape[1] != expected:
+                    raise ValueError(
+                        f"Measurement A.shape[1] ({c.A.shape[1]}) must match "
+                        f"{label} dimension ({expected})."
+                    )
 
     def _get_active_constraints(
         self, t: float
@@ -303,9 +334,9 @@ class BaseODEInformation(ABC):
         # Constraint residuals
         conservations, measurements = self._get_active_constraints(t)
         for c in conservations:
-            residuals.append(c.residual(x))
+            residuals.append(c.residual(state_arr if c.full_state else x))
         for m in measurements:
-            res = m.residual(x, t)
+            res = m.residual(state_arr if m.full_state else x, t)
             if res is not None:
                 residuals.append(res)
 
@@ -326,27 +357,31 @@ class BaseODEInformation(ABC):
         # ODE Jacobian
         jacobians = [self._ode_jacobian(state_arr, t=t)]
 
-        # Constraint Jacobians (need to compose with E0)
+        # Constraint Jacobians (compose with E0 unless full_state)
         conservations, measurements = self._get_active_constraints(t)
         for c in conservations:
-            jacobians.append(c.jacobian() @ self._E0)
+            jacobians.append(c.jacobian() if c.full_state else c.jacobian() @ self._E0)
         for m in measurements:
             jac = m.jacobian(t)
             if jac is not None:
-                jacobians.append(jac @ self._E0)
+                jacobians.append(jac if m.full_state else jac @ self._E0)
 
         return np.concatenate(jacobians) if len(jacobians) > 1 else jacobians[0]
 
     def get_noise(self, *, t: float) -> Array:
-        """Return the measurement noise matrix at time ``t``.
+        """Return the square root of the measurement noise covariance at time ``t``.
+
+        Returns an upper-triangular matrix L such that L.T @ L ≈ R,
+        where R is the full noise covariance.
 
         Args:
             t: Current time.
 
         Returns:
-            Measurement noise covariance matrix.
+            Upper-triangular square root of the noise covariance matrix.
         """
-        return self._build_noise_matrix(t)
+        R = self._build_noise_matrix(t)
+        return _safe_cholesky_sqr(R, R.shape[0])
 
     def linearize(self, state: Array, *, t: float) -> tuple[Array, Array]:
         """Linearize the observation model around the given state.
@@ -361,8 +396,30 @@ class BaseODEInformation(ABC):
             - c_t is the constant term (observation offset)
         """
         state_arr = self._validate_state(state)
-        H_t = self.jacobian_g(state_arr, t=t)
-        c_t = self.g(state_arr, t=t) - H_t @ state_arr
+        x = self._E0 @ state_arr
+
+        # ODE part (single evaluation of vf)
+        H_ode = self._ode_jacobian(state_arr, t=t)
+        g_ode = self._ode_residual(state_arr, t=t)
+        jacobians = [H_ode]
+        residuals = [g_ode]
+
+        # Constraints (single iteration)
+        conservations, measurements = self._get_active_constraints(t)
+        for c in conservations:
+            jacobians.append(c.jacobian() if c.full_state else c.jacobian() @ self._E0)
+            residuals.append(c.residual(state_arr if c.full_state else x))
+        for m in measurements:
+            jac = m.jacobian(t)
+            if jac is not None:
+                jacobians.append(jac if m.full_state else jac @ self._E0)
+                res = m.residual(state_arr if m.full_state else x, t)
+                if res is not None:
+                    residuals.append(res)
+
+        H_t = np.concatenate(jacobians) if len(jacobians) > 1 else jacobians[0]
+        g_val = np.concatenate(residuals) if len(residuals) > 1 else residuals[0]
+        c_t = g_val - H_t @ state_arr
         return H_t, c_t
 
     def _validate_state(self, state: Array) -> Array:
@@ -391,7 +448,9 @@ class BaseODEInformation(ABC):
         measurements = [c for c in self._constraints if isinstance(c, Measurement)]
         return sum(m.dim for m in measurements)
 
-    def _linearize_fixed(self, state: Array, *, t: float) -> tuple[Array, Array]:
+    def _linearize_fixed(
+        self, state: Array, *, t: float, H_cons: Array | None = None
+    ) -> tuple[Array, Array]:
         """Linearize ODE + Conservation parts only (fixed shape, no find_index).
 
         This method computes the Jacobian and residual for the ODE constraint
@@ -401,6 +460,9 @@ class BaseODEInformation(ABC):
         Args:
             state: State vector to linearize around.
             t: Current time.
+            H_cons: Pre-computed conservation Jacobian (stacked c.A @ E0).
+                If provided, avoids recomputing the constant conservation
+                Jacobians. Shape [cons_dim, state_dim].
 
         Returns:
             Tuple of (H_fixed, c_fixed) where:
@@ -414,35 +476,39 @@ class BaseODEInformation(ABC):
         H_ode = self._ode_jacobian(state_arr, t=t)
         g_ode = self._ode_residual(state_arr, t=t)
 
-        jacobians = [H_ode]
-        residuals = [g_ode]
-
-        # Conservation constraints (always active, constant Jacobian)
+        # Conservation constraints (always active)
         conservations = [c for c in self._constraints if isinstance(c, Conservation)]
-        for c in conservations:
-            jacobians.append(c.jacobian() @ self._E0)
-            residuals.append(c.residual(x))
-
-        if len(jacobians) > 1:
-            H_fixed = np.concatenate(jacobians, axis=0)
-            g_fixed = np.concatenate(residuals)
+        if conservations:
+            # Use pre-computed Jacobian if available, otherwise compute
+            if H_cons is None:
+                H_cons = np.concatenate(
+                    [
+                        c.jacobian() if c.full_state else c.jacobian() @ self._E0
+                        for c in conservations
+                    ],
+                    axis=0,
+                )
+            g_cons = np.concatenate(
+                [c.residual(state_arr if c.full_state else x) for c in conservations]
+            )
+            H_fixed = np.concatenate([H_ode, H_cons], axis=0)
+            g_fixed = np.concatenate([g_ode, g_cons])
         else:
-            H_fixed = jacobians[0]
-            g_fixed = residuals[0]
+            H_fixed = H_ode
+            g_fixed = g_ode
 
         c_fixed = g_fixed - H_fixed @ state_arr
         return H_fixed, c_fixed
 
-    def _get_fixed_noise(self) -> Array:
-        """Get the noise matrix for fixed observations (ODE + Conservation).
+    def _get_fixed_noise_sqr(self) -> Array:
+        """Get the square root of noise for fixed observations (ODE + Conservation).
 
-        Note: Returns the full covariance matrix (not square root) to match
-        the behavior of get_noise() which is passed directly to sqr_marginalization.
+        Returns upper-triangular Cholesky factor L such that L.T @ L ≈ R_fixed.
         """
         fixed_dim = self._get_fixed_dim()
         R_fixed = np.zeros((fixed_dim, fixed_dim))
         R_fixed = R_fixed.at[: self._d, : self._d].set(self._base_R)
-        return R_fixed
+        return _safe_cholesky_sqr(R_fixed, fixed_dim)
 
     def prepare_scan_data(self, ts: Array) -> ScanData:
         """Pre-compute measurement data for all time steps.
@@ -451,73 +517,103 @@ class BaseODEInformation(ABC):
         calling find_index normally. The result is a ScanData structure with
         padded arrays suitable for use with jax.lax.scan.
 
+        Constant data (measurement Jacobians, conservation Jacobians, noise
+        matrices) is stored once. Only per-step data (measurement offsets c_meas,
+        noise selection R_meas_sqr, observation masks) varies across time steps.
+
         Args:
             ts: Time array of shape [N+1] (includes initial time t0).
                 The filter uses ts[1:] for the N filter steps.
 
         Returns:
-            ScanData with pre-computed measurement Jacobians, residuals,
-            noise matrices, and active masks for each time step.
+            ScanData with pre-computed data for scan-based filtering.
         """
         N = len(ts) - 1
         fixed_dim = self._get_fixed_dim()
         max_meas_dim = self._get_max_meas_dim()
         max_obs_dim = fixed_dim + max_meas_dim
 
-        # Get all Measurement constraints
         measurements = [c for c in self._constraints if isinstance(c, Measurement)]
+        conservations = [c for c in self._constraints if isinstance(c, Conservation)]
 
-        # Pre-allocate arrays
-        H_meas_list = []
+        # --- Constant data (computed once) ---
+
+        # Stacked measurement Jacobian: m.A (full_state) or m.A @ E0
+        H_meas_const = np.zeros((max_meas_dim, self._state_dim))
+        R_meas_block = np.zeros((max_meas_dim, max_meas_dim))
+        offset = 0
+        for m in measurements:
+            H_m = m.A if m.full_state else m.A @ self._E0
+            H_meas_const = H_meas_const.at[offset : offset + m.dim, :].set(H_m)
+            R_meas_block = R_meas_block.at[
+                offset : offset + m.dim, offset : offset + m.dim
+            ].set(m.get_noise_matrix())
+            offset += m.dim
+
+        # Square root of active measurement noise
+        R_meas_sqr_active = (
+            _safe_cholesky_sqr(R_meas_block, max_meas_dim)
+            if max_meas_dim > 0
+            else np.zeros((0, 0))
+        )
+        # Square root of inactive measurement noise (large variance)
+        R_meas_sqr_inactive = np.sqrt(_INACTIVE_VARIANCE) * np.eye(max_meas_dim)
+
+        # Stacked conservation Jacobian: c.A (full_state) or c.A @ E0
+        cons_dim = sum(c.dim for c in conservations)
+        H_cons = np.zeros((cons_dim, self._state_dim))
+        offset = 0
+        for c in conservations:
+            H_c = c.jacobian() if c.full_state else c.jacobian() @ self._E0
+            H_cons = H_cons.at[offset : offset + c.dim, :].set(H_c)
+            offset += c.dim
+
+        # Fixed noise square root (ODE + Conservation)
+        R_fixed_sqr = self._get_fixed_noise_sqr()
+
+        # --- Per-step data ---
+
         c_meas_list = []
-        R_meas_list = []
+        R_meas_sqr_list = []
         obs_mask_list = []
 
         for i in range(N):
             t = float(ts[i + 1])
 
-            # Build measurement Jacobian and residual for this time step
-            H_meas_i = np.zeros((max_meas_dim, self._state_dim))
             c_meas_i = np.zeros(max_meas_dim)
-            R_meas_i = _INACTIVE_VARIANCE * np.eye(max_meas_dim)
             meas_mask_i = np.zeros(max_meas_dim, dtype=bool)
+            R_meas_sqr_i = R_meas_sqr_inactive.copy()
 
             offset = 0
             for m in measurements:
                 idx = m.find_index(t)
                 if idx is not None:
-                    # Measurement is active at this time
-                    H_m = m.A @ self._E0
-                    c_m = -m.z[idx]  # residual offset: A @ x - z[idx]
-                    R_m = m.get_noise_matrix()
-
-                    H_meas_i = H_meas_i.at[offset : offset + m.dim, :].set(H_m)
-                    c_meas_i = c_meas_i.at[offset : offset + m.dim].set(c_m)
-                    R_meas_i = R_meas_i.at[
-                        offset : offset + m.dim, offset : offset + m.dim
-                    ].set(R_m)
+                    c_meas_i = c_meas_i.at[offset : offset + m.dim].set(-m.z[idx])
                     meas_mask_i = meas_mask_i.at[offset : offset + m.dim].set(True)
-
+                    R_meas_sqr_i = R_meas_sqr_i.at[
+                        offset : offset + m.dim, offset : offset + m.dim
+                    ].set(
+                        R_meas_sqr_active[
+                            offset : offset + m.dim, offset : offset + m.dim
+                        ]
+                    )
                 offset += m.dim
 
-            # Build full observation mask (ODE + Conservation always active)
             obs_mask_i = np.concatenate([np.ones(fixed_dim, dtype=bool), meas_mask_i])
-
-            H_meas_list.append(H_meas_i)
             c_meas_list.append(c_meas_i)
-            R_meas_list.append(R_meas_i)
+            R_meas_sqr_list.append(R_meas_sqr_i)
             obs_mask_list.append(obs_mask_i)
 
         return ScanData(
-            H_meas=np.stack(H_meas_list)
-            if H_meas_list
-            else np.zeros((0, max_meas_dim, self._state_dim)),
             c_meas=np.stack(c_meas_list)
             if c_meas_list
             else np.zeros((0, max_meas_dim)),
-            R_meas=np.stack(R_meas_list)
-            if R_meas_list
+            R_meas_sqr=np.stack(R_meas_sqr_list)
+            if R_meas_sqr_list
             else np.zeros((0, max_meas_dim, max_meas_dim)),
+            H_meas=H_meas_const,
+            H_cons=H_cons,
+            R_fixed_sqr=R_fixed_sqr,
             obs_mask=np.stack(obs_mask_list)
             if obs_mask_list
             else np.zeros((0, max_obs_dim), dtype=bool),
@@ -532,7 +628,8 @@ class BaseODEInformation(ABC):
         """Linearize the observation model for use in jax.lax.scan.
 
         This method computes the full linearization by combining:
-        1. State-dependent ODE + Conservation rows (computed fresh)
+        1. State-dependent ODE + Conservation rows (computed fresh, but with
+           pre-computed conservation Jacobians from scan_data)
         2. Pre-computed measurement rows (indexed from scan_data)
 
         Args:
@@ -541,40 +638,35 @@ class BaseODEInformation(ABC):
             scan_data: Pre-computed measurement data from prepare_scan_data.
 
         Returns:
-            Tuple of (H_full, c_full, R_full) where:
+            Tuple of (H_full, c_full, R_full_sqr) where:
             - H_full has shape [max_obs_dim, state_dim]
             - c_full has shape [max_obs_dim]
-            - R_full has shape [max_obs_dim, max_obs_dim] (full covariance, not sqrt)
-
-        Note:
-            R_full is the full covariance matrix, not its square root. This matches
-            the behavior of get_noise() which returns the full covariance.
+            - R_full_sqr has shape [max_obs_dim, max_obs_dim] (square root)
         """
         t = scan_data.ts[step_idx]
 
-        # Compute state-dependent fixed part (ODE + Conservation)
-        H_fixed, c_fixed = self._linearize_fixed(state, t=t)
+        # Compute state-dependent fixed part, reusing pre-computed H_cons
+        H_fixed, c_fixed = self._linearize_fixed(state, t=t, H_cons=scan_data.H_cons)
 
-        # Get pre-computed measurement part
-        H_meas = scan_data.H_meas[step_idx]
+        # Measurement part: constant H, per-step c and R_sqr
+        H_meas = scan_data.H_meas
         c_meas = scan_data.c_meas[step_idx]
-        R_meas = scan_data.R_meas[step_idx]
+        R_meas_sqr = scan_data.R_meas_sqr[step_idx]
 
         # Concatenate to form full observation model
         H_full = np.concatenate([H_fixed, H_meas], axis=0)
         c_full = np.concatenate([c_fixed, c_meas])
 
-        # Build block-diagonal noise matrix (full covariance, not sqrt)
-        # Use array shapes to infer dimensions (avoids tracing issues with JIT)
-        R_fixed = self._get_fixed_noise()
+        # Build block-diagonal noise square root
+        R_fixed_sqr = scan_data.R_fixed_sqr
         fixed_dim = H_fixed.shape[0]
         max_meas_dim = H_meas.shape[0]
         max_obs_dim = fixed_dim + max_meas_dim
-        R_full = np.zeros((max_obs_dim, max_obs_dim))
-        R_full = R_full.at[:fixed_dim, :fixed_dim].set(R_fixed)
-        R_full = R_full.at[fixed_dim:, fixed_dim:].set(R_meas)
+        R_full_sqr = np.zeros((max_obs_dim, max_obs_dim))
+        R_full_sqr = R_full_sqr.at[:fixed_dim, :fixed_dim].set(R_fixed_sqr)
+        R_full_sqr = R_full_sqr.at[fixed_dim:, fixed_dim:].set(R_meas_sqr)
 
-        return H_full, c_full, R_full
+        return H_full, c_full, R_full_sqr
 
 
 # =============================================================================
@@ -821,7 +913,7 @@ class BlackBoxMeasurement:
         self._g_func = g_func
         self._state_dim = state_dim
         self._obs_dim = obs_dim
-        self._jacobian_g_func = jax.jacfwd(lambda s, t: g_func(s, t=t))
+        self._jacobian_g_func = jax.jacrev(lambda s, t: g_func(s, t=t))
 
         # Initialize noise matrix
         noise_arr = np.asarray(noise)
@@ -898,15 +990,17 @@ class BlackBoxMeasurement:
         return self._jacobian_g_func(state_arr, t)
 
     def get_noise(self, *, t: float) -> Array:
-        """Return the measurement noise matrix.
+        """Return the square root of the measurement noise covariance.
+
+        Returns an upper-triangular matrix L such that L.T @ L ≈ R.
 
         Args:
             t: Current time (unused, included for API consistency).
 
         Returns:
-            Measurement noise covariance matrix.
+            Upper-triangular square root of the noise covariance matrix.
         """
-        return self._R
+        return _safe_cholesky_sqr(self._R, self._obs_dim)
 
     def linearize(self, state: Array, *, t: float) -> tuple[Array, Array]:
         """Linearize the measurement model around the given state.
@@ -921,8 +1015,10 @@ class BlackBoxMeasurement:
             - c_t is the constant term (observation offset)
         """
         state_arr = self._validate_state(state)
-        H_t = self.jacobian_g(state_arr, t=t)
-        c_t = self.g(state_arr, t=t) - H_t @ state_arr
+        # Use VJP to get value and Jacobian in a single forward pass
+        g_val, vjp_fn = jax.vjp(lambda s: self._g_func(s, t=t), state_arr)
+        H_t = jax.vmap(lambda v: vjp_fn(v)[0])(np.eye(self._obs_dim))
+        c_t = g_val - H_t @ state_arr
         return H_t, c_t
 
     def _validate_state(self, state: Array) -> Array:
@@ -1034,13 +1130,13 @@ class TransformedMeasurement:
         return J_base @ J_sigma
 
     def get_noise(self, *, t: float) -> Array:
-        """Return the measurement noise matrix (delegated to base model).
+        """Return the square root of the noise covariance (delegated to base model).
 
         Args:
             t: Current time.
 
         Returns:
-            Measurement noise covariance matrix.
+            Upper-triangular square root of the noise covariance matrix.
         """
         return self._base.get_noise(t=t)
 
@@ -1056,8 +1152,11 @@ class TransformedMeasurement:
             - H_t is the Jacobian of the composed model
             - c_t is the constant term (observation offset)
         """
-        H_t = self.jacobian_g(state, t=t)
-        g_val = self.g(state, t=t)
+        transformed = self._sigma(state)
+        J_sigma = self._jacobian_sigma(state)
+        J_base = self._base.jacobian_g(transformed, t=t)
+        g_val = self._base.g(transformed, t=t)
+        H_t = J_base @ J_sigma
         c_t = g_val - H_t @ state
         return H_t, c_t
 

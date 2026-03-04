@@ -59,7 +59,7 @@ def ekf1_sqr_filter_step(
     )
 
     H_t, c_t = measure.linearize(m_pred, t=t)
-    R_t_sqr = measure.get_noise(t=t)  # get this from the measure as well
+    R_t_sqr = measure.get_noise(t=t)
 
     m_z, P_z_sqr = sqr_marginalization(H_t, c_t, R_t_sqr, m_pred, P_pred_sqr)
     _, d, P_t_sqr = sqr_inversion(H_t, m_pred, P_pred_sqr, m_z, P_z_sqr, R_t_sqr)
@@ -137,7 +137,7 @@ def ekf1_sqr_filter_step_preconditioned(
 
     H_t, c_t = measure.linearize(T_t @ m_pred_bar, t=t)
     H_t_bar = H_t @ T_t
-    R_t_sqr = measure.get_noise(t=t)  # get this from the measure as well
+    R_t_sqr = measure.get_noise(t=t)
 
     m_z, P_z_sqr = sqr_marginalization(
         H_t_bar, c_t, R_t_sqr, m_pred_bar, P_pred_sqr_bar
