@@ -6,6 +6,7 @@ from .gmp_priors import (
     MaternPrior,
     PrecondIWP,
     PrecondJointPrior,
+    PrecondMaternPrior,
     taylor_mode_initialization,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "MaternPrior",
     "PrecondIWP",
     "PrecondJointPrior",
+    "PrecondMaternPrior",
     "taylor_mode_initialization",
 ]
