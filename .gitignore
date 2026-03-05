@@ -60,5 +60,6 @@ site/*
 
 .cursorrules
 CLAUDE.md
+.claude/*
 
 benchmarks/*.png
