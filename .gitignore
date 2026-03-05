@@ -59,4 +59,6 @@ docs/examples/additional_info.ipynb
 site/*
 
 .cursorrules
+CLAUDE.md
+
 benchmarks/*.png

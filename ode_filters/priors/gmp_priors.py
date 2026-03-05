@@ -281,24 +281,33 @@ class PrecondIWP(BasePrior):
         super().__init__(q, d, Xi)
         self._A_bar, self._Q_bar, self._T = _make_iwp_precond_state_matrices(q)
 
-    def A(self) -> Array:
+    def A(self, h: float | None = None) -> Array:
         """Return the constant preconditioning transition matrix.
+
+        Args:
+            h: Step size (unused, accepted for interface compatibility).
 
         Returns:
             Constant transition matrix (shape [(q+1)*d, (q+1)*d]).
         """
         return np.kron(self._A_bar, self._id)
 
-    def b(self) -> Array:
+    def b(self, h: float | None = None) -> Array:
         """Return the zero drift vector.
+
+        Args:
+            h: Step size (unused, accepted for interface compatibility).
 
         Returns:
             Zero drift vector (shape [(q+1)*d]).
         """
         return self._b
 
-    def Q(self) -> Array:
+    def Q(self, h: float | None = None) -> Array:
         """Return the constant preconditioning diffusion matrix.
+
+        Args:
+            h: Step size (unused, accepted for interface compatibility).
 
         Returns:
             Constant diffusion matrix (shape [(q+1)*d, (q+1)*d]).
@@ -487,6 +496,135 @@ class MaternPrior(BasePrior):
         return np.kron(Q_h, self.xi)
 
 
+class PrecondMaternPrior(BasePrior):
+    """Preconditioned Matern Gaussian process prior model.
+
+    Uses the same diagonal preconditioner D(h) as PrecondIWP, but the
+    preconditioned transition A_bar(h) and diffusion Q_bar(h) are
+    stepsize-dependent (they converge to the IWP constants as h -> 0).
+
+    Args:
+        q: Smoothness order (nu = q + 1/2).
+        d: State dimension.
+        length_scale: Length scale of the Matern process.
+        Xi: Optional scaling matrix (shape [d, d]).
+    """
+
+    def __init__(
+        self,
+        q: int,
+        d: int,
+        length_scale: float,
+        Xi: ArrayLike | None = None,
+    ):
+        super().__init__(q, d, Xi)
+        self._F, self._L, self._q_coeff = _matern_companion_form(length_scale, q)
+        self.S = self._q_coeff * self._L @ self._L.T
+        self.n = self._F.shape[0]
+        _, _, self._T = _make_iwp_precond_state_matrices(q)
+
+    def _expm_block_matrix(self, h: float) -> Array:
+        """Compute exp(H*h) for the Hamiltonian block matrix.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Matrix exponential of the block Hamiltonian (shape [2n, 2n]).
+        """
+        H = np.block(
+            [
+                [self._F, self.S],
+                [np.zeros_like(self._F), -self._F.T],
+            ]
+        )
+        return expm(H * h)
+
+    def _raw_A_and_Q(self, h: float) -> tuple[Array, Array]:
+        """Compute raw (non-preconditioned) A(h) and Q(h) via MFD.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Tuple of (A_h, Q_h) scalar matrices (shape [n, n] each).
+        """
+        expm_H = self._expm_block_matrix(h)
+        A_h = expm_H[: self.n, : self.n]
+        Q_h = expm_H[: self.n, self.n :] @ A_h.T
+        Q_h = 0.5 * (Q_h + Q_h.T)
+        return A_h, Q_h
+
+    def _precond_discretise(self, h: float) -> tuple[Array, Array]:
+        """Compute preconditioned A_bar(h) and Q_bar(h).
+
+        Applies the IWP diagonal preconditioner: A_bar = T^{-1} A T,
+        Q_bar = T^{-1} Q T^{-T}.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Tuple of (A_bar, Q_bar) scalar matrices (shape [n, n] each).
+        """
+        h = self._validate_h(h)
+        A_h, Q_h = self._raw_A_and_Q(h)
+        T_h = self._T(h)
+        T_inv = np.diag(1.0 / np.diag(T_h))
+
+        A_bar = T_inv @ A_h @ T_h
+        Q_bar = T_inv @ Q_h @ T_inv.T
+        return A_bar, Q_bar
+
+    def A(self, h: float) -> Array:
+        """Return the preconditioned transition matrix for step size h.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Preconditioned transition matrix (shape [(q+1)*d, (q+1)*d]).
+        """
+        A_bar, _ = self._precond_discretise(h)
+        return np.kron(A_bar, self._id)
+
+    def Q(self, h: float) -> Array:
+        """Return the preconditioned diffusion matrix for step size h.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Preconditioned diffusion matrix (shape [(q+1)*d, (q+1)*d]).
+        """
+        _, Q_bar = self._precond_discretise(h)
+        return np.kron(Q_bar, self.xi)
+
+    def b(self, h: float | None = None) -> Array:
+        """Return the zero drift vector.
+
+        Args:
+            h: Step size (unused, accepted for interface compatibility).
+
+        Returns:
+            Zero drift vector (shape [(q+1)*d]).
+        """
+        return self._b
+
+    def T(self, h: float) -> Array:
+        """Return the stepsize-dependent preconditioning transformation.
+
+        Uses the same preconditioner as PrecondIWP.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            Preconditioning transformation matrix (shape [(q+1)*d, (q+1)*d]).
+        """
+        return np.kron(self._T(self._validate_h(h)), self._id)
+
+
 class JointPrior(BasePrior):
     """Joint prior combining independent state (x) and hidden/input (u) priors.
 
@@ -626,15 +764,20 @@ class PrecondJointPrior:
         >>> T_h = joint.T(0.1) # Stepsize-dependent transformation
     """
 
-    def __init__(self, prior_x: PrecondIWP, prior_u: PrecondIWP) -> None:
-        if not isinstance(prior_x, PrecondIWP):
+    def __init__(
+        self,
+        prior_x: PrecondIWP | PrecondMaternPrior,
+        prior_u: PrecondIWP | PrecondMaternPrior,
+    ) -> None:
+        _allowed = (PrecondIWP, PrecondMaternPrior)
+        if not isinstance(prior_x, _allowed):
             raise TypeError(
-                f"prior_x must be PrecondIWP instance, got {type(prior_x)}. "
+                f"prior_x must be PrecondIWP or PrecondMaternPrior, got {type(prior_x)}. "
                 "Use JointPrior for non-preconditioned priors."
             )
-        if not isinstance(prior_u, PrecondIWP):
+        if not isinstance(prior_u, _allowed):
             raise TypeError(
-                f"prior_u must be PrecondIWP instance, got {type(prior_u)}. "
+                f"prior_u must be PrecondIWP or PrecondMaternPrior, got {type(prior_u)}. "
                 "Use JointPrior for non-preconditioned priors."
             )
 
@@ -705,32 +848,41 @@ class PrecondJointPrior:
         """Second derivative extraction matrix for x (shape [d_x, D]), or None."""
         return self._E2
 
-    def A(self) -> Array:
-        """Return the constant block-diagonal transition matrix.
+    def A(self, h: float | None = None) -> Array:
+        """Return the block-diagonal transition matrix.
+
+        Args:
+            h: Step size (passed through to sub-priors).
 
         Returns:
             Block-diagonal transition matrix with state and hidden blocks.
         """
         return np.block(
-            [[self._prior_x.A(), self._zeros], [self._zeros.T, self._prior_u.A()]]
+            [[self._prior_x.A(h), self._zeros], [self._zeros.T, self._prior_u.A(h)]]
         )
 
-    def b(self) -> Array:
+    def b(self, h: float | None = None) -> Array:
         """Return the zero drift vector.
+
+        Args:
+            h: Step size (passed through to sub-priors).
 
         Returns:
             Zero drift vector (shape [D_x + D_u]).
         """
         return self._b
 
-    def Q(self) -> Array:
-        """Return the constant block-diagonal diffusion matrix.
+    def Q(self, h: float | None = None) -> Array:
+        """Return the block-diagonal diffusion matrix.
+
+        Args:
+            h: Step size (passed through to sub-priors).
 
         Returns:
             Block-diagonal diffusion matrix with state and hidden blocks.
         """
         return np.block(
-            [[self._prior_x.Q(), self._zeros], [self._zeros.T, self._prior_u.Q()]]
+            [[self._prior_x.Q(h), self._zeros], [self._zeros.T, self._prior_u.Q(h)]]
         )
 
     def T(self, h: float) -> Array:
