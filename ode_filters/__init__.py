@@ -27,7 +27,14 @@ from .measurement import (
     ODEInformation,
     ODEmeasurement,
 )
-from .priors import IWP, JointPrior, MaternPrior, PrecondIWP, taylor_mode_initialization
+from .priors import (
+    IWP,
+    JointPrior,
+    MaternPrior,
+    PrecondIWP,
+    PrecondMaternPrior,
+    taylor_mode_initialization,
+)
 
 __all__ = [
     "IWP",
@@ -38,6 +45,7 @@ __all__ = [
     "ODEconservationmeasurement",
     "ODEmeasurement",
     "PrecondIWP",
+    "PrecondMaternPrior",
     "ekf1_sqr_filter_step",
     "ekf1_sqr_filter_step_preconditioned",
     "ekf1_sqr_loop",
