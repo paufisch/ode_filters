@@ -256,3 +256,65 @@ def ekf1_sqr_filter_step_scan(
         (m_z, P_z_sqr),
         (m_t, P_t_sqr),
     )
+
+
+def ekf1_sqr_filter_step_preconditioned_scan(
+    A_bar: Array,
+    b_bar: Array,
+    Q_sqr_bar: Array,
+    T_t: Array,
+    m_prev_bar: Array,
+    P_prev_sqr_bar: Array,
+    measure: BaseODEInformation,
+    step_idx: int,
+    scan_data: ScanData,
+) -> PreconditionedFilterStepResult:
+    """Perform a single preconditioned square-root EKF step using scan data.
+
+    This function is designed for use inside jax.lax.scan. It uses
+    linearize_scan to get fixed-shape Jacobians, then applies the
+    preconditioning transformation.
+
+    Args:
+        A_bar: Stepsize-independent state transition matrix.
+        b_bar: Stepsize-independent drift vector.
+        Q_sqr_bar: Square-root of stepsize-independent process noise covariance.
+        T_t: Preconditioning transformation matrix.
+        m_prev_bar: Previous state mean estimate (preconditioned space).
+        P_prev_sqr_bar: Previous state covariance (square-root form, preconditioned space).
+        measure: Measurement model (e.g., ODEInformation or subclass).
+        step_idx: Current step index (0 to N-1).
+        scan_data: Pre-computed measurement data from prepare_scan_data.
+
+    Returns:
+        Tuple of 5 tuples with preconditioned and original-space results.
+        The observation marginal (mz, Pz_sqr) has fixed shape [max_obs_dim].
+    """
+    m_pred_bar, P_pred_sqr_bar = sqr_marginalization(
+        A_bar, b_bar, Q_sqr_bar, m_prev_bar, P_prev_sqr_bar
+    )
+    G_back_bar, d_back_bar, P_back_sqr_bar = sqr_inversion(
+        A_bar, m_prev_bar, P_prev_sqr_bar, m_pred_bar, P_pred_sqr_bar, Q_sqr_bar
+    )
+
+    H_t, c_t, R_t_sqr = measure.linearize_scan(T_t @ m_pred_bar, step_idx, scan_data)
+    H_t_bar = H_t @ T_t
+
+    m_z, P_z_sqr = sqr_marginalization(
+        H_t_bar, c_t, R_t_sqr, m_pred_bar, P_pred_sqr_bar
+    )
+    _, d_bar, P_t_sqr_bar = sqr_inversion(
+        H_t_bar, m_pred_bar, P_pred_sqr_bar, m_z, P_z_sqr, R_t_sqr
+    )
+    m_t_bar = d_bar
+
+    m_t = T_t @ m_t_bar
+    P_t_sqr = P_t_sqr_bar @ T_t.T
+
+    return (
+        (m_pred_bar, P_pred_sqr_bar),
+        (G_back_bar, d_back_bar, P_back_sqr_bar),
+        (m_z, P_z_sqr),
+        (m_t_bar, P_t_sqr_bar),
+        (m_t, P_t_sqr),
+    )

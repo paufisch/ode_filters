@@ -5,6 +5,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as np
+import numpy as _onp
 from jax import Array
 
 from ..measurement.measurement_models import BaseODEInformation, ScanData
@@ -12,6 +13,7 @@ from ..priors.gmp_priors import BasePrior
 from .ode_filter_step import (
     ekf1_sqr_filter_step,
     ekf1_sqr_filter_step_preconditioned,
+    ekf1_sqr_filter_step_preconditioned_scan,
     ekf1_sqr_filter_step_scan,
     rts_sqr_smoother_step,
     rts_sqr_smoother_step_preconditioned,
@@ -392,13 +394,15 @@ def ekf1_sqr_loop_scan(
         data, observation marginals (padded), log likelihood, and scan_data
         (which includes obs_mask for extracting active observation dimensions).
     """
-    ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    # Use standard numpy so ts/h stay concrete inside jax.jit
+    ts_np = _onp.linspace(float(tspan[0]), float(tspan[1]), N + 1)
+    h = float(ts_np[1] - ts_np[0])
     A_h = prior.A(h)
     b_h = prior.b(h)
     Q_h_sqr = np.linalg.cholesky(prior.Q(h)).T
 
-    # Pre-compute measurement data for all time steps
-    scan_data = measure.prepare_scan_data(ts)
+    # Pre-compute measurement data for all time steps (needs concrete ts)
+    scan_data = measure.prepare_scan_data(ts_np)
 
     def scan_body(carry, step_idx):
         m, P_sqr, log_lik = carry
@@ -518,6 +522,258 @@ def rts_sqr_smoother_loop_scan(
 
     # Stack inputs for scan (reverse order for backward pass)
     xs = (G_back_seq, d_back_seq, P_back_seq_sqr)
+
+    # Run scan in reverse
+    _, outputs = jax.lax.scan(scan_body, init_carry, xs, reverse=True)
+
+    m_smooth_body, P_smooth_sqr_body = outputs
+
+    # Append final state
+    m_smooth = np.concatenate([m_smooth_body, m_N[None, :]], axis=0)
+    P_smooth_sqr = np.concatenate([P_smooth_sqr_body, P_N_sqr[None, :, :]], axis=0)
+
+    return m_smooth, P_smooth_sqr
+
+
+class PrecondScanLoopResult(NamedTuple):
+    """Result from ekf1_sqr_loop_preconditioned_scan.
+
+    Attributes:
+        m_seq: Filtered state means (original space), shape [N+1, state_dim].
+        P_seq_sqr: Filtered state covariances (sqrt, original space),
+            shape [N+1, state_dim, state_dim].
+        m_seq_bar: Filtered state means (preconditioned space),
+            shape [N+1, state_dim].
+        P_seq_sqr_bar: Filtered state covariances (sqrt, preconditioned space),
+            shape [N+1, state_dim, state_dim].
+        m_pred_seq_bar: Predicted state means (preconditioned),
+            shape [N, state_dim].
+        P_pred_seq_sqr_bar: Predicted state covariances (sqrt, preconditioned),
+            shape [N, state_dim, state_dim].
+        G_back_seq_bar: Backward pass gains (preconditioned),
+            shape [N, state_dim, state_dim].
+        d_back_seq_bar: Backward pass offsets (preconditioned),
+            shape [N, state_dim].
+        P_back_seq_sqr_bar: Backward pass covariances (sqrt, preconditioned),
+            shape [N, state_dim, state_dim].
+        mz_seq: Observation marginal means (padded),
+            shape [N, max_obs_dim].
+        Pz_seq_sqr: Observation marginal covariances (sqrt, padded),
+            shape [N, max_obs_dim, max_obs_dim].
+        T_h: Preconditioning transformation matrix.
+        log_likelihood: Log marginal likelihood (scalar).
+        scan_data: Pre-computed scan data (includes obs_mask).
+    """
+
+    m_seq: Array
+    P_seq_sqr: Array
+    m_seq_bar: Array
+    P_seq_sqr_bar: Array
+    m_pred_seq_bar: Array
+    P_pred_seq_sqr_bar: Array
+    G_back_seq_bar: Array
+    d_back_seq_bar: Array
+    P_back_seq_sqr_bar: Array
+    mz_seq: Array
+    Pz_seq_sqr: Array
+    T_h: Array
+    log_likelihood: Array
+    scan_data: ScanData
+
+
+def ekf1_sqr_loop_preconditioned_scan(
+    mu_0: Array,
+    P_0_sqr: Array,
+    prior: BasePrior,
+    measure: BaseODEInformation,
+    tspan: tuple[float, float],
+    N: int,
+) -> PrecondScanLoopResult:
+    """Run a preconditioned square-root EKF using jax.lax.scan.
+
+    This is a scan-compatible version of ekf1_sqr_loop_preconditioned.
+    It pre-computes measurement data once, then uses jax.lax.scan for the
+    main loop. The observation marginal outputs (mz_seq, Pz_seq_sqr) have
+    fixed shapes padded to max_obs_dim.
+
+    Args:
+        mu_0: Initial state mean estimate.
+        P_0_sqr: Initial state covariance (square-root form).
+        prior: Prior model (typically PrecondIWP).
+        measure: Measurement model (e.g., ODEInformation or subclass).
+        tspan: Time interval (t_start, t_end).
+        N: Number of filter steps.
+
+    Returns:
+        PrecondScanLoopResult containing filtered states in both original
+        and preconditioned spaces, backward pass data, observation marginals
+        (padded), log likelihood, and scan_data.
+    """
+    # Use standard numpy so ts/h stay concrete inside jax.jit
+    ts_np = _onp.linspace(float(tspan[0]), float(tspan[1]), N + 1)
+    h = float(ts_np[1] - ts_np[0])
+    A_bar = prior.A(h)
+    b_bar = prior.b(h)
+    Q_sqr_bar = np.linalg.cholesky(prior.Q(h)).T
+    T_h = prior.T(h)
+
+    # Pre-compute measurement data for all time steps (needs concrete ts)
+    scan_data = measure.prepare_scan_data(ts_np)
+
+    # Initial preconditioned state
+    m_0_bar = np.linalg.solve(T_h, mu_0)
+    P_0_sqr_bar = np.linalg.solve(T_h, P_0_sqr.T).T
+
+    def scan_body(carry, step_idx):
+        m_bar, P_sqr_bar, log_lik = carry
+
+        # Run one preconditioned filter step
+        (
+            (m_pred_bar, P_pred_sqr_bar),
+            (G_back_bar, d_back_bar, P_back_sqr_bar),
+            (mz, Pz_sqr),
+            (m_bar_new, P_sqr_bar_new),
+            (m_new, P_sqr_new),
+        ) = ekf1_sqr_filter_step_preconditioned_scan(
+            A_bar,
+            b_bar,
+            Q_sqr_bar,
+            T_h,
+            m_bar,
+            P_sqr_bar,
+            measure,
+            step_idx,
+            scan_data,
+        )
+
+        # Compute log-likelihood contribution (masked for active observations)
+        obs_mask = scan_data.obs_mask[step_idx]
+        log_diag = np.log(np.abs(np.diag(Pz_sqr)))
+        log_det = 2.0 * np.sum(np.where(obs_mask, log_diag, 0.0))
+
+        v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
+        v_masked = np.where(obs_mask, v, 0.0)
+        maha = v_masked @ v_masked
+
+        active_dim = np.sum(obs_mask.astype(np.float32))
+        log_lik_step = -0.5 * (active_dim * np.log(2 * np.pi) + log_det + maha)
+
+        new_carry = (m_bar_new, P_sqr_bar_new, log_lik + log_lik_step)
+        outputs = (
+            m_pred_bar,
+            P_pred_sqr_bar,
+            G_back_bar,
+            d_back_bar,
+            P_back_sqr_bar,
+            mz,
+            Pz_sqr,
+            m_bar_new,
+            P_sqr_bar_new,
+            m_new,
+            P_sqr_new,
+        )
+
+        return new_carry, outputs
+
+    # Initial carry
+    init_carry = (m_0_bar, P_0_sqr_bar, 0.0)
+
+    # Run scan
+    (_, _, log_likelihood), outputs = jax.lax.scan(scan_body, init_carry, np.arange(N))
+
+    # Unpack outputs
+    (
+        m_pred_seq_bar,
+        P_pred_seq_sqr_bar,
+        G_back_seq_bar,
+        d_back_seq_bar,
+        P_back_seq_sqr_bar,
+        mz_seq,
+        Pz_seq_sqr,
+        m_seq_bar_body,
+        P_seq_sqr_bar_body,
+        m_seq_body,
+        P_seq_sqr_body,
+    ) = outputs
+
+    # Prepend initial state to sequences
+    m_seq = np.concatenate([mu_0[None, :], m_seq_body], axis=0)
+    P_seq_sqr = np.concatenate([P_0_sqr[None, :, :], P_seq_sqr_body], axis=0)
+    m_seq_bar = np.concatenate([m_0_bar[None, :], m_seq_bar_body], axis=0)
+    P_seq_sqr_bar = np.concatenate(
+        [P_0_sqr_bar[None, :, :], P_seq_sqr_bar_body], axis=0
+    )
+
+    return PrecondScanLoopResult(
+        m_seq=m_seq,
+        P_seq_sqr=P_seq_sqr,
+        m_seq_bar=m_seq_bar,
+        P_seq_sqr_bar=P_seq_sqr_bar,
+        m_pred_seq_bar=m_pred_seq_bar,
+        P_pred_seq_sqr_bar=P_pred_seq_sqr_bar,
+        G_back_seq_bar=G_back_seq_bar,
+        d_back_seq_bar=d_back_seq_bar,
+        P_back_seq_sqr_bar=P_back_seq_sqr_bar,
+        mz_seq=mz_seq,
+        Pz_seq_sqr=Pz_seq_sqr,
+        T_h=T_h,
+        log_likelihood=log_likelihood,
+        scan_data=scan_data,
+    )
+
+
+def rts_sqr_smoother_loop_preconditioned_scan(
+    m_N: Array,
+    P_N_sqr: Array,
+    m_N_bar: Array,
+    P_N_sqr_bar: Array,
+    G_back_seq_bar: Array,
+    d_back_seq_bar: Array,
+    P_back_seq_sqr_bar: Array,
+    T_h: Array,
+) -> tuple[Array, Array]:
+    """Run a preconditioned RTS smoother using jax.lax.scan.
+
+    This is a scan-compatible version of rts_sqr_smoother_loop_preconditioned.
+
+    Args:
+        m_N: Final filtered state mean (original space).
+        P_N_sqr: Final filtered state covariance (square-root form, original space).
+        m_N_bar: Final filtered state mean (preconditioned space).
+        P_N_sqr_bar: Final filtered state covariance (square-root form, preconditioned).
+        G_back_seq_bar: Backward pass gain sequence (preconditioned),
+            shape [N, state_dim, state_dim].
+        d_back_seq_bar: Backward pass offset sequence (preconditioned),
+            shape [N, state_dim].
+        P_back_seq_sqr_bar: Backward pass covariance sequence (sqrt, preconditioned),
+            shape [N, state_dim, state_dim].
+        T_h: Preconditioning transformation matrix.
+
+    Returns:
+        Tuple of smoothed state means and covariances (square-root form,
+        original space), both with shape [N+1, state_dim, ...].
+    """
+
+    def scan_body(carry, inputs):
+        m_smooth_bar_next, P_smooth_sqr_bar_next = carry
+        G_back_bar, d_back_bar, P_back_sqr_bar = inputs
+
+        (m_bar_j, P_bar_j), (m_j, P_j) = rts_sqr_smoother_step_preconditioned(
+            G_back_bar,
+            d_back_bar,
+            P_back_sqr_bar,
+            m_smooth_bar_next,
+            P_smooth_sqr_bar_next,
+            T_h,
+        )
+
+        return (m_bar_j, P_bar_j), (m_j, P_j)
+
+    # Initial carry is the final filtered state (preconditioned)
+    init_carry = (m_N_bar, P_N_sqr_bar)
+
+    # Stack inputs for scan (reverse order for backward pass)
+    xs = (G_back_seq_bar, d_back_seq_bar, P_back_seq_sqr_bar)
 
     # Run scan in reverse
     _, outputs = jax.lax.scan(scan_body, init_carry, xs, reverse=True)
