@@ -619,7 +619,7 @@ class BaseODEInformation(ABC):
             else np.zeros((0, max_obs_dim), dtype=bool),
             max_obs_dim=max_obs_dim,
             fixed_dim=fixed_dim,
-            ts=ts[1:],
+            ts=np.asarray(ts[1:]),
         )
 
     def linearize_scan(

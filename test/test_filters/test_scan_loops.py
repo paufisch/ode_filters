@@ -6,8 +6,12 @@ import pytest
 
 from ode_filters.filters.ode_filter_loop import (
     ekf1_sqr_loop,
+    ekf1_sqr_loop_preconditioned,
+    ekf1_sqr_loop_preconditioned_scan,
     ekf1_sqr_loop_scan,
     rts_sqr_smoother_loop,
+    rts_sqr_smoother_loop_preconditioned,
+    rts_sqr_smoother_loop_preconditioned_scan,
     rts_sqr_smoother_loop_scan,
 )
 from ode_filters.measurement.measurement_models import (
@@ -16,7 +20,7 @@ from ode_filters.measurement.measurement_models import (
     ODEInformation,
     ScanData,
 )
-from ode_filters.priors.gmp_priors import IWP, taylor_mode_initialization
+from ode_filters.priors.gmp_priors import IWP, PrecondIWP, taylor_mode_initialization
 
 
 def _vf_logistic(x, *, t):
@@ -389,4 +393,181 @@ class TestDifferentiability:
             return np.sum(result.m_seq[-1])
 
         grad_val = jax.grad(final_state_fn)(mu_0)
+        assert np.all(np.isfinite(grad_val))
+
+
+# ---------------------------------------------------------------------------
+# Test: preconditioned scan loop matches original preconditioned loop
+# ---------------------------------------------------------------------------
+
+
+class TestPrecondScanLoopMatchesOriginal:
+    """Verify that preconditioned scan loops match original preconditioned loops."""
+
+    def test_precond_filter_no_measurements(self):
+        """Test preconditioned scan filter without measurements matches original."""
+        x0 = np.array([0.01])
+        tspan = (0.0, 5.0)
+        N = 20
+        q = 2
+        d = 1
+
+        prior = PrecondIWP(q=q, d=d, Xi=0.5 * np.eye(d))
+        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_logistic, x0, q)
+        measure = ODEInformation(_vf_logistic, prior.E0, prior.E1)
+
+        result_loop = ekf1_sqr_loop_preconditioned(
+            mu_0, Sigma_0_sqr, prior, measure, tspan, N
+        )
+        result_scan = ekf1_sqr_loop_preconditioned_scan(
+            mu_0, Sigma_0_sqr, prior, measure, tspan, N
+        )
+
+        m_loop = np.array(result_loop[0])
+        m_scan = result_scan.m_seq
+
+        assert m_scan.shape == m_loop.shape
+        assert np.allclose(m_scan, m_loop, atol=1e-6)
+        assert float(result_scan.log_likelihood) == pytest.approx(
+            float(result_loop[-1]), rel=1e-6
+        )
+
+    def test_precond_filter_with_measurements(self):
+        """Test preconditioned scan filter with sparse measurements."""
+        x0 = np.array([0.01])
+        tspan = (0.0, 5.0)
+        N = 20
+        q = 2
+        d = 1
+
+        prior = PrecondIWP(q=q, d=d, Xi=0.5 * np.eye(d))
+        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_logistic, x0, q)
+
+        ts = np.linspace(tspan[0], tspan[1], N + 1)
+        z_t = ts[5:15]
+        z = np.array([[0.1 + 0.05 * i] for i in range(10)])
+        A = np.array([[1.0]])
+        measurement = Measurement(A, z, z_t, noise=0.01)
+        measure = ODEInformation(
+            _vf_logistic, prior.E0, prior.E1, constraints=[measurement]
+        )
+
+        result_loop = ekf1_sqr_loop_preconditioned(
+            mu_0, Sigma_0_sqr, prior, measure, tspan, N
+        )
+        result_scan = ekf1_sqr_loop_preconditioned_scan(
+            mu_0, Sigma_0_sqr, prior, measure, tspan, N
+        )
+
+        m_loop = np.array(result_loop[0])
+        m_scan = result_scan.m_seq
+
+        assert m_scan.shape == m_loop.shape
+        assert np.allclose(m_scan, m_loop, atol=1e-6)
+        assert float(result_scan.log_likelihood) == pytest.approx(
+            float(result_loop[-1]), rel=1e-6
+        )
+
+    def test_precond_filter_with_conservation(self):
+        """Test preconditioned scan filter with conservation constraint."""
+        x0 = np.array([0.99, 0.01, 0.0])
+        tspan = (0.0, 50.0)
+        N = 50
+        q = 2
+        d = 3
+
+        prior = PrecondIWP(q=q, d=d, Xi=1.0 * np.eye(d))
+        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_sir, x0, q)
+
+        A_cons = np.array([[1.0, 1.0, 1.0]])
+        p_cons = np.array([1.0])
+        conservation = Conservation(A_cons, p_cons)
+        measure = ODEInformation(
+            _vf_sir, prior.E0, prior.E1, constraints=[conservation]
+        )
+
+        result_loop = ekf1_sqr_loop_preconditioned(
+            mu_0, Sigma_0_sqr, prior, measure, tspan, N
+        )
+        result_scan = ekf1_sqr_loop_preconditioned_scan(
+            mu_0, Sigma_0_sqr, prior, measure, tspan, N
+        )
+
+        m_loop = np.array(result_loop[0])
+        m_scan = result_scan.m_seq
+
+        assert m_scan.shape == m_loop.shape
+        assert np.allclose(m_scan, m_loop, atol=1e-6)
+        assert float(result_scan.log_likelihood) == pytest.approx(
+            float(result_loop[-1]), rel=1e-5
+        )
+
+    def test_precond_smoother_scan_matches_original(self):
+        """Test preconditioned scan smoother matches original."""
+        x0 = np.array([0.01])
+        tspan = (0.0, 5.0)
+        N = 20
+        q = 2
+        d = 1
+
+        prior = PrecondIWP(q=q, d=d, Xi=0.5 * np.eye(d))
+        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_logistic, x0, q)
+        measure = ODEInformation(_vf_logistic, prior.E0, prior.E1)
+
+        result_filter = ekf1_sqr_loop_preconditioned_scan(
+            mu_0, Sigma_0_sqr, prior, measure, tspan, N
+        )
+
+        # Original smoother
+        m_smooth_loop, P_smooth_loop = rts_sqr_smoother_loop_preconditioned(
+            result_filter.m_seq[-1],
+            result_filter.P_seq_sqr[-1],
+            result_filter.m_seq_bar[-1],
+            result_filter.P_seq_sqr_bar[-1],
+            result_filter.G_back_seq_bar,
+            result_filter.d_back_seq_bar,
+            result_filter.P_back_seq_sqr_bar,
+            N,
+            result_filter.T_h,
+        )
+
+        # Scan smoother
+        m_smooth_scan, P_smooth_scan = rts_sqr_smoother_loop_preconditioned_scan(
+            result_filter.m_seq[-1],
+            result_filter.P_seq_sqr[-1],
+            result_filter.m_seq_bar[-1],
+            result_filter.P_seq_sqr_bar[-1],
+            result_filter.G_back_seq_bar,
+            result_filter.d_back_seq_bar,
+            result_filter.P_back_seq_sqr_bar,
+            result_filter.T_h,
+        )
+
+        assert m_smooth_scan.shape == m_smooth_loop.shape
+        assert np.allclose(m_smooth_scan, m_smooth_loop, atol=1e-6)
+        assert np.allclose(P_smooth_scan, P_smooth_loop, atol=1e-6)
+
+
+class TestPrecondScanDifferentiability:
+    """Test that preconditioned scan loops are differentiable."""
+
+    def test_precond_log_likelihood_gradient(self):
+        """Test that gradient through preconditioned LML is finite."""
+        x0 = np.array([0.1])
+        tspan = (0.0, 1.0)
+        N = 5
+        q = 2
+        d = 1
+
+        prior = PrecondIWP(q=q, d=d)
+        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_logistic, x0, q)
+        measure = ODEInformation(_vf_logistic, prior.E0, prior.E1)
+
+        def lml_fn(Sigma_0_sqr_):
+            result = ekf1_sqr_loop_preconditioned_scan(
+                mu_0, Sigma_0_sqr_, prior, measure, tspan, N
+            )
+            return result.log_likelihood
+
+        grad_val = jax.grad(lml_fn)(Sigma_0_sqr)
         assert np.all(np.isfinite(grad_val))
