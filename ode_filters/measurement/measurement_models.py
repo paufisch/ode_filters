@@ -7,6 +7,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as np
+import numpy as onp
 from jax import Array
 from jax.typing import ArrayLike
 
@@ -263,13 +264,13 @@ class Measurement:
         discrepancies between NumPy and JAX linspace implementations, which
         can differ by ~1e-8 for typical time grids.
         """
-        idx = np.searchsorted(self.z_t, t)
+        z_t = onp.asarray(self.z_t)
+        t_val = float(t)
+        idx = int(onp.searchsorted(z_t, t_val))
         # Check the found position and neighbors for a close match
         for i in [idx, idx - 1]:
-            if 0 <= i < len(self.z_t) and np.isclose(
-                self.z_t[i], t, rtol=rtol, atol=atol
-            ):
-                return int(i)
+            if 0 <= i < len(z_t) and onp.isclose(z_t[i], t_val, rtol=rtol, atol=atol):
+                return i
         return None
 
     def residual(self, x: Array, t: float) -> Array | None:

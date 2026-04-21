@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import jax
 import jax.numpy as np
 from jax import Array
 
@@ -353,6 +354,177 @@ def ekf1_sqr_filter_step_preconditioned_sequential(
         P_t_sqr_bar = P_ode_sqr_bar
         mz_obs = np.zeros(0)
         Pz_obs_sqr = np.zeros((0, 0))
+
+    m_t = T_t @ m_t_bar
+    P_t_sqr = P_t_sqr_bar @ T_t.T
+
+    return (
+        (m_pred_bar, P_pred_sqr_bar),
+        (G_back_bar, d_back_bar, P_back_sqr_bar),
+        (mz_ode, Pz_ode_sqr),
+        (mz_obs, Pz_obs_sqr),
+        (m_t_bar, P_t_sqr_bar),
+        (m_t, P_t_sqr),
+    )
+
+
+# =============================================================================
+# Scan-compatible sequential update filter step functions
+# =============================================================================
+# These always execute the observation update with fixed-shape arrays,
+# using ``jnp.where`` to select between the observation-updated and
+# ODE-only states based on a boolean mask.  This avoids data-dependent
+# branching and makes the step function compatible with ``jax.lax.scan``.
+
+
+def ekf1_sqr_filter_step_sequential_scan(
+    A_t: Array,
+    b_t: Array,
+    Q_t_sqr: Array,
+    m_prev: Array,
+    P_prev_sqr: Array,
+    measure: BaseODEInformation,
+    t: float,
+    H_obs: Array,
+    c_obs: Array,
+    R_obs_sqr: Array,
+    obs_active: Array,
+) -> tuple[
+    tuple[Array, Array],
+    tuple[Array, Array, Array],
+    tuple[Array, Array],
+    tuple[Array, Array],
+    tuple[Array, Array],
+]:
+    """Scan-compatible sequential square-root EKF step.
+
+    Always executes the observation update with fixed-shape arrays.
+    When ``obs_active`` is False, the ODE-only state is selected via
+    ``jnp.where`` so that observations have no effect.
+
+    Args:
+        A_t: State transition matrix.
+        b_t: Drift vector.
+        Q_t_sqr: Square-root process noise covariance.
+        m_prev: Previous state mean.
+        P_prev_sqr: Previous state covariance (square-root form).
+        measure: Measurement model (ODE + Conservation only).
+        t: Current time.
+        H_obs: Observation Jacobian, shape ``[obs_dim, state_dim]``.
+        c_obs: Observation offset, shape ``[obs_dim]``.
+        R_obs_sqr: Square-root observation noise, shape ``[obs_dim, obs_dim]``.
+        obs_active: Scalar boolean — whether observations are active.
+
+    Returns:
+        Tuple of 5 tuples: prediction, backward pass, ODE observation
+        marginal, observation marginal, and final updated state.
+    """
+    # Prediction
+    m_pred, P_pred_sqr = sqr_marginalization(A_t, b_t, Q_t_sqr, m_prev, P_prev_sqr)
+    G_back, d_back, P_back_sqr = sqr_inversion(
+        A_t, m_prev, P_prev_sqr, m_pred, P_pred_sqr, Q_t_sqr
+    )
+
+    # ODE + Conservation update
+    H_ode, c_ode = measure.linearize_fixed(m_pred, t=t)
+    R_ode_sqr = measure.get_fixed_noise_sqr()
+    mz_ode, Pz_ode_sqr = sqr_marginalization(
+        H_ode, c_ode, R_ode_sqr, m_pred, P_pred_sqr
+    )
+    _, m_ode, P_ode_sqr = sqr_inversion(
+        H_ode, m_pred, P_pred_sqr, mz_ode, Pz_ode_sqr, R_ode_sqr
+    )
+
+    # Observation update (always executed for fixed shapes)
+    mz_obs, Pz_obs_sqr = sqr_marginalization(H_obs, c_obs, R_obs_sqr, m_ode, P_ode_sqr)
+    _, m_obs, P_obs_sqr = sqr_inversion(
+        H_obs, m_ode, P_ode_sqr, mz_obs, Pz_obs_sqr, R_obs_sqr
+    )
+
+    # Select: use obs-updated state when active, else ODE-only
+    m_t = jax.lax.select(obs_active, m_obs, m_ode)
+    P_t_sqr = jax.lax.select(obs_active, P_obs_sqr, P_ode_sqr)
+
+    return (
+        (m_pred, P_pred_sqr),
+        (G_back, d_back, P_back_sqr),
+        (mz_ode, Pz_ode_sqr),
+        (mz_obs, Pz_obs_sqr),
+        (m_t, P_t_sqr),
+    )
+
+
+def ekf1_sqr_filter_step_preconditioned_sequential_scan(
+    A_bar: Array,
+    b_bar: Array,
+    Q_sqr_bar: Array,
+    T_t: Array,
+    m_prev_bar: Array,
+    P_prev_sqr_bar: Array,
+    measure: BaseODEInformation,
+    t: float,
+    H_obs: Array,
+    c_obs: Array,
+    R_obs_sqr: Array,
+    obs_active: Array,
+) -> tuple[
+    tuple[Array, Array],
+    tuple[Array, Array, Array],
+    tuple[Array, Array],
+    tuple[Array, Array],
+    tuple[Array, Array],
+    tuple[Array, Array],
+]:
+    """Scan-compatible preconditioned sequential square-root EKF step.
+
+    Args:
+        A_bar: Stepsize-independent state transition matrix.
+        b_bar: Stepsize-independent drift vector.
+        Q_sqr_bar: Square-root stepsize-independent process noise.
+        T_t: Preconditioning transformation matrix.
+        m_prev_bar: Previous state mean (preconditioned space).
+        P_prev_sqr_bar: Previous state covariance (preconditioned, square-root).
+        measure: Measurement model (ODE + Conservation only).
+        t: Current time.
+        H_obs: Observation Jacobian, shape ``[obs_dim, state_dim]``.
+        c_obs: Observation offset, shape ``[obs_dim]``.
+        R_obs_sqr: Square-root observation noise, shape ``[obs_dim, obs_dim]``.
+        obs_active: Scalar boolean — whether observations are active.
+
+    Returns:
+        Tuple of 6 tuples with preconditioned and original-space results.
+    """
+    # Prediction
+    m_pred_bar, P_pred_sqr_bar = sqr_marginalization(
+        A_bar, b_bar, Q_sqr_bar, m_prev_bar, P_prev_sqr_bar
+    )
+    G_back_bar, d_back_bar, P_back_sqr_bar = sqr_inversion(
+        A_bar, m_prev_bar, P_prev_sqr_bar, m_pred_bar, P_pred_sqr_bar, Q_sqr_bar
+    )
+
+    # ODE + Conservation update (linearize in original space)
+    H_ode, c_ode = measure.linearize_fixed(T_t @ m_pred_bar, t=t)
+    H_ode_bar = H_ode @ T_t
+    R_ode_sqr = measure.get_fixed_noise_sqr()
+    mz_ode, Pz_ode_sqr = sqr_marginalization(
+        H_ode_bar, c_ode, R_ode_sqr, m_pred_bar, P_pred_sqr_bar
+    )
+    _, m_ode_bar, P_ode_sqr_bar = sqr_inversion(
+        H_ode_bar, m_pred_bar, P_pred_sqr_bar, mz_ode, Pz_ode_sqr, R_ode_sqr
+    )
+
+    # Observation update (always executed for fixed shapes)
+    H_obs_bar = H_obs @ T_t
+    mz_obs, Pz_obs_sqr = sqr_marginalization(
+        H_obs_bar, c_obs, R_obs_sqr, m_ode_bar, P_ode_sqr_bar
+    )
+    _, m_obs_bar, P_obs_sqr_bar = sqr_inversion(
+        H_obs_bar, m_ode_bar, P_ode_sqr_bar, mz_obs, Pz_obs_sqr, R_obs_sqr
+    )
+
+    # Select: use obs-updated state when active, else ODE-only
+    m_t_bar = jax.lax.select(obs_active, m_obs_bar, m_ode_bar)
+    P_t_sqr_bar = jax.lax.select(obs_active, P_obs_sqr_bar, P_ode_sqr_bar)
 
     m_t = T_t @ m_t_bar
     P_t_sqr = P_t_sqr_bar @ T_t.T

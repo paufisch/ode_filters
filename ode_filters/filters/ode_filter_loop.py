@@ -4,11 +4,13 @@ from collections.abc import Callable
 
 import jax
 import jax.numpy as np
+import numpy as onp
 from jax import Array
 
 from ..measurement.measurement_models import (
     BaseODEInformation,
     Measurement,
+    ObsModel,
     build_obs_at_time,
 )
 from ..priors.gmp_priors import BasePrior
@@ -16,7 +18,9 @@ from .ode_filter_step import (
     ekf1_sqr_filter_step,
     ekf1_sqr_filter_step_preconditioned,
     ekf1_sqr_filter_step_preconditioned_sequential,
+    ekf1_sqr_filter_step_preconditioned_sequential_scan,
     ekf1_sqr_filter_step_sequential,
+    ekf1_sqr_filter_step_sequential_scan,
     rts_sqr_smoother_step,
     rts_sqr_smoother_step_preconditioned,
 )
@@ -70,7 +74,8 @@ def ekf1_sqr_loop(
     mz_seq = []
     Pz_seq_sqr = []
 
-    ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    ts, h = onp.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    h = float(h)
     A_h = prior.A(h)
     b_h = prior.b(h)
     Q_h_sqr = np.linalg.cholesky(prior.Q(h)).T
@@ -90,7 +95,7 @@ def ekf1_sqr_loop(
             m_seq[-1],
             P_seq_sqr[-1],
             measure,
-            t=ts[i + 1],
+            t=float(ts[i + 1]),
         )
 
         log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
@@ -202,7 +207,8 @@ def ekf1_sqr_loop_preconditioned(
         likelihood.
     """
 
-    ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    ts, h = onp.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    h = float(h)
     A_bar = prior.A(h)
     b_bar = prior.b(h)
     Q_sqr_bar = np.linalg.cholesky(prior.Q(h)).T
@@ -238,7 +244,7 @@ def ekf1_sqr_loop_preconditioned(
             m_seq_bar[-1],
             P_seq_sqr_bar[-1],
             measure,
-            t=ts[i + 1],
+            t=float(ts[i + 1]),
         )
 
         log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_seq_sqr_i))))
@@ -407,7 +413,8 @@ def ekf1_sqr_loop_sequential(
     mz_obs_seq = []
     Pz_obs_seq_sqr = []
 
-    ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    ts, h = onp.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    h = float(h)
     A_h = prior.A(h)
     b_h = prior.b(h)
     Q_h_sqr = np.linalg.cholesky(prior.Q(h)).T
@@ -416,12 +423,12 @@ def ekf1_sqr_loop_sequential(
     log_likelihood_obs = 0.0
 
     for i in range(N):
-        t = ts[i + 1]
+        t = float(ts[i + 1])
 
         # Build observation tuple for this step (or None)
         obs = None
         if observations is not None:
-            obs = build_obs_at_time(observations, measure._E0, float(t))
+            obs = build_obs_at_time(observations, measure._E0, t)
 
         (
             (m_pred, P_pred_sqr),
@@ -501,7 +508,8 @@ def ekf1_sqr_loop_preconditioned_sequential(
         Tuple of arrays, preconditioning matrix, and two scalars
         ``(log_likelihood_ode, log_likelihood_obs)``.
     """
-    ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    ts, h = onp.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    h = float(h)
     A_bar = prior.A(h)
     b_bar = prior.b(h)
     Q_sqr_bar = np.linalg.cholesky(prior.Q(h)).T
@@ -526,12 +534,12 @@ def ekf1_sqr_loop_preconditioned_sequential(
     log_likelihood_obs = 0.0
 
     for i in range(N):
-        t = ts[i + 1]
+        t = float(ts[i + 1])
 
         # Build observation tuple for this step (or None)
         obs = None
         if observations is not None:
-            obs = build_obs_at_time(observations, measure._E0, float(t))
+            obs = build_obs_at_time(observations, measure._E0, t)
 
         (
             (m_pred_bar, P_pred_sqr_bar),
@@ -590,4 +598,335 @@ def ekf1_sqr_loop_preconditioned_sequential(
         T_h,
         log_likelihood_ode,
         log_likelihood_obs,
+    )
+
+
+# =============================================================================
+# Scan-based sequential update loop functions
+# =============================================================================
+
+
+SeqScanLoopResult = tuple[
+    Array,  # m_seq [N+1, state_dim]
+    Array,  # P_seq_sqr [N+1, state_dim, state_dim]
+    Array,  # m_pred_seq [N, state_dim]
+    Array,  # P_pred_seq_sqr [N, state_dim, state_dim]
+    Array,  # G_back_seq [N, state_dim, state_dim]
+    Array,  # d_back_seq [N, state_dim]
+    Array,  # P_back_seq_sqr [N, state_dim, state_dim]
+    Array,  # mz_ode_seq [N, fixed_dim]
+    Array,  # Pz_ode_seq_sqr [N, fixed_dim, fixed_dim]
+    Array,  # mz_obs_seq [N, obs_dim]
+    Array,  # Pz_obs_seq_sqr [N, obs_dim, obs_dim]
+    Array,  # log_likelihood_ode
+    Array,  # log_likelihood_obs
+]
+
+
+def ekf1_sqr_loop_sequential_scan(
+    mu_0: Array,
+    Sigma_0_sqr: Array,
+    prior: BasePrior,
+    measure: BaseODEInformation,
+    tspan: tuple[float, float],
+    N: int,
+    obs_model: ObsModel | None = None,
+) -> SeqScanLoopResult:
+    """Run a sequential square-root EKF using ``jax.lax.scan``.
+
+    At each step the ODE + Conservation update is applied first.  Then,
+    if *obs_model* is provided, an observation update is applied using
+    the ODE-updated state as the prior.  Inactive observation steps are
+    masked via ``jax.lax.select`` so that the state and log-likelihood
+    are unaffected.
+
+    Args:
+        mu_0: Initial state mean estimate.
+        Sigma_0_sqr: Initial state covariance (square-root form).
+        prior: Prior model (e.g., IWP).
+        measure: Measurement model (ODE + Conservation only, no
+            :class:`Measurement` constraints bundled in).
+        tspan: Time interval ``(t_start, t_end)``.
+        N: Number of filter steps.
+        obs_model: Pre-computed observation data from
+            :func:`prepare_observations`, or ``None`` for ODE-only.
+
+    Returns:
+        Tuple of 11 arrays and two scalar log-likelihoods
+        ``(log_likelihood_ode, log_likelihood_obs)``.
+    """
+    ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    A_h = prior.A(h)
+    b_h = prior.b(h)
+    Q_h_sqr = np.linalg.cholesky(prior.Q(h)).T
+
+    state_dim = mu_0.shape[0]
+
+    has_obs = obs_model is not None
+    if has_obs:
+        obs_dim = obs_model.H.shape[0]
+        H_obs = obs_model.H
+        R_obs_sqr = obs_model.R_sqr
+        c_obs_seq = obs_model.c_seq  # [N, obs_dim]
+        mask_seq = obs_model.mask  # [N, obs_dim]
+    else:
+        obs_dim = 1
+        H_obs = np.zeros((obs_dim, state_dim))
+        R_obs_sqr = np.eye(obs_dim)
+        c_obs_seq = np.zeros((N, obs_dim))
+        mask_seq = np.zeros((N, obs_dim), dtype=bool)
+
+    def scan_body(carry, step_data):
+        m, P_sqr, ll_ode, ll_obs = carry
+        t_i, c_obs_i, mask_i = step_data
+
+        obs_active = mask_i.any()
+
+        (
+            (m_pred, P_pred_sqr),
+            (G_back, d_back, P_back_sqr),
+            (mz_ode, Pz_ode_sqr),
+            (mz_obs, Pz_obs_sqr),
+            (m_new, P_new_sqr),
+        ) = ekf1_sqr_filter_step_sequential_scan(
+            A_h,
+            b_h,
+            Q_h_sqr,
+            m,
+            P_sqr,
+            measure,
+            t_i,
+            H_obs,
+            c_obs_i,
+            R_obs_sqr,
+            obs_active,
+        )
+
+        ll_ode = ll_ode + _log_likelihood_contrib(mz_ode, Pz_ode_sqr)
+        ll_obs = ll_obs + jax.lax.select(
+            obs_active,
+            _log_likelihood_contrib(mz_obs, Pz_obs_sqr),
+            np.array(0.0),
+        )
+
+        outputs = (
+            m_pred,
+            P_pred_sqr,
+            G_back,
+            d_back,
+            P_back_sqr,
+            mz_ode,
+            Pz_ode_sqr,
+            mz_obs,
+            Pz_obs_sqr,
+            m_new,
+            P_new_sqr,
+        )
+        return (m_new, P_new_sqr, ll_ode, ll_obs), outputs
+
+    init_carry = (mu_0, Sigma_0_sqr, np.array(0.0), np.array(0.0))
+    step_data = (ts[1:], c_obs_seq, mask_seq)
+
+    (_, _, ll_ode, ll_obs), outputs = jax.lax.scan(scan_body, init_carry, step_data)
+
+    (
+        m_pred_seq,
+        P_pred_seq_sqr,
+        G_back_seq,
+        d_back_seq,
+        P_back_seq_sqr,
+        mz_ode_seq,
+        Pz_ode_seq_sqr,
+        mz_obs_seq,
+        Pz_obs_seq_sqr,
+        m_updates,
+        P_updates_sqr,
+    ) = outputs
+
+    # Prepend initial state
+    m_seq = np.concatenate([mu_0[None, :], m_updates], axis=0)
+    P_seq_sqr = np.concatenate([Sigma_0_sqr[None, :, :], P_updates_sqr], axis=0)
+
+    return (
+        m_seq,
+        P_seq_sqr,
+        m_pred_seq,
+        P_pred_seq_sqr,
+        G_back_seq,
+        d_back_seq,
+        P_back_seq_sqr,
+        mz_ode_seq,
+        Pz_ode_seq_sqr,
+        mz_obs_seq,
+        Pz_obs_seq_sqr,
+        ll_ode,
+        ll_obs,
+    )
+
+
+SeqPrecondScanLoopResult = tuple[
+    Array,  # m_seq [N+1, state_dim]
+    Array,  # P_seq_sqr [N+1, state_dim, state_dim]
+    Array,  # m_seq_bar [N+1, state_dim]
+    Array,  # P_seq_sqr_bar [N+1, state_dim, state_dim]
+    Array,  # m_pred_seq_bar [N, state_dim]
+    Array,  # P_pred_seq_sqr_bar [N, state_dim, state_dim]
+    Array,  # G_back_seq_bar [N, state_dim, state_dim]
+    Array,  # d_back_seq_bar [N, state_dim]
+    Array,  # P_back_seq_sqr_bar [N, state_dim, state_dim]
+    Array,  # mz_ode_seq [N, fixed_dim]
+    Array,  # Pz_ode_seq_sqr [N, fixed_dim, fixed_dim]
+    Array,  # mz_obs_seq [N, obs_dim]
+    Array,  # Pz_obs_seq_sqr [N, obs_dim, obs_dim]
+    Array,  # T_h [state_dim, state_dim]
+    Array,  # log_likelihood_ode
+    Array,  # log_likelihood_obs
+]
+
+
+def ekf1_sqr_loop_preconditioned_sequential_scan(
+    mu_0: Array,
+    P_0_sqr: Array,
+    prior: BasePrior,
+    measure: BaseODEInformation,
+    tspan: tuple[float, float],
+    N: int,
+    obs_model: ObsModel | None = None,
+) -> SeqPrecondScanLoopResult:
+    """Run a preconditioned sequential square-root EKF using ``jax.lax.scan``.
+
+    Args:
+        mu_0: Initial state mean estimate.
+        P_0_sqr: Initial state covariance (square-root form).
+        prior: Prior model (typically PrecondIWP).
+        measure: Measurement model (ODE + Conservation only).
+        tspan: Time interval ``(t_start, t_end)``.
+        N: Number of filter steps.
+        obs_model: Pre-computed observation data from
+            :func:`prepare_observations`, or ``None`` for ODE-only.
+
+    Returns:
+        Tuple of 13 arrays, preconditioning matrix, and two scalar
+        log-likelihoods ``(log_likelihood_ode, log_likelihood_obs)``.
+    """
+    ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    A_bar = prior.A(h)
+    b_bar = prior.b(h)
+    Q_sqr_bar = np.linalg.cholesky(prior.Q(h)).T
+    T_h = prior.T(h)
+
+    state_dim = mu_0.shape[0]
+    m_0_bar = np.linalg.solve(T_h, mu_0)
+    P_0_sqr_bar = np.linalg.solve(T_h, P_0_sqr.T).T
+
+    has_obs = obs_model is not None
+    if has_obs:
+        obs_dim = obs_model.H.shape[0]
+        H_obs = obs_model.H
+        R_obs_sqr = obs_model.R_sqr
+        c_obs_seq = obs_model.c_seq
+        mask_seq = obs_model.mask
+    else:
+        obs_dim = 1
+        H_obs = np.zeros((obs_dim, state_dim))
+        R_obs_sqr = np.eye(obs_dim)
+        c_obs_seq = np.zeros((N, obs_dim))
+        mask_seq = np.zeros((N, obs_dim), dtype=bool)
+
+    def scan_body(carry, step_data):
+        m_bar, P_sqr_bar, ll_ode, ll_obs = carry
+        t_i, c_obs_i, mask_i = step_data
+
+        obs_active = mask_i.any()
+
+        (
+            (m_pred_bar, P_pred_sqr_bar),
+            (G_back_bar, d_back_bar, P_back_sqr_bar),
+            (mz_ode, Pz_ode_sqr),
+            (mz_obs, Pz_obs_sqr),
+            (m_new_bar, P_new_sqr_bar),
+            (m_new, P_new_sqr),
+        ) = ekf1_sqr_filter_step_preconditioned_sequential_scan(
+            A_bar,
+            b_bar,
+            Q_sqr_bar,
+            T_h,
+            m_bar,
+            P_sqr_bar,
+            measure,
+            t_i,
+            H_obs,
+            c_obs_i,
+            R_obs_sqr,
+            obs_active,
+        )
+
+        ll_ode = ll_ode + _log_likelihood_contrib(mz_ode, Pz_ode_sqr)
+        ll_obs = ll_obs + jax.lax.select(
+            obs_active,
+            _log_likelihood_contrib(mz_obs, Pz_obs_sqr),
+            np.array(0.0),
+        )
+
+        outputs = (
+            m_pred_bar,
+            P_pred_sqr_bar,
+            G_back_bar,
+            d_back_bar,
+            P_back_sqr_bar,
+            mz_ode,
+            Pz_ode_sqr,
+            mz_obs,
+            Pz_obs_sqr,
+            m_new_bar,
+            P_new_sqr_bar,
+            m_new,
+            P_new_sqr,
+        )
+        return (m_new_bar, P_new_sqr_bar, ll_ode, ll_obs), outputs
+
+    init_carry = (m_0_bar, P_0_sqr_bar, np.array(0.0), np.array(0.0))
+    step_data = (ts[1:], c_obs_seq, mask_seq)
+
+    (_, _, ll_ode, ll_obs), outputs = jax.lax.scan(scan_body, init_carry, step_data)
+
+    (
+        m_pred_seq_bar,
+        P_pred_seq_sqr_bar,
+        G_back_seq_bar,
+        d_back_seq_bar,
+        P_back_seq_sqr_bar,
+        mz_ode_seq,
+        Pz_ode_seq_sqr,
+        mz_obs_seq,
+        Pz_obs_seq_sqr,
+        m_updates_bar,
+        P_updates_sqr_bar,
+        m_updates,
+        P_updates_sqr,
+    ) = outputs
+
+    # Prepend initial state
+    m_seq = np.concatenate([mu_0[None, :], m_updates], axis=0)
+    P_seq_sqr = np.concatenate([P_0_sqr[None, :, :], P_updates_sqr], axis=0)
+    m_seq_bar = np.concatenate([m_0_bar[None, :], m_updates_bar], axis=0)
+    P_seq_sqr_bar = np.concatenate([P_0_sqr_bar[None, :, :], P_updates_sqr_bar], axis=0)
+
+    return (
+        m_seq,
+        P_seq_sqr,
+        m_seq_bar,
+        P_seq_sqr_bar,
+        m_pred_seq_bar,
+        P_pred_seq_sqr_bar,
+        G_back_seq_bar,
+        d_back_seq_bar,
+        P_back_seq_sqr_bar,
+        mz_ode_seq,
+        Pz_ode_seq_sqr,
+        mz_obs_seq,
+        Pz_obs_seq_sqr,
+        T_h,
+        ll_ode,
+        ll_obs,
     )
