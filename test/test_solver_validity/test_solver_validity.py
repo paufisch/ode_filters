@@ -6,10 +6,10 @@ import pytest
 from scipy.integrate import solve_ivp
 
 from ode_filters.filters.ode_filter_loop import (
-    ekf1_sqr_loop_preconditioned_scan,
-    ekf1_sqr_loop_scan,
-    rts_sqr_smoother_loop_preconditioned_scan,
-    rts_sqr_smoother_loop_scan,
+    ekf1_sqr_loop,
+    ekf1_sqr_loop_preconditioned,
+    rts_sqr_smoother_loop,
+    rts_sqr_smoother_loop_preconditioned,
 )
 from ode_filters.measurement.measurement_models import ODEInformation
 from ode_filters.priors.gmp_priors import IWP, PrecondIWP, taylor_mode_initialization
@@ -34,22 +34,25 @@ def _solve_standard(vf, x0, *, tspan, N, q=3, Xi_scale=0.5):
     mu_0, Sigma_0_sqr = taylor_mode_initialization(vf, x0, q)
     measure = ODEInformation(vf, prior.E0, prior.E1)
 
-    result = ekf1_sqr_loop_scan(mu_0, Sigma_0_sqr, prior, measure, tspan, N)
+    result = ekf1_sqr_loop(mu_0, Sigma_0_sqr, prior, measure, tspan, N)
 
-    m_smooth, P_smooth_sqr = rts_sqr_smoother_loop_scan(
-        result.m_seq[-1],
-        result.P_seq_sqr[-1],
-        result.G_back_seq,
-        result.d_back_seq,
-        result.P_back_seq_sqr,
+    # result is a tuple: (m_seq, P_seq_sqr, m_pred, P_pred, G, d, P_back, mz, Pz, ll)
+    m_seq = np.array(result[0])
+    P_seq_sqr_arr = np.array(result[1])
+    G_back = np.array(result[4])
+    d_back = np.array(result[5])
+    P_back = np.array(result[6])
+
+    m_smooth, P_smooth_sqr = rts_sqr_smoother_loop(
+        m_seq[-1], P_seq_sqr_arr[-1], G_back, d_back, P_back, N
     )
 
     E0 = prior.E0
     ts = np.linspace(tspan[0], tspan[1], N + 1)
-    m_filter = np.einsum("ij,nj->ni", E0, result.m_seq)
+    m_filter = np.einsum("ij,nj->ni", E0, m_seq)
     m_smooth_x = np.einsum("ij,nj->ni", E0, m_smooth)
 
-    P_filter_sqr = np.einsum("ij,njk->nik", E0, result.P_seq_sqr)
+    P_filter_sqr = np.einsum("ij,njk->nik", E0, P_seq_sqr_arr)
     P_smooth_sqr_x = np.einsum("ij,njk->nik", E0, P_smooth_sqr)
 
     return ts, m_filter, P_filter_sqr, m_smooth_x, P_smooth_sqr_x
@@ -65,27 +68,38 @@ def _solve_preconditioned(vf, x0, *, tspan, N, q=3, Xi_scale=0.5):
     mu_0, Sigma_0_sqr = taylor_mode_initialization(vf, x0, q)
     measure = ODEInformation(vf, prior.E0, prior.E1)
 
-    result = ekf1_sqr_loop_preconditioned_scan(
-        mu_0, Sigma_0_sqr, prior, measure, tspan, N
-    )
+    result = ekf1_sqr_loop_preconditioned(mu_0, Sigma_0_sqr, prior, measure, tspan, N)
 
-    m_smooth, P_smooth_sqr = rts_sqr_smoother_loop_preconditioned_scan(
-        result.m_seq[-1],
-        result.P_seq_sqr[-1],
-        result.m_seq_bar[-1],
-        result.P_seq_sqr_bar[-1],
-        result.G_back_seq_bar,
-        result.d_back_seq_bar,
-        result.P_back_seq_sqr_bar,
-        result.T_h,
+    # result tuple: (m_seq, P_seq_sqr, m_seq_bar, P_seq_sqr_bar,
+    #   m_pred_bar, P_pred_bar, G_back_bar, d_back_bar, P_back_bar,
+    #   mz, Pz, T_h, ll)
+    m_seq = np.array(result[0])
+    P_seq_sqr_arr = np.array(result[1])
+    m_seq_bar = np.array(result[2])
+    P_seq_sqr_bar = np.array(result[3])
+    G_back_bar = np.array(result[6])
+    d_back_bar = np.array(result[7])
+    P_back_bar = np.array(result[8])
+    T_h = result[11]
+
+    m_smooth, P_smooth_sqr = rts_sqr_smoother_loop_preconditioned(
+        m_seq[-1],
+        P_seq_sqr_arr[-1],
+        m_seq_bar[-1],
+        P_seq_sqr_bar[-1],
+        G_back_bar,
+        d_back_bar,
+        P_back_bar,
+        N,
+        T_h,
     )
 
     E0 = prior.E0
     ts = np.linspace(tspan[0], tspan[1], N + 1)
-    m_filter = np.einsum("ij,nj->ni", E0, result.m_seq)
+    m_filter = np.einsum("ij,nj->ni", E0, m_seq)
     m_smooth_x = np.einsum("ij,nj->ni", E0, m_smooth)
 
-    P_filter_sqr = np.einsum("ij,njk->nik", E0, result.P_seq_sqr)
+    P_filter_sqr = np.einsum("ij,njk->nik", E0, P_seq_sqr_arr)
     P_smooth_sqr_x = np.einsum("ij,njk->nik", E0, P_smooth_sqr)
 
     return ts, m_filter, P_filter_sqr, m_smooth_x, P_smooth_sqr_x
