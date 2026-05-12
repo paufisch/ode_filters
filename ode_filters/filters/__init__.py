@@ -1,5 +1,7 @@
 """Filtering routines for ODE models."""
 
+from .adaptive_controller import PController, PIController, StepSizeController
+from .ode_filter_adaptive import AdaptiveLoopResult, ekf1_sqr_adaptive_loop
 from .ode_filter_loop import (
     ekf1_sqr_loop,
     ekf1_sqr_loop_preconditioned,
@@ -22,6 +24,11 @@ from .ode_filter_step import (
 )
 
 __all__ = [
+    "AdaptiveLoopResult",
+    "PController",
+    "PIController",
+    "StepSizeController",
+    "ekf1_sqr_adaptive_loop",
     "ekf1_sqr_filter_step",
     "ekf1_sqr_filter_step_preconditioned",
     "ekf1_sqr_filter_step_preconditioned_sequential",
