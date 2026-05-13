@@ -25,7 +25,11 @@ from typing import Protocol, runtime_checkable
 
 @runtime_checkable
 class StepSizeController(Protocol):
-    """Duck-typed interface for step-size controllers."""
+    """Duck-typed interface for step-size controllers.
+
+    ``err_prev`` may be ``None`` to indicate the absence of memory (first
+    step, or right after a reject).
+    """
 
     def propose(self, h: float, err: float, err_prev: float | None) -> float:
         """Return the proposed next step size."""

@@ -161,6 +161,11 @@ def ekf1_sqr_adaptive_loop(
 ) -> AdaptiveLoopResult:
     """Adaptive-step square-root EKF with per-step diffusion calibration.
 
+    Python ``while`` driver around a jitted per-step body. Every accepted
+    step contributes to the returned sequences and the result carries the
+    smoothing-relevant outputs, so it can be fed directly to
+    :func:`rts_sqr_smoother_loop`.
+
     Args:
         mu_0: Initial state mean.
         Sigma_0_sqr: Initial state covariance (square-root form).
@@ -193,6 +198,7 @@ def ekf1_sqr_adaptive_loop(
     Raises:
         RuntimeError: If the controller proposes a step below ``h_min`` or the
             iteration cap is exceeded.
+        ValueError: If ``tspan`` is non-increasing.
     """
     t_start, t_end = float(tspan[0]), float(tspan[1])
     if t_end <= t_start:
