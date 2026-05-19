@@ -1,13 +1,17 @@
 # .github/workflows/ci.yml
 name: CI
 
+# Workflow: feature branches -> development -> main.
+# CI must run on push to development and main, and on PRs targeting either.
 on:
   push:
     branches:
       - main
+      - development
   pull_request:
     branches:
       - main
+      - development
 
 jobs:
   test:

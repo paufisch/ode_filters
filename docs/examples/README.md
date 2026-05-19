@@ -47,6 +47,11 @@ This comprehensive tutorial covers all advanced features:
 - Combining conservation and measurements
 - Real-world data integration examples
 
+### 6. **adaptive-and-calibration.ipynb** - Calibration and Adaptive Steps
+- Fixed-step uncalibrated vs. post-hoc MLE vs. adaptive per-step quasi-MLE
+- Step-size and per-step sigma diagnostics
+- Whitened-residual sanity check
+
 ## Feature Coverage Matrix
 
 | Feature | Quickstart | Examples | Second-Order | Advanced | Additional |

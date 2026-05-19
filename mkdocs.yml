@@ -17,6 +17,10 @@ nav:
       - Basic usage: examples/examples.ipynb
       - Second-order systems: examples/second-order-systems.ipynb
       - Advanced features: examples/advanced-features.ipynb
+      - Adaptive steps and calibration: examples/adaptive-and-calibration.ipynb
+  - Guides:
+      - Diffusion calibration: calibration.md
+      - Adaptive step-size control: adaptive-steps.md
   - API Reference:
       - Overview: api/index.md
       - Filters: api/filters/index.md
