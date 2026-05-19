@@ -6,18 +6,21 @@ in the same square-root convention as the rest of the library:
 
     v = P_z_sqr^{-T} @ m_z,    v.T @ v == m_z.T @ S^{-1} @ m_z.
 
-Two conventions for ``S`` appear in the literature:
+Two conventions for the residual covariance ``S`` correspond to two
+different generative-model assumptions:
 
-- ``S = H Q(h) H.T`` (process-noise only). Used by Bosch et al. 2021 and by
-  probdiffeq's ``MLEDiffusion`` ("dynamic"); the per-step ``sigma_hat^2`` is
-  then *only* the multiplier on the current step's process noise, and is
-  baked into ``Q_h`` before propagation -- past steps keep their own
-  calibration. :func:`quasi_mle_sigma_sqr_from_Q` is the convenience wrapper.
+- ``S = H Q(h) H.T`` (process-noise only). The implicit model is
+  ``m_z ~ N(0, sigma^2 H Q(h) H.T)``, i.e. the residual is treated as if
+  it arose purely from the current step's process noise scaled by
+  ``sigma^2``. This is the Bosch-Tronarp-Hennig 2021 per-step quasi-MLE
+  (Eq. 32). The estimate is meant to be baked into the current step's
+  ``Q_h`` *before* propagation; past steps keep their own calibration.
+  :func:`quasi_mle_sigma_sqr_from_Q` is the convenience wrapper.
 
 - ``S = H P_pred H.T`` (full noise-free residual cov, including
-  ``A P_prev A.T``). Treats ``sigma_hat^2`` as a global scale on every
-  covariance. Useful for *post-hoc* calibration of a sigma=1 trajectory; cf.
-  :func:`posthoc_mle_sigma_sqr`.
+  ``A P_prev A.T``). The implicit model is ``sigma^2`` multiplying every
+  covariance globally. Useful for *post-hoc* calibration of a sigma=1
+  trajectory; cf. :func:`posthoc_mle_sigma_sqr`.
 
 References:
     Bosch, Tronarp, Hennig. "Calibrated Adaptive Probabilistic ODE Solvers."
@@ -46,15 +49,15 @@ def quasi_mle_sigma_sqr(m_z: Array, P_z_sqr: Array) -> Array:
     assumption that ``S`` scales linearly with ``sigma^2``. Which ``S`` is
     "correct" depends on the calibration mode -- see the module docstring.
 
-    **``P_z_sqr`` must exclude any measurement noise R.** Including ``R``
-    conflates the diffusion scale with the measurement noise and biases the
-    estimate downward. Cf. probnum's ``meas_rv_error_free`` and probdiffeq's
-    noise-free observed RV. For pure ODE-information filtering
-    (``measure.get_noise`` returns zero -- the typical case) the distinction
-    is moot. For data-assimilation workflows with ``R != 0``, pre-compute the
-    noise-free covariance via
+    **``P_z_sqr`` must exclude any measurement noise R.** The estimator
+    treats ``S`` as scaling linearly with ``sigma^2``; adding ``R`` into the
+    denominator inflates it by a constant and biases ``sigma_hat^2`` down.
+    For pure ODE-information filtering (``measure.get_noise`` returns zero
+    -- the typical case) the distinction is moot. For data-assimilation
+    workflows with ``R != 0``, pre-compute the noise-free covariance via
     :func:`~ode_filters.inference.sqr_gaussian_inference.sqr_marginalization`
-    with a zero ``Q_sqr`` (or use :func:`quasi_mle_sigma_sqr_from_Q`).
+    with a zero ``R_sqr`` (or use :func:`quasi_mle_sigma_sqr_from_Q`, which
+    builds ``H Q H.T`` directly and never sees ``R``).
 
     Args:
         m_z: Predicted observation mean (a.k.a. ODE residual mean), shape ``[d]``.
@@ -84,11 +87,11 @@ def quasi_mle_sigma_sqr_from_Q(m_z: Array, H: Array, Q_sqr: Array) -> Array:
     """Per-step quasi-MLE of sigma^2 in the *dynamic-diffusion* convention.
 
     Uses ``S = H Q(h) H.T`` -- i.e. only the current step's process-noise
-    propagation -- as the residual covariance. This is the estimator from
-    Bosch et al. 2021 Eq. 32 and the one used by probdiffeq's
-    ``MLEDiffusion``. The resulting ``sigma_hat^2`` is intended to be baked
-    into ``Q_h`` for the current step's propagation; past-step contributions
-    in ``A P_prev A.T`` keep their own previously-applied scaling.
+    propagation -- as the residual covariance. This is the Bosch-Tronarp-
+    Hennig 2021 per-step quasi-MLE (Eq. 32). The resulting ``sigma_hat^2``
+    is intended to be baked into ``Q_h`` for the current step's
+    propagation; past-step contributions in ``A P_prev A.T`` keep their
+    own previously-applied scaling.
 
     Args:
         m_z: Predicted observation mean (residual), shape ``[d]``.

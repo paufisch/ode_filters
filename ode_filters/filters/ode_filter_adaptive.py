@@ -8,23 +8,31 @@ local-error estimate; the Python layer makes the accept/reject decision.
 
 Four calibration schemes are exposed via the ``calibration`` parameter:
 
-- ``"dynamic"`` (default, probdiffeq ``MLEDiffusion`` / Bosch 2021):
-  scalar ``sigma_hat^2_n`` from ``H Q(h) H.T``, baked into the current
-  step's ``Q_h`` *before* propagation. Past steps keep their own
+- ``"dynamic"`` (default, Bosch et al. 2021 Eq. 32): scalar
+  ``sigma_hat^2_n = m_z.T (H Q(h) H.T)^{-1} m_z / d``, baked into the
+  current step's ``Q_h`` *before* propagation. Past steps keep their own
   ``sigma_hat^2`` -- statistically honest per-step, Markov-preserving.
   **Fails on multi-scale ODEs** (the scalar average is dominated by the
   larger-residual component, which starves smaller-scale components).
 
-- ``"diagonal"`` (EKF1-flavoured) / ``"diagonal_ekf0"`` (EKF0-flavoured):
-  per-component ``sigma_hat^2_i = m_z[i]^2 / (H Q H.T)_ii``, baked into
-  ``Q`` as ``Q_calib = Q_time(h) kron diag(xi_diag * sigma_vec)``. The two
-  differ only in the calibration ``H``: ``"diagonal"`` uses the EKF1
-  Jacobian and takes the diagonal of a generally-dense matrix;
-  ``"diagonal_ekf0"`` uses ``H_0 = E_1`` so the matrix is *exactly*
-  diagonal when ``xi`` is diagonal. Both are statistically honest per-step
-  *and* per-component, resolve multi-scale systems that ``"dynamic"``
-  collapses on, and run at the same cost. **Recommended default for
-  problems with more than one ODE component.** Requires diagonal ``xi``.
+- ``"diagonal_ekf0"``: per-component
+  ``sigma_hat^2_i = m_z[i]^2 / (E_1 Q E_1.T)_ii``. Because ``E_1`` selects
+  only the first-derivative block, ``E_1 Q E_1.T`` is *exactly* diagonal
+  when ``xi`` is diagonal -- so ``sigma_hat^2_i`` is the genuine MLE in a
+  block-diagonal sub-model for component ``i``. This is the standard
+  per-component recipe (Bosch et al. 2021 §4.2, ``DynamicMVDiffusion``)
+  and is the recommended choice for multi-component problems. Requires
+  diagonal ``xi``.
+
+- ``"diagonal"`` (EK1-flavoured heuristic): same formula as
+  ``"diagonal_ekf0"`` but with the EK1 Jacobian ``H_t = E_1 - J_f E_0`` in
+  the denominator. ``H_t Q H_t.T`` is then generally dense, and taking
+  its diagonal ignores cross-component coupling introduced by ``J_f``.
+  When ``J_f`` is block-diagonal in components (e.g. fully decoupled RHS)
+  this collapses to ``"diagonal_ekf0"``; when ``J_f`` couples components
+  strongly, the diagonal-of-dense recipe biases the per-component MLE.
+  Use only when you understand the trade-off; prefer ``"diagonal_ekf0"``
+  by default. Requires diagonal ``xi``.
 
 - ``"cumulative"`` (legacy multiplicative scheme): scalar ``sigma_hat^2_n``
   from the *full* noise-free predicted-obs covariance ``H P_pred H.T``;
@@ -32,7 +40,7 @@ Four calibration schemes are exposed via the ``calibration`` parameter:
   inherit every subsequent ``sigma_hat^2``. Non-Markovian by design; an
   online empirical-Bayes update of a single global unknown ``sigma``. *Not*
   per-step honest, but stays robust on multi-scale problems (the inflated
-  carried ``P`` accidentally compensates). ``"diagonal"`` is strictly
+  carried ``P`` accidentally compensates). ``"diagonal_ekf0"`` is strictly
   better when applicable; keep ``"cumulative"`` for non-diagonal Xi or for
   backward compatibility with earlier runs.
 
@@ -47,11 +55,22 @@ propagates into ``h`` decisions, causing visible oscillations. The default
 in the error formula -- noise vanishes after a few accepted steps, ``h``
 becomes much smoother, reject counts drop. Per-step ``sigma_hat^2`` is
 still used in the actual Q calibration. Pass ``sigma_in_error="per_step"``
-to recover the original Bosch et al. 2021 recipe.
+to recover the original Bosch et al. 2021 recipe. *Caveat:* the running
+mean lags real changes in problem stiffness; in regimes where the local
+diffusion changes abruptly (entering a stiff transition), ``"per_step"``
+is more responsive.
 
 The accepted-step outputs are stored in lists matching the shape conventions of
 :func:`ekf1_sqr_loop`, so the result can be passed directly to
 :func:`rts_sqr_smoother_loop`.
+
+The returned ``log_likelihood`` is the *post-calibration* marginal
+likelihood: each step's contribution uses the calibrated ``Pz_sqr`` (which
+includes ``sigma_hat^2`` in the dynamic/diagonal modes and the
+post-multiplied scale in cumulative mode). It is therefore the right
+quantity for inference *given* the chosen calibration model, but is **not**
+directly comparable across calibration modes -- different ``calibration``
+settings define different generative models.
 """
 
 from __future__ import annotations
@@ -332,33 +351,37 @@ def ekf1_sqr_adaptive_loop(
         calibration: How the per-step ``sigma_hat^2`` enters the stored
             posterior. See the module docstring for the four available modes:
 
-            - ``"dynamic"`` (default) -- probdiffeq ``MLEDiffusion`` /
-              Bosch et al. 2021. Scalar ``sigma_hat^2`` from ``H Q(h) H.T``
-              baked into ``Q_h``. Honest per-step but **scalar**: fails on
-              multi-scale ODE systems (one component's residual dominates
-              ``sigma_hat^2`` and starves the others).
-            - ``"diagonal"`` -- per-component ``sigma_hat^2_i = m_z[i]^2 /
-              (H1 Q H1.T)_ii`` (EKF1 H matrix's diagonal), baked into ``Q``
-              as ``Q_calib = Q_time(h) kron diag(xi_diag * sigma_vec)``. The
-              recommended choice for multi-component problems: it is
-              statistically honest per-step *and* per-component, and resolves
-              multi-scale ODEs that ``"dynamic"`` collapses on. Requires
-              ``prior.xi`` to be diagonal (the default).
-            - ``"diagonal_ekf0"`` -- same idea, but using the EKF0 H
-              matrix ``H_0 = E_1`` so the denominator ``E_1 Q E_1.T`` is
-              *exactly* diagonal when ``xi`` is diagonal. Mathematically
-              cleaner; empirically a close second on most problems but
-              sometimes a small win on multi-scale at loose tolerance.
+            - ``"dynamic"`` (default) -- Bosch et al. 2021 Eq. 32. Scalar
+              ``sigma_hat^2`` from ``H Q(h) H.T`` baked into ``Q_h``.
+              Honest per-step but **scalar**: fails on multi-scale ODE
+              systems (one component's residual dominates ``sigma_hat^2``
+              and starves the others).
+            - ``"diagonal_ekf0"`` -- per-component
+              ``sigma_hat^2_i = m_z[i]^2 / (E_1 Q E_1.T)_ii`` using the
+              EK0 observation matrix ``H_0 = E_1``. The denominator is
+              *exactly* diagonal when ``xi`` is diagonal, so the
+              per-component estimator is the genuine MLE in a
+              block-diagonal sub-model. The recommended choice for
+              multi-component problems. Requires ``prior.xi`` diagonal.
+            - ``"diagonal"`` -- same formula, but with the EK1 Jacobian
+              ``H_t = E_1 - J_f E_0`` in the denominator. Heuristic:
+              taking the diagonal of a generally-dense
+              ``H_t Q(h) H_t.T`` ignores cross-component coupling from
+              ``J_f``. Equivalent to ``"diagonal_ekf0"`` when ``J_f`` is
+              block-diagonal (e.g. fully decoupled RHS); biased in
+              proportion to the off-diagonal entries of ``J_f``
+              otherwise. Requires ``prior.xi`` diagonal.
             - ``"cumulative"`` -- legacy multiplicative scheme; scalar sigma
               from the full ``H P_pred H.T`` post-multiplies the whole step.
               Non-Markovian; robust on multi-scale by accident (inflated P
-              inherited from earlier transitions). Prefer ``"diagonal"``.
+              inherited from earlier transitions). Prefer
+              ``"diagonal_ekf0"``.
             - ``"none"`` -- propagate ``sigma=1``, still report
               ``sigma_hat^2`` for post-hoc rescaling / diagnostics.
 
-            For ``"diagonal"`` the per-step entries of
-            ``result.sigma_sqr_seq`` are length-``d`` arrays; for the scalar
-            modes they are Python floats.
+            For the diagonal modes the per-step entries of
+            ``result.sigma_sqr_seq`` are length-``d`` arrays; for the
+            scalar modes they are Python floats.
         sigma_in_error: How ``sigma_hat^2`` enters the local-error estimate.
 
             - ``"running_mean"`` (default) -- use the cumulative running

@@ -163,14 +163,17 @@ def ekf1_sqr_loop_dynamic(
     :func:`~ode_filters.filters.ekf1_sqr_adaptive_loop` for the full
     description of the modes; this loop supports the same names:
 
-    - ``"dynamic"`` (default, scalar): probdiffeq ``MLEDiffusion``.
+    - ``"dynamic"`` (default, scalar): Bosch et al. 2021 Eq. 32.
       ``P_pred = A P_prev A.T + sigma_hat^2_n * Q_h``.
-    - ``"diagonal"``: per-component ``sigma_hat^2_i`` from
-      ``(H1 Q H1.T)_ii`` (EKF1 Jacobian's diagonal); resolves multi-scale
-      ODEs. Requires ``prior.xi`` diagonal.
-    - ``"diagonal_ekf0"``: per-component variant using ``(E1 Q E1.T)_ii``
-      (exact-diagonal denominator). Equivalent cost; sometimes marginally
-      better on multi-scale problems at loose tolerance.
+    - ``"diagonal_ekf0"``: per-component ``sigma_hat^2_i`` from
+      ``(E_1 Q E_1.T)_ii`` (exact-diagonal denominator). Genuine MLE in
+      a block-diagonal sub-model for component ``i``. Recommended default
+      for multi-component problems.
+    - ``"diagonal"``: same per-component formula but with the EK1
+      Jacobian ``H_t = E_1 - J_f E_0`` in the denominator. Heuristic --
+      equivalent to ``"diagonal_ekf0"`` when ``J_f`` is block-diagonal in
+      components, biased in proportion to ``J_f``'s off-diagonal entries
+      otherwise.
     - ``"none"``: propagate ``sigma=1``, report ``sigma_hat^2`` for post-hoc
       rescaling (combine with :func:`posthoc_mle_sigma_sqr` /
       :func:`rescale_sqr_seq`).
@@ -178,6 +181,13 @@ def ekf1_sqr_loop_dynamic(
     ``"cumulative"`` is intentionally *not* exposed on the fixed-step loop:
     the cumulative scheme's appeal is robust adaptive-step control, and at
     fixed step there's nothing to gain over post-hoc rescaling.
+
+    The returned ``log_likelihood`` reflects the *calibrated* posterior --
+    each step's contribution uses the calibrated ``Pz_sqr``. With
+    ``calibration="none"`` it matches the log-likelihood from
+    :func:`ekf1_sqr_loop`; in the calibrated modes it is the log-likelihood
+    under the corresponding generative model and is not directly comparable
+    across modes.
 
     Args:
         mu_0: Initial state mean.
@@ -500,6 +510,13 @@ def ekf1_sqr_loop_preconditioned_dynamic(
     :func:`ekf1_sqr_adaptive_loop` for the full description. (``"cumulative"``
     is not exposed for fixed-step loops.)
 
+    For the diagonal modes the bar-space time-block ``Q_bar_time`` is
+    obtained from ``prior._Q_bar`` if present (the ``PrecondIWP``
+    convention, where ``Q_bar_time`` is h-independent); otherwise this
+    function raises ``AttributeError``. Other preconditioned priors that
+    expose a different bar-space convention are not supported in the
+    diagonal modes.
+
     Args:
         mu_0: Initial state mean (original space).
         P_0_sqr: Initial state covariance (square-root form, original space).
@@ -542,12 +559,18 @@ def ekf1_sqr_loop_preconditioned_dynamic(
     xi_diag = np.diag(prior.xi)
     E1 = prior.E1
     if calibration in ("diagonal", "diagonal_ekf0"):
-        # For PrecondIWP the time-block matrix Q_bar_time is h-independent
-        # and lives at prior._Q_bar. For other preconditioned priors the
-        # convention may differ; we fall back to prior._Q if needed.
+        # Only PrecondIWP exposes a true bar-space time-block ``_Q_bar``.
+        # Other preconditioned priors store ``_Q(h)`` in original space; the
+        # diagonal-mode Kronecker construction would silently produce a
+        # wrong calibrated Q for those, so we refuse.
         Q_bar_time = getattr(prior, "_Q_bar", None)
         if Q_bar_time is None:
-            Q_bar_time = prior._Q(h)
+            raise NotImplementedError(
+                f"calibration={calibration!r} requires the prior to expose a "
+                f"bar-space time-block `_Q_bar` (only PrecondIWP does). "
+                f"Got {type(prior).__name__}; use the non-preconditioned loop "
+                f"or `calibration='dynamic'`/'none'."
+            )
         Q_bar_time_sqr_lower = np.linalg.cholesky(Q_bar_time)
 
     m_seq = [mu_0]
@@ -1550,7 +1573,12 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
     if calibration in ("diagonal", "diagonal_ekf0"):
         Q_bar_time = getattr(prior, "_Q_bar", None)
         if Q_bar_time is None:
-            Q_bar_time = prior._Q(h)
+            raise NotImplementedError(
+                f"calibration={calibration!r} requires the prior to expose a "
+                f"bar-space time-block `_Q_bar` (only PrecondIWP does). "
+                f"Got {type(prior).__name__}; use the non-preconditioned loop "
+                f"or `calibration='dynamic'`/'none'."
+            )
         Q_bar_time_sqr_lower = np.linalg.cholesky(Q_bar_time)
 
     m_0_bar = np.linalg.solve(T_h, mu_0)
