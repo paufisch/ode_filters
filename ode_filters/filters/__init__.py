@@ -4,7 +4,11 @@ from .adaptive_controller import PController, PIController, StepSizeController
 from .ode_filter_adaptive import AdaptiveLoopResult, ekf1_sqr_adaptive_loop
 from .ode_filter_loop import (
     ekf1_sqr_loop,
+    ekf1_sqr_loop_dynamic,
+    ekf1_sqr_loop_dynamic_scan,
     ekf1_sqr_loop_preconditioned,
+    ekf1_sqr_loop_preconditioned_dynamic,
+    ekf1_sqr_loop_preconditioned_dynamic_scan,
     ekf1_sqr_loop_preconditioned_sequential,
     ekf1_sqr_loop_preconditioned_sequential_scan,
     ekf1_sqr_loop_sequential,
@@ -36,7 +40,11 @@ __all__ = [
     "ekf1_sqr_filter_step_sequential",
     "ekf1_sqr_filter_step_sequential_scan",
     "ekf1_sqr_loop",
+    "ekf1_sqr_loop_dynamic",
+    "ekf1_sqr_loop_dynamic_scan",
     "ekf1_sqr_loop_preconditioned",
+    "ekf1_sqr_loop_preconditioned_dynamic",
+    "ekf1_sqr_loop_preconditioned_dynamic_scan",
     "ekf1_sqr_loop_preconditioned_sequential",
     "ekf1_sqr_loop_preconditioned_sequential_scan",
     "ekf1_sqr_loop_sequential",

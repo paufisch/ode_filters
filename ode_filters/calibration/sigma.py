@@ -6,9 +6,22 @@ in the same square-root convention as the rest of the library:
 
     v = P_z_sqr^{-T} @ m_z,    v.T @ v == m_z.T @ S^{-1} @ m_z.
 
+Two conventions for ``S`` appear in the literature:
+
+- ``S = H Q(h) H.T`` (process-noise only). Used by Bosch et al. 2021 and by
+  probdiffeq's ``MLEDiffusion`` ("dynamic"); the per-step ``sigma_hat^2`` is
+  then *only* the multiplier on the current step's process noise, and is
+  baked into ``Q_h`` before propagation -- past steps keep their own
+  calibration. :func:`quasi_mle_sigma_sqr_from_Q` is the convenience wrapper.
+
+- ``S = H P_pred H.T`` (full noise-free residual cov, including
+  ``A P_prev A.T``). Treats ``sigma_hat^2`` as a global scale on every
+  covariance. Useful for *post-hoc* calibration of a sigma=1 trajectory; cf.
+  :func:`posthoc_mle_sigma_sqr`.
+
 References:
     Bosch, Tronarp, Hennig. "Calibrated Adaptive Probabilistic ODE Solvers."
-    AISTATS 2021. Equations (32) and surrounding for the per-step quasi-MLE.
+    AISTATS 2021. Equation (32) and surrounding for the per-step quasi-MLE.
 """
 
 from __future__ import annotations
@@ -28,22 +41,20 @@ def quasi_mle_sigma_sqr(m_z: Array, P_z_sqr: Array) -> Array:
 
         sigma_hat^2 = (1 / d) * m_z.T @ S^{-1} @ m_z
 
-    where ``d = m_z.shape[0]`` and ``S = P_z_sqr.T @ P_z_sqr`` is the
-    *prior-propagated* predicted-observation covariance.
+    where ``d = m_z.shape[0]`` and ``S = P_z_sqr.T @ P_z_sqr`` is a
+    *noise-free* predicted-observation covariance under the implicit
+    assumption that ``S`` scales linearly with ``sigma^2``. Which ``S`` is
+    "correct" depends on the calibration mode -- see the module docstring.
 
-    **Important: ``P_z_sqr`` must exclude any measurement noise R.** The
-    quasi-MLE assumes ``S`` scales linearly with ``sigma^2`` (i.e. ``S =
-    sigma^2 * H P_pred H.T``). If ``S`` is the full EKF-step output
-    ``H P_pred H.T + R`` with ``R != 0``, this estimator conflates the
-    diffusion scale with the measurement noise and is biased. Cf. probnum's
-    ``meas_rv_error_free`` and probdiffeq's noise-free observed RV, which
-    make the same exclusion.
-
-    For pure ODE-information filtering (``measure.get_noise`` returns zero --
-    the typical case) the distinction is moot. For data-assimilation
-    workflows with ``R != 0``, pre-compute the noise-free covariance by
-    calling :func:`~ode_filters.inference.sqr_gaussian_inference.sqr_marginalization`
-    with a zero ``Q_sqr``.
+    **``P_z_sqr`` must exclude any measurement noise R.** Including ``R``
+    conflates the diffusion scale with the measurement noise and biases the
+    estimate downward. Cf. probnum's ``meas_rv_error_free`` and probdiffeq's
+    noise-free observed RV. For pure ODE-information filtering
+    (``measure.get_noise`` returns zero -- the typical case) the distinction
+    is moot. For data-assimilation workflows with ``R != 0``, pre-compute the
+    noise-free covariance via
+    :func:`~ode_filters.inference.sqr_gaussian_inference.sqr_marginalization`
+    with a zero ``Q_sqr`` (or use :func:`quasi_mle_sigma_sqr_from_Q`).
 
     Args:
         m_z: Predicted observation mean (a.k.a. ODE residual mean), shape ``[d]``.
@@ -56,6 +67,39 @@ def quasi_mle_sigma_sqr(m_z: Array, P_z_sqr: Array) -> Array:
     v = jax.scipy.linalg.solve_triangular(P_z_sqr.T, m_z, lower=True)
     d = m_z.shape[0]
     return (v @ v) / d
+
+
+def _sqr_HQH(H: Array, Q_sqr: Array) -> Array:
+    """Upper-triangular square root of ``H @ Q @ H.T``.
+
+    ``Q = Q_sqr.T @ Q_sqr``, so ``H Q H.T = (Q_sqr @ H.T).T @ (Q_sqr @ H.T)``;
+    a thin QR of ``Q_sqr @ H.T`` returns the upper-triangular factor.
+    """
+    M = Q_sqr @ H.T
+    _, R = np.linalg.qr(M)
+    return R
+
+
+def quasi_mle_sigma_sqr_from_Q(m_z: Array, H: Array, Q_sqr: Array) -> Array:
+    """Per-step quasi-MLE of sigma^2 in the *dynamic-diffusion* convention.
+
+    Uses ``S = H Q(h) H.T`` -- i.e. only the current step's process-noise
+    propagation -- as the residual covariance. This is the estimator from
+    Bosch et al. 2021 Eq. 32 and the one used by probdiffeq's
+    ``MLEDiffusion``. The resulting ``sigma_hat^2`` is intended to be baked
+    into ``Q_h`` for the current step's propagation; past-step contributions
+    in ``A P_prev A.T`` keep their own previously-applied scaling.
+
+    Args:
+        m_z: Predicted observation mean (residual), shape ``[d]``.
+        H: Linearised observation Jacobian, shape ``[d, n]``.
+        Q_sqr: Square-root of the per-step process noise, shape ``[n, n]``.
+
+    Returns:
+        Scalar JAX array containing ``sigma_hat^2``.
+    """
+    Pz_Q_sqr = _sqr_HQH(H, Q_sqr)
+    return quasi_mle_sigma_sqr(m_z, Pz_Q_sqr)
 
 
 def posthoc_mle_sigma_sqr(mz_seq: ArrayLike, Pz_seq_sqr: ArrayLike) -> Array:

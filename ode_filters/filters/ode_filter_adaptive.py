@@ -6,6 +6,35 @@ Python ``while`` driver around a jitted per-step body. The per-step body does
 the prediction + update + per-step quasi-MLE sigma and returns the normalised
 local-error estimate; the Python layer makes the accept/reject decision.
 
+Two coherent calibration schemes are exposed via the ``calibration``
+parameter; both share the per-step quasi-MLE *estimator* but differ in how
+``sigma_hat^2_n`` enters the stored posterior:
+
+- ``"dynamic"`` (default, probdiffeq ``MLEDiffusion`` / Bosch 2021):
+  ``sigma_hat^2_n`` is estimated from the process-noise residual covariance
+  ``H Q(h) H.T`` and baked into the current step's ``Q_h`` *before*
+  propagation, i.e. ``P_pred = A P_prev A.T + sigma_hat^2 * Q_h``. Past
+  steps keep the ``sigma_hat^2`` they were assigned -- statistically honest
+  per-step, Markov-preserving.
+
+- ``"cumulative"`` (legacy scheme, robust to multi-scale):
+  ``sigma_hat^2_n`` is estimated from the *full* noise-free predicted-obs
+  covariance ``H P_pred H.T``, then the entire updated covariance is
+  post-multiplied by ``sigma_hat^2_n``. Past contributions in the carried
+  ``P`` inherit every subsequent ``sigma_hat^2``. Non-Markovian by design;
+  reads as an online empirical-Bayes update of a single global unknown
+  ``sigma``. *Not* per-step honest, but stays robust on multi-scale problems
+  where the dynamic scheme starves small-scale components.
+
+- ``"none"``: propagate uncalibrated, still report ``sigma_hat^2`` from the
+  ``H Q H.T`` estimator for diagnostics / post-hoc rescaling.
+
+**Multi-scale caveat (both modes).** The quasi-MLE estimator is *scalar* --
+one ``sigma_hat^2`` shared across all ODE components. The principled fix for
+multi-scale is per-component diffusion (cf. probdiffeq's
+``BlockDiagDiffusion``); ``"cumulative"`` is a pragmatic workaround that
+inherits an inflated carried-``P`` from earlier transitions.
+
 The accepted-step outputs are stored in lists matching the shape conventions of
 :func:`ekf1_sqr_loop`, so the result can be passed directly to
 :func:`rts_sqr_smoother_loop`.
@@ -13,19 +42,22 @@ The accepted-step outputs are stored in lists matching the shape conventions of
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import jax
 import jax.numpy as np
 from jax import Array
 
-from ..calibration.sigma import quasi_mle_sigma_sqr
+from ..calibration.sigma import quasi_mle_sigma_sqr, quasi_mle_sigma_sqr_from_Q
 from ..inference.sqr_gaussian_inference import sqr_marginalization
 from ..measurement.measurement_models import BaseODEInformation
 from ..priors.gmp_priors import BasePrior
 from .adaptive_controller import PIController, StepSizeController
 from .ode_filter_step import ekf1_sqr_filter_step
+
+CalibrationMode = Literal["dynamic", "cumulative", "none"]
 
 
 class AdaptiveLoopResult(NamedTuple):
@@ -75,8 +107,19 @@ def _make_step_body(
     measure: BaseODEInformation,
     atol: float,
     rtol: float,
+    *,
+    calibration: CalibrationMode = "dynamic",
 ) -> Callable[[float, float, Array, Array], tuple]:
-    """Construct and jit the per-step body of the adaptive loop."""
+    """Construct and jit the per-step body of the adaptive loop.
+
+    Args:
+        prior: Gauss-Markov prior; supplies ``A(h)``, ``b(h)``, ``Q(h)``.
+        measure: Measurement model.
+        atol: Absolute tolerance for the normalised local-error estimate.
+        rtol: Relative tolerance for the normalised local-error estimate.
+        calibration: ``"dynamic"`` (default), ``"cumulative"``, or ``"none"``.
+            See module docstring for the model each scheme corresponds to.
+    """
     E0 = prior.E0
 
     @jax.jit
@@ -91,34 +134,60 @@ def _make_step_body(
         Q_h = prior.Q(h)
         Q_h_sqr = np.linalg.cholesky(Q_h).T
 
+        # Mean is independent of the prior covariance, so it can be used to
+        # linearise the measurement model up front.
+        m_pred_provisional = A_h @ m_prev + b_h
+        H_t, c_t = measure.linearize(m_pred_provisional, t=t_next)
+        mz_pred = H_t @ m_pred_provisional + c_t
+
+        if calibration == "cumulative":
+            # Cumulative scheme: sigma from the full noise-free predicted-obs
+            # covariance H P_pred H.T (P_pred includes A P_prev A.T plus Q).
+            # Compute via the standard predict, then estimate.
+            _m_pred_pre, P_pred_pre_sqr = sqr_marginalization(
+                A_h, b_h, Q_h_sqr, m_prev, P_prev_sqr
+            )
+            R_dim = mz_pred.shape[0]
+            zero_R_sqr = np.zeros((R_dim, R_dim))
+            _, Pz_calib_sqr = sqr_marginalization(
+                H_t, c_t, zero_R_sqr, _m_pred_pre, P_pred_pre_sqr
+            )
+            sigma_sqr = quasi_mle_sigma_sqr(mz_pred, Pz_calib_sqr)
+            Q_step_sqr = Q_h_sqr
+        else:
+            # Dynamic / none: sigma from H Q(h) H.T only (process noise).
+            sigma_sqr = quasi_mle_sigma_sqr_from_Q(mz_pred, H_t, Q_h_sqr)
+            if calibration == "dynamic":
+                Q_step_sqr = np.sqrt(sigma_sqr) * Q_h_sqr
+            else:  # "none"
+                Q_step_sqr = Q_h_sqr
+
         (
             (m_pred, P_pred_sqr),
             (G_back, d_back, P_back_sqr),
             (mz, Pz_sqr),
             (m, P_sqr),
         ) = ekf1_sqr_filter_step(
-            A_h, b_h, Q_h_sqr, m_prev, P_prev_sqr, measure, t=t_next
+            A_h, b_h, Q_step_sqr, m_prev, P_prev_sqr, measure, t=t_next
         )
 
-        # Calibration target: the *prior-propagated* residual covariance
-        # H P_pred H.T, excluding any measurement noise R that
-        # ``measure.get_noise`` might add. Mixing R into the quasi-MLE would
-        # conflate sigma^2 with the measurement noise (cf. probnum's
-        # ``meas_rv_error_free`` and probdiffeq's noise-free observed RV).
-        H_t, c_t = measure.linearize(m_pred, t=t_next)
-        R_dim = mz.shape[0]
-        zero_R_sqr = np.zeros((R_dim, R_dim))
-        _, Pz_calib_sqr = sqr_marginalization(H_t, c_t, zero_R_sqr, m_pred, P_pred_sqr)
-        sigma_sqr = quasi_mle_sigma_sqr(mz, Pz_calib_sqr)
+        if calibration == "cumulative":
+            # Post-multiply the full step covariance. P_prev (carried forward)
+            # accumulates every previous sigma_hat^2 multiplicatively.
+            scale = np.sqrt(sigma_sqr)
+            P_pred_sqr = scale * P_pred_sqr
+            P_back_sqr = scale * P_back_sqr
+            Pz_sqr = scale * Pz_sqr
+            P_sqr = scale * P_sqr
 
-        # Local error estimate (Bosch et al. 2021, Eq. 49):
-        # D_i = sqrt(sigma^2 * (E0 Q(h) E0.T)_{ii})
+        # Local error estimate (Bosch et al. 2021 Eq. 49) -- always uses the
+        # *uncalibrated* Q so the diffusion scale is explicit in the formula.
         D_sqr = sigma_sqr * np.diag(E0 @ Q_h @ E0.T)
         D = np.sqrt(np.maximum(D_sqr, 0.0))
         m_value = E0 @ m_pred
         err = _local_error_norm(D, m_value, atol, rtol)
 
-        # Per-step log-likelihood contribution (uncalibrated).
+        # Per-step log-likelihood (reflects whatever scaling was applied).
         log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
         v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
         maha = v @ v
@@ -156,7 +225,8 @@ def ekf1_sqr_adaptive_loop(
     h_min: float = 1e-10,
     h_max: float | None = None,
     controller: StepSizeController | None = None,
-    calibrate: bool = True,
+    calibration: CalibrationMode = "dynamic",
+    calibrate: bool | None = None,
     max_steps: int = 100_000,
 ) -> AdaptiveLoopResult:
     """Adaptive-step square-root EKF with per-step diffusion calibration.
@@ -185,10 +255,23 @@ def ekf1_sqr_adaptive_loop(
             Defaults to ``PIController(order=prior.q)``; pass
             :class:`~ode_filters.filters.adaptive_controller.PController` for a
             memoryless proportional-only controller.
-        calibrate: If ``True``, the stored covariances of an accepted step are
-            multiplied by ``sqrt(sigma_hat^2)`` so the posterior is honestly
-            scaled. If ``False``, sigma_hat is still computed and returned for
-            diagnostics but covariances are stored uncalibrated.
+        calibration: How the per-step ``sigma_hat^2`` enters the stored
+            posterior. ``"dynamic"`` (default) follows probdiffeq's
+            ``MLEDiffusion`` / Bosch et al. 2021: ``sigma_hat^2`` from
+            ``H Q(h) H.T`` is baked into the current step's ``Q_h`` before
+            propagation; past steps keep their own calibration. ``"cumulative"``
+            is the legacy multiplicative scheme: ``sigma_hat^2`` from the full
+            noise-free predicted-obs covariance ``H P_pred H.T`` post-multiplies
+            the whole step's covariance, so past contributions inherit every
+            subsequent ``sigma_hat^2``. ``"cumulative"`` is *not* statistically
+            honest per-step (the same posterior corresponds to no single
+            piecewise-constant ``sigma(t)`` model) but is markedly more robust
+            on multi-scale problems where ``"dynamic"`` starves small-scale
+            components of process noise. ``"none"`` propagates ``sigma=1`` and
+            only reports ``sigma_hat^2`` for diagnostics.
+        calibrate: Deprecated. ``True`` maps to ``calibration="dynamic"``,
+            ``False`` maps to ``calibration="none"``. Pass ``calibration``
+            directly instead.
         max_steps: Hard cap on iterations (rejected + accepted) as a safety
             valve against infinite loops.
 
@@ -198,8 +281,22 @@ def ekf1_sqr_adaptive_loop(
     Raises:
         RuntimeError: If the controller proposes a step below ``h_min`` or the
             iteration cap is exceeded.
-        ValueError: If ``tspan`` is non-increasing.
+        ValueError: If ``tspan`` is non-increasing or ``calibration`` is
+            unknown.
     """
+    if calibrate is not None:
+        warnings.warn(
+            '`calibrate` is deprecated; use `calibration="dynamic"` '
+            '(or "none" for the old `calibrate=False` behaviour).',
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        calibration = "dynamic" if calibrate else "none"
+    if calibration not in ("dynamic", "cumulative", "none"):
+        raise ValueError(
+            f"calibration must be 'dynamic', 'cumulative', or 'none'; "
+            f"got {calibration!r}."
+        )
     t_start, t_end = float(tspan[0]), float(tspan[1])
     if t_end <= t_start:
         raise ValueError(f"tspan must be increasing; got {tspan!r}")
@@ -211,7 +308,7 @@ def ekf1_sqr_adaptive_loop(
     if controller is None:
         controller = PIController(order=max(int(prior.q), 1))
 
-    step_body = _make_step_body(prior, measure, atol, rtol)
+    step_body = _make_step_body(prior, measure, atol, rtol, calibration=calibration)
 
     t = t_start
     h = float(min(h_init, h_max))
@@ -269,22 +366,25 @@ def ekf1_sqr_adaptive_loop(
         sigma_val = float(sigma_sqr)
 
         if err_val <= 1.0:
-            scale = float(np.sqrt(sigma_sqr)) if calibrate else 1.0
+            # Calibration (if enabled) was baked into Q_step_sqr inside the
+            # step body, so the returned covariances are already calibrated.
+            # No post-rescaling here -- past contributions in P_prev keep
+            # their own previously-applied sigma scaling.
             m_pred_seq.append(m_pred)
-            P_pred_seq_sqr.append(scale * P_pred_sqr)
+            P_pred_seq_sqr.append(P_pred_sqr)
             G_back_seq.append(G_back)
             d_back_seq.append(d_back)
-            P_back_seq_sqr.append(scale * P_back_sqr)
+            P_back_seq_sqr.append(P_back_sqr)
             mz_seq.append(mz)
-            Pz_seq_sqr.append(scale * Pz_sqr)
+            Pz_seq_sqr.append(Pz_sqr)
             m_seq.append(m_new)
-            P_seq_sqr.append(scale * P_new_sqr)
+            P_seq_sqr.append(P_new_sqr)
             sigma_sqr_seq.append(sigma_val)
             h_seq.append(h_try)
             t_list.append(t_next)
             log_likelihood += float(loglik_step)
             m_curr = m_new
-            P_curr_sqr = scale * P_new_sqr
+            P_curr_sqr = P_new_sqr
             t = t_next
             h = min(h_max, controller.propose(h_try, err_val, err_prev))
             err_prev = err_val

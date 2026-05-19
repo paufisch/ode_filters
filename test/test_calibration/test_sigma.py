@@ -11,6 +11,7 @@ from ode_filters.calibration.sigma import (
     aggregate_sigma_sqr,
     posthoc_mle_sigma_sqr,
     quasi_mle_sigma_sqr,
+    quasi_mle_sigma_sqr_from_Q,
 )
 
 
@@ -97,10 +98,10 @@ class TestNoiseExclusion:
 
     def test_adaptive_step_body_excludes_R_from_calibration(self):
         """A single adaptive step body call: the per-step sigma_sqr should
-        equal the value computed from the noise-free predicted residual
-        regardless of the R the measurement model exposes."""
+        equal the dynamic-diffusion quasi-MLE from ``H Q(h) H.T`` regardless
+        of the R the measurement model exposes (R only enters the update,
+        never the calibration)."""
         from ode_filters.filters.ode_filter_adaptive import _make_step_body
-        from ode_filters.inference.sqr_gaussian_inference import sqr_marginalization
         from ode_filters.measurement.measurement_models import ODEInformation
         from ode_filters.priors.gmp_priors import IWP, taylor_mode_initialization
 
@@ -123,23 +124,23 @@ class TestNoiseExclusion:
         out_R = body_R(h, t, mu_0, S0)
         sigma_R = float(out_R[9])
 
-        # The R=0 and R>0 calibration values must agree to numerical precision
-        # because both compute the prior-propagated residual covariance H P H.T
-        # and ignore R for the quasi-MLE.
+        # R=0 and R>0 calibration values agree: R never enters the
+        # dynamic-diffusion estimator.
         assert sigma_R == pytest.approx(sigma_zero, rel=1e-10)
 
-        # Independent re-derivation from (m_pred, P_pred) confirms the value.
-        m_pred = out_zero[0]
-        P_pred_sqr = out_zero[1]
-        H_t, c_t = m_zero.linearize(m_pred, t=t)
-        _, Pz_calib = sqr_marginalization(
-            H_t, c_t, np.zeros((1, 1)), m_pred, P_pred_sqr
-        )
-        mz_pred = H_t @ m_pred + c_t
-        sigma_recompute = float(quasi_mle_sigma_sqr(mz_pred, Pz_calib))
+        # Independent re-derivation via the dynamic-diffusion estimator.
+        # Linearise at the provisional predicted mean A m_prev + b (the
+        # quantity actually used inside the step body).
+        A_h = prior.A(h)
+        b_h = prior.b(h)
+        Q_h_sqr = np.linalg.cholesky(prior.Q(h)).T
+        m_pred_prov = A_h @ mu_0 + b_h
+        H_t, c_t = m_zero.linearize(m_pred_prov, t=t)
+        mz_pred = H_t @ m_pred_prov + c_t
+        sigma_recompute = float(quasi_mle_sigma_sqr_from_Q(mz_pred, H_t, Q_h_sqr))
         assert sigma_zero == pytest.approx(sigma_recompute, rel=1e-10)
 
-        # Sanity: a naive estimator that *includes* R differs from sigma_zero.
+        # Sanity: a naive estimator that *includes* R in P_z differs.
         full_mz = out_R[5]
         full_Pz = out_R[6]
         sigma_naive_with_R = float(quasi_mle_sigma_sqr(full_mz, full_Pz))

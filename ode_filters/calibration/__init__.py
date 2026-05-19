@@ -12,12 +12,18 @@ Covariance rescaling helpers live in :mod:`ode_filters.calibration.rescale`.
 """
 
 from .rescale import rescale_sqr, rescale_sqr_seq
-from .sigma import aggregate_sigma_sqr, posthoc_mle_sigma_sqr, quasi_mle_sigma_sqr
+from .sigma import (
+    aggregate_sigma_sqr,
+    posthoc_mle_sigma_sqr,
+    quasi_mle_sigma_sqr,
+    quasi_mle_sigma_sqr_from_Q,
+)
 
 __all__ = [
     "aggregate_sigma_sqr",
     "posthoc_mle_sigma_sqr",
     "quasi_mle_sigma_sqr",
+    "quasi_mle_sigma_sqr_from_Q",
     "rescale_sqr",
     "rescale_sqr_seq",
 ]
