@@ -7,6 +7,7 @@ import jax.numpy as np
 import numpy as onp
 from jax import Array
 
+from ..calibration.sigma import quasi_mle_sigma_sqr_from_Q
 from ..measurement.measurement_models import (
     BaseODEInformation,
     Measurement,
@@ -124,6 +125,191 @@ def ekf1_sqr_loop(
         P_back_seq_sqr,
         mz_seq,
         Pz_seq_sqr,
+        log_likelihood,
+    )
+
+
+DynamicLoopResult = tuple[
+    list,
+    list,
+    list,
+    list,
+    list,
+    list,
+    list,
+    list,
+    list,
+    list,
+    float,
+]
+
+
+def ekf1_sqr_loop_dynamic(
+    mu_0: Array,
+    Sigma_0_sqr: Array,
+    prior: BasePrior,
+    measure: BaseODEInformation,
+    tspan: tuple[float, float],
+    N: int,
+    *,
+    calibration: str = "dynamic",
+    calibrate: bool | None = None,
+) -> DynamicLoopResult:
+    """Fixed-step square-root EKF with online per-step diffusion calibration.
+
+    Same fixed grid as :func:`ekf1_sqr_loop`, but at every step the per-step
+    quasi-MLE diffusion is estimated and -- depending on ``calibration`` --
+    baked into the current step's ``Q_h`` before propagation. See
+    :func:`~ode_filters.filters.ekf1_sqr_adaptive_loop` for the full
+    description of the modes; this loop supports the same names:
+
+    - ``"dynamic"`` (default, scalar): Bosch et al. 2021 Eq. 32.
+      ``P_pred = A P_prev A.T + sigma_hat^2_n * Q_h``.
+    - ``"diagonal_ekf0"``: per-component ``sigma_hat^2_i`` from
+      ``(E_1 Q E_1.T)_ii`` (exact-diagonal denominator). Genuine MLE in
+      a block-diagonal sub-model for component ``i``. Recommended default
+      for multi-component problems.
+    - ``"diagonal"``: same per-component formula but with the EK1
+      Jacobian ``H_t = E_1 - J_f E_0`` in the denominator. Heuristic --
+      equivalent to ``"diagonal_ekf0"`` when ``J_f`` is block-diagonal in
+      components, biased in proportion to ``J_f``'s off-diagonal entries
+      otherwise.
+    - ``"none"``: propagate ``sigma=1``, report ``sigma_hat^2`` for post-hoc
+      rescaling (combine with :func:`posthoc_mle_sigma_sqr` /
+      :func:`rescale_sqr_seq`).
+
+    ``"cumulative"`` is intentionally *not* exposed on the fixed-step loop:
+    the cumulative scheme's appeal is robust adaptive-step control, and at
+    fixed step there's nothing to gain over post-hoc rescaling.
+
+    The returned ``log_likelihood`` reflects the *calibrated* posterior --
+    each step's contribution uses the calibrated ``Pz_sqr``. With
+    ``calibration="none"`` it matches the log-likelihood from
+    :func:`ekf1_sqr_loop`; in the calibrated modes it is the log-likelihood
+    under the corresponding generative model and is not directly comparable
+    across modes.
+
+    Args:
+        mu_0: Initial state mean.
+        Sigma_0_sqr: Initial state covariance (square-root form).
+        prior: Prior model (e.g. ``IWP``).
+        measure: Measurement model (e.g. ``ODEInformation``).
+        tspan: Time interval ``(t_start, t_end)``.
+        N: Number of filter steps.
+        calibration: ``"dynamic"`` (default), ``"diagonal"``, or ``"none"``.
+        calibrate: Deprecated; ``True`` -> ``"dynamic"``, ``False`` -> ``"none"``.
+
+    Returns:
+        Tuple of 10 sequences plus the scalar log-marginal-likelihood:
+        ``(m_seq, P_seq_sqr, m_pred_seq, P_pred_seq_sqr, G_back_seq,
+        d_back_seq, P_back_seq_sqr, mz_seq, Pz_seq_sqr, sigma_sqr_seq,
+        log_likelihood)``. In ``"diagonal"`` mode ``sigma_sqr_seq``
+        entries are length-``d`` arrays; otherwise Python floats.
+    """
+    import warnings
+
+    if calibrate is not None:
+        warnings.warn(
+            "`calibrate` is deprecated; use `calibration='dynamic'` or 'none'.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        calibration = "dynamic" if calibrate else "none"
+    _valid_fixed = ("dynamic", "diagonal", "diagonal_ekf0", "none")
+    if calibration not in _valid_fixed:
+        raise ValueError(
+            f"calibration must be one of {_valid_fixed} for the "
+            f"fixed-step dynamic loop; got {calibration!r}."
+        )
+    if calibration in ("diagonal", "diagonal_ekf0"):
+        xi = np.asarray(prior.xi)
+        if not np.allclose(xi - np.diag(np.diag(xi)), 0.0):
+            raise ValueError(
+                f"calibration={calibration!r} requires prior.xi to be diagonal."
+            )
+
+    m_seq = [mu_0]
+    P_seq_sqr = [Sigma_0_sqr]
+    m_pred_seq = []
+    P_pred_seq_sqr = []
+    G_back_seq = []
+    d_back_seq = []
+    P_back_seq_sqr = []
+    mz_seq = []
+    Pz_seq_sqr = []
+    sigma_sqr_seq: list = []
+
+    ts, h = onp.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    h = float(h)
+    A_h = prior.A(h)
+    b_h = prior.b(h)
+    Q_h = prior.Q(h)
+    Q_h_sqr = np.linalg.cholesky(Q_h).T
+    xi_diag = np.diag(prior.xi)
+    E1 = prior.E1
+    if calibration in ("diagonal", "diagonal_ekf0"):
+        Q_time_sqr_lower = np.linalg.cholesky(prior._Q(h))
+
+    log_likelihood = 0.0
+
+    for i in range(N):
+        t = float(ts[i + 1])
+        m_prev = m_seq[-1]
+        P_prev_sqr = P_seq_sqr[-1]
+
+        m_pred_provisional = A_h @ m_prev + b_h
+        H_t, c_t = measure.linearize(m_pred_provisional, t=t)
+        mz_pred = H_t @ m_pred_provisional + c_t
+
+        if calibration in ("diagonal", "diagonal_ekf0"):
+            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_t
+            denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_h, H_for_calib)
+            sigma_vec = mz_pred**2 / denom
+            sqrt_diag = np.sqrt(xi_diag * sigma_vec)
+            Q_step_sqr = np.kron(Q_time_sqr_lower, np.diag(sqrt_diag)).T
+            sigma_to_store: float | Array = onp.asarray(sigma_vec)
+        else:
+            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_pred, H_t, Q_h_sqr)
+            Q_step_sqr = (
+                np.sqrt(sigma_scalar) * Q_h_sqr if calibration == "dynamic" else Q_h_sqr
+            )
+            sigma_to_store = float(sigma_scalar)
+
+        (
+            (m_pred, P_pred_sqr),
+            (G_back, d_back, P_back_sqr),
+            (mz, Pz_sqr),
+            (m, P_sqr),
+        ) = ekf1_sqr_filter_step(A_h, b_h, Q_step_sqr, m_prev, P_prev_sqr, measure, t=t)
+
+        log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
+        v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
+        maha = v @ v
+        obs_dim = mz.shape[0]
+        log_likelihood += -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
+
+        m_pred_seq.append(m_pred)
+        P_pred_seq_sqr.append(P_pred_sqr)
+        G_back_seq.append(G_back)
+        d_back_seq.append(d_back)
+        P_back_seq_sqr.append(P_back_sqr)
+        mz_seq.append(mz)
+        Pz_seq_sqr.append(Pz_sqr)
+        sigma_sqr_seq.append(sigma_to_store)
+        m_seq.append(m)
+        P_seq_sqr.append(P_sqr)
+
+    return (
+        m_seq,
+        P_seq_sqr,
+        m_pred_seq,
+        P_pred_seq_sqr,
+        G_back_seq,
+        d_back_seq,
+        P_back_seq_sqr,
+        mz_seq,
+        Pz_seq_sqr,
+        sigma_sqr_seq,
         log_likelihood,
     )
 
@@ -277,6 +463,213 @@ def ekf1_sqr_loop_preconditioned(
         P_back_seq_sqr_bar,
         mz_seq,
         Pz_seq_sqr,
+        T_h,
+        log_likelihood,
+    )
+
+
+PrecondDynamicLoopResult = tuple[
+    list,
+    list,
+    list,
+    list,
+    list,
+    list,
+    list,
+    list,
+    list,
+    list,
+    list,
+    list,
+    Array,
+    float,
+]
+
+
+def ekf1_sqr_loop_preconditioned_dynamic(
+    mu_0: Array,
+    P_0_sqr: Array,
+    prior: BasePrior,
+    measure: BaseODEInformation,
+    tspan: tuple[float, float],
+    N: int,
+    *,
+    calibration: str = "dynamic",
+    calibrate: bool | None = None,
+) -> PrecondDynamicLoopResult:
+    """Preconditioned fixed-step square-root EKF with online calibration.
+
+    Same algorithm as :func:`ekf1_sqr_loop_dynamic`, executed in the
+    preconditioned (bar) space. The calibration estimators are invariant
+    under preconditioning: ``H Q H.T = (H T) Q_bar (H T).T``, so
+    ``sigma_hat^2`` computed in bar space matches the original-space value
+    exactly.
+
+    Supported ``calibration`` modes: ``"dynamic"``, ``"diagonal"``,
+    ``"diagonal_ekf0"``, ``"none"`` -- see
+    :func:`ekf1_sqr_adaptive_loop` for the full description. (``"cumulative"``
+    is not exposed for fixed-step loops.)
+
+    For the diagonal modes the bar-space time-block ``Q_bar_time`` is
+    obtained from ``prior._Q_bar`` if present (the ``PrecondIWP``
+    convention, where ``Q_bar_time`` is h-independent); otherwise this
+    function raises ``AttributeError``. Other preconditioned priors that
+    expose a different bar-space convention are not supported in the
+    diagonal modes.
+
+    Args:
+        mu_0: Initial state mean (original space).
+        P_0_sqr: Initial state covariance (square-root form, original space).
+        prior: Preconditioned prior (typically ``PrecondIWP``).
+        measure: Measurement model (e.g., ``ODEInformation``).
+        tspan: Time interval ``(t_start, t_end)``.
+        N: Number of filter steps.
+        calibration: ``"dynamic"`` (default), ``"diagonal"``,
+            ``"diagonal_ekf0"``, or ``"none"``.
+        calibrate: Deprecated; ``True`` -> ``"dynamic"``, ``False`` -> ``"none"``.
+
+    Returns:
+        Tuple of 12 sequences, the preconditioning matrix ``T_h``, and the
+        scalar log-marginal-likelihood. ``sigma_sqr_seq`` entries are
+        length-``d`` arrays for the diagonal modes; floats otherwise.
+    """
+    import warnings
+
+    if calibrate is not None:
+        warnings.warn(
+            "`calibrate` is deprecated; use `calibration='dynamic'` or 'none'.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        calibration = "dynamic" if calibrate else "none"
+    _valid = ("dynamic", "diagonal", "diagonal_ekf0", "none")
+    if calibration not in _valid:
+        raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
+    if calibration in ("diagonal", "diagonal_ekf0"):
+        xi = np.asarray(prior.xi)
+        if not np.allclose(xi - np.diag(np.diag(xi)), 0.0):
+            raise ValueError(f"calibration={calibration!r} requires prior.xi diagonal.")
+
+    ts, h = onp.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    h = float(h)
+    A_bar = prior.A(h)
+    b_bar = prior.b(h)
+    Q_sqr_bar = np.linalg.cholesky(prior.Q(h)).T
+    T_h = prior.T(h)
+    xi_diag = np.diag(prior.xi)
+    E1 = prior.E1
+    if calibration in ("diagonal", "diagonal_ekf0"):
+        # Only PrecondIWP exposes a true bar-space time-block ``_Q_bar``.
+        # Other preconditioned priors store ``_Q(h)`` in original space; the
+        # diagonal-mode Kronecker construction would silently produce a
+        # wrong calibrated Q for those, so we refuse.
+        Q_bar_time = getattr(prior, "_Q_bar", None)
+        if Q_bar_time is None:
+            raise NotImplementedError(
+                f"calibration={calibration!r} requires the prior to expose a "
+                f"bar-space time-block `_Q_bar` (only PrecondIWP does). "
+                f"Got {type(prior).__name__}; use the non-preconditioned loop "
+                f"or `calibration='dynamic'`/'none'."
+            )
+        Q_bar_time_sqr_lower = np.linalg.cholesky(Q_bar_time)
+
+    m_seq = [mu_0]
+    P_seq_sqr = [P_0_sqr]
+    m_seq_bar = [np.linalg.solve(T_h, mu_0)]
+    P_seq_sqr_bar = [np.linalg.solve(T_h, P_0_sqr.T).T]
+
+    m_pred_seq_bar: list = []
+    P_pred_seq_sqr_bar: list = []
+    G_back_seq_bar: list = []
+    d_back_seq_bar: list = []
+    P_back_seq_sqr_bar: list = []
+    mz_seq: list = []
+    Pz_seq_sqr: list = []
+    sigma_sqr_seq: list = []
+
+    log_likelihood = 0.0
+
+    for i in range(N):
+        t = float(ts[i + 1])
+        m_prev_bar = m_seq_bar[-1]
+        P_prev_sqr_bar = P_seq_sqr_bar[-1]
+
+        # Provisional predicted mean in bar space, then linearise in original
+        # space and build the bar-space observation Jacobian H_bar = H @ T.
+        m_pred_prov_bar = A_bar @ m_prev_bar + b_bar
+        m_pred_prov = T_h @ m_pred_prov_bar
+        H_t, c_t = measure.linearize(m_pred_prov, t=t)
+        H_t_bar = H_t @ T_h
+        mz_pred = H_t_bar @ m_pred_prov_bar + c_t
+
+        if calibration in ("diagonal", "diagonal_ekf0"):
+            # Note: E1 in original space; E1_bar = E1 @ T.
+            E1_bar = E1 @ T_h
+            H_for_calib = E1_bar if calibration == "diagonal_ekf0" else H_t_bar
+            Q_bar_full = Q_sqr_bar.T @ Q_sqr_bar
+            denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_bar_full, H_for_calib)
+            sigma_vec = mz_pred**2 / denom
+            sqrt_diag = np.sqrt(xi_diag * sigma_vec)
+            Q_step_sqr_bar = np.kron(Q_bar_time_sqr_lower, np.diag(sqrt_diag)).T
+            sigma_to_store: float | Array = onp.asarray(sigma_vec)
+        else:
+            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_pred, H_t_bar, Q_sqr_bar)
+            Q_step_sqr_bar = (
+                np.sqrt(sigma_scalar) * Q_sqr_bar
+                if calibration == "dynamic"
+                else Q_sqr_bar
+            )
+            sigma_to_store = float(sigma_scalar)
+
+        (
+            (m_pred_bar, P_pred_sqr_bar),
+            (G_back_bar, d_back_bar, P_back_sqr_bar),
+            (mz, Pz_sqr),
+            (m_bar_next, P_sqr_bar_next),
+            (m_next, P_sqr_next),
+        ) = ekf1_sqr_filter_step_preconditioned(
+            A_bar,
+            b_bar,
+            Q_step_sqr_bar,
+            T_h,
+            m_prev_bar,
+            P_prev_sqr_bar,
+            measure,
+            t=t,
+        )
+
+        log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
+        v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
+        maha = v @ v
+        obs_dim = mz.shape[0]
+        log_likelihood += -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
+
+        m_pred_seq_bar.append(m_pred_bar)
+        P_pred_seq_sqr_bar.append(P_pred_sqr_bar)
+        G_back_seq_bar.append(G_back_bar)
+        d_back_seq_bar.append(d_back_bar)
+        P_back_seq_sqr_bar.append(P_back_sqr_bar)
+        mz_seq.append(mz)
+        Pz_seq_sqr.append(Pz_sqr)
+        sigma_sqr_seq.append(sigma_to_store)
+        m_seq_bar.append(m_bar_next)
+        P_seq_sqr_bar.append(P_sqr_bar_next)
+        m_seq.append(m_next)
+        P_seq_sqr.append(P_sqr_next)
+
+    return (
+        m_seq,
+        P_seq_sqr,
+        m_seq_bar,
+        P_seq_sqr_bar,
+        m_pred_seq_bar,
+        P_pred_seq_sqr_bar,
+        G_back_seq_bar,
+        d_back_seq_bar,
+        P_back_seq_sqr_bar,
+        mz_seq,
+        Pz_seq_sqr,
+        sigma_sqr_seq,
         T_h,
         log_likelihood,
     )
@@ -929,4 +1322,367 @@ def ekf1_sqr_loop_preconditioned_sequential_scan(
         T_h,
         ll_ode,
         ll_obs,
+    )
+
+
+# =============================================================================
+# Scan-based dynamic-diffusion loops (joint EKF update, online calibration)
+# =============================================================================
+
+
+DynamicScanLoopResult = tuple[
+    Array,  # m_seq [N+1, state_dim]
+    Array,  # P_seq_sqr [N+1, state_dim, state_dim]
+    Array,  # m_pred_seq [N, state_dim]
+    Array,  # P_pred_seq_sqr [N, state_dim, state_dim]
+    Array,  # G_back_seq [N, state_dim, state_dim]
+    Array,  # d_back_seq [N, state_dim]
+    Array,  # P_back_seq_sqr [N, state_dim, state_dim]
+    Array,  # mz_seq [N, obs_dim]
+    Array,  # Pz_seq_sqr [N, obs_dim, obs_dim]
+    Array,  # sigma_sqr_seq [N]
+    Array,  # log_likelihood (scalar)
+]
+
+
+def ekf1_sqr_loop_dynamic_scan(
+    mu_0: Array,
+    Sigma_0_sqr: Array,
+    prior: BasePrior,
+    measure: BaseODEInformation,
+    tspan: tuple[float, float],
+    N: int,
+    *,
+    calibration: str = "dynamic",
+    calibrate: bool | None = None,
+) -> DynamicScanLoopResult:
+    """``jax.lax.scan`` variant of :func:`ekf1_sqr_loop_dynamic`.
+
+    Same per-step semantics, executed inside a single ``jax.lax.scan`` for
+    full JIT/compile-once efficiency. Returns stacked ``Array`` sequences
+    rather than lists. Supports ``calibration`` in ``{"dynamic", "diagonal",
+    "diagonal_ekf0", "none"}``; in the diagonal modes ``sigma_sqr_seq`` has
+    shape ``(N, d)`` rather than ``(N,)``.
+
+    Args:
+        mu_0: Initial state mean.
+        Sigma_0_sqr: Initial state covariance (square-root form).
+        prior: Prior (e.g. ``IWP``).
+        measure: Measurement model.
+        tspan: Time interval ``(t_start, t_end)``.
+        N: Number of filter steps.
+        calibration: ``"dynamic"`` (default), ``"diagonal"``,
+            ``"diagonal_ekf0"``, or ``"none"``.
+        calibrate: Deprecated; ``True`` -> ``"dynamic"``, ``False`` -> ``"none"``.
+
+    Returns:
+        :class:`DynamicScanLoopResult` -- 10 arrays plus the scalar
+        log-marginal-likelihood.
+    """
+    import warnings
+
+    if calibrate is not None:
+        warnings.warn(
+            "`calibrate` is deprecated; use `calibration='dynamic'` or 'none'.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        calibration = "dynamic" if calibrate else "none"
+    _valid = ("dynamic", "diagonal", "diagonal_ekf0", "none")
+    if calibration not in _valid:
+        raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
+    if calibration in ("diagonal", "diagonal_ekf0"):
+        xi = np.asarray(prior.xi)
+        if not np.allclose(xi - np.diag(np.diag(xi)), 0.0):
+            raise ValueError(f"calibration={calibration!r} requires prior.xi diagonal.")
+
+    ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    A_h = prior.A(h)
+    b_h = prior.b(h)
+    Q_h_sqr = np.linalg.cholesky(prior.Q(h)).T
+    Q_h = prior.Q(h)
+    xi_diag = np.diag(prior.xi)
+    E1 = prior.E1
+    Q_time_sqr_lower = (
+        np.linalg.cholesky(prior._Q(h))
+        if calibration in ("diagonal", "diagonal_ekf0")
+        else None
+    )
+
+    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
+
+    def scan_body(carry, step_data):
+        m_prev, P_prev_sqr, ll = carry
+        t_i = step_data
+
+        m_pred_prov = A_h @ m_prev + b_h
+        H_t, c_t = measure.linearize(m_pred_prov, t=t_i)
+        mz_pred = H_t @ m_pred_prov + c_t
+
+        if is_diagonal:
+            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_t
+            denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_h, H_for_calib)
+            sigma_sqr = mz_pred**2 / denom  # shape (d,)
+            sqrt_diag = np.sqrt(xi_diag * sigma_sqr)
+            Q_step_sqr = np.kron(Q_time_sqr_lower, np.diag(sqrt_diag)).T
+        else:
+            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_pred, H_t, Q_h_sqr)
+            sigma_sqr = sigma_scalar  # scalar
+            if calibration == "dynamic":
+                Q_step_sqr = np.sqrt(sigma_scalar) * Q_h_sqr
+            else:  # "none"
+                Q_step_sqr = Q_h_sqr
+
+        (
+            (m_pred, P_pred_sqr),
+            (G_back, d_back, P_back_sqr),
+            (mz, Pz_sqr),
+            (m_new, P_new_sqr),
+        ) = ekf1_sqr_filter_step(
+            A_h, b_h, Q_step_sqr, m_prev, P_prev_sqr, measure, t=t_i
+        )
+
+        ll_step = _log_likelihood_contrib(mz, Pz_sqr)
+        ll = ll + ll_step
+
+        outputs = (
+            m_pred,
+            P_pred_sqr,
+            G_back,
+            d_back,
+            P_back_sqr,
+            mz,
+            Pz_sqr,
+            sigma_sqr,
+            m_new,
+            P_new_sqr,
+        )
+        return (m_new, P_new_sqr, ll), outputs
+
+    init_carry = (mu_0, Sigma_0_sqr, np.array(0.0))
+    (_, _, ll), outputs = jax.lax.scan(scan_body, init_carry, ts[1:])
+
+    (
+        m_pred_seq,
+        P_pred_seq_sqr,
+        G_back_seq,
+        d_back_seq,
+        P_back_seq_sqr,
+        mz_seq,
+        Pz_seq_sqr,
+        sigma_sqr_seq,
+        m_updates,
+        P_updates_sqr,
+    ) = outputs
+
+    m_seq = np.concatenate([mu_0[None, :], m_updates], axis=0)
+    P_seq_sqr = np.concatenate([Sigma_0_sqr[None, :, :], P_updates_sqr], axis=0)
+
+    return (
+        m_seq,
+        P_seq_sqr,
+        m_pred_seq,
+        P_pred_seq_sqr,
+        G_back_seq,
+        d_back_seq,
+        P_back_seq_sqr,
+        mz_seq,
+        Pz_seq_sqr,
+        sigma_sqr_seq,
+        ll,
+    )
+
+
+PrecondDynamicScanLoopResult = tuple[
+    Array,  # m_seq [N+1, state_dim]
+    Array,  # P_seq_sqr [N+1, state_dim, state_dim]
+    Array,  # m_seq_bar [N+1, state_dim]
+    Array,  # P_seq_sqr_bar [N+1, state_dim, state_dim]
+    Array,  # m_pred_seq_bar [N, state_dim]
+    Array,  # P_pred_seq_sqr_bar [N, state_dim, state_dim]
+    Array,  # G_back_seq_bar [N, state_dim, state_dim]
+    Array,  # d_back_seq_bar [N, state_dim]
+    Array,  # P_back_seq_sqr_bar [N, state_dim, state_dim]
+    Array,  # mz_seq [N, obs_dim]
+    Array,  # Pz_seq_sqr [N, obs_dim, obs_dim]
+    Array,  # sigma_sqr_seq [N]
+    Array,  # T_h [state_dim, state_dim]
+    Array,  # log_likelihood (scalar)
+]
+
+
+def ekf1_sqr_loop_preconditioned_dynamic_scan(
+    mu_0: Array,
+    P_0_sqr: Array,
+    prior: BasePrior,
+    measure: BaseODEInformation,
+    tspan: tuple[float, float],
+    N: int,
+    *,
+    calibration: str = "dynamic",
+    calibrate: bool | None = None,
+) -> PrecondDynamicScanLoopResult:
+    """``jax.lax.scan`` variant of :func:`ekf1_sqr_loop_preconditioned_dynamic`.
+
+    Operates in preconditioned (bar) space. Calibration is invariant under
+    preconditioning: ``H Q H.T = (HT) Q_bar (HT).T``, so all four modes
+    behave identically to the original-space variants.
+
+    Args:
+        mu_0: Initial state mean (original space).
+        P_0_sqr: Initial state covariance (square-root form, original space).
+        prior: Preconditioned prior (e.g. ``PrecondIWP``).
+        measure: Measurement model.
+        tspan: Time interval ``(t_start, t_end)``.
+        N: Number of filter steps.
+        calibration: ``"dynamic"`` (default), ``"diagonal"``,
+            ``"diagonal_ekf0"``, or ``"none"``.
+        calibrate: Deprecated; ``True`` -> ``"dynamic"``, ``False`` -> ``"none"``.
+
+    Returns:
+        :class:`PrecondDynamicScanLoopResult` -- 12 arrays, ``T_h``, and the
+        scalar log-marginal-likelihood. ``sigma_sqr_seq`` shape is ``(N, d)``
+        in diagonal modes, ``(N,)`` otherwise.
+    """
+    import warnings
+
+    if calibrate is not None:
+        warnings.warn(
+            "`calibrate` is deprecated; use `calibration='dynamic'` or 'none'.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        calibration = "dynamic" if calibrate else "none"
+    _valid = ("dynamic", "diagonal", "diagonal_ekf0", "none")
+    if calibration not in _valid:
+        raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
+    if calibration in ("diagonal", "diagonal_ekf0"):
+        xi = np.asarray(prior.xi)
+        if not np.allclose(xi - np.diag(np.diag(xi)), 0.0):
+            raise ValueError(f"calibration={calibration!r} requires prior.xi diagonal.")
+
+    ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    A_bar = prior.A(h)
+    b_bar = prior.b(h)
+    Q_sqr_bar = np.linalg.cholesky(prior.Q(h)).T
+    Q_bar_full = prior.Q(h)
+    T_h = prior.T(h)
+    xi_diag = np.diag(prior.xi)
+    E1 = prior.E1
+    Q_bar_time_sqr_lower = None
+    if calibration in ("diagonal", "diagonal_ekf0"):
+        Q_bar_time = getattr(prior, "_Q_bar", None)
+        if Q_bar_time is None:
+            raise NotImplementedError(
+                f"calibration={calibration!r} requires the prior to expose a "
+                f"bar-space time-block `_Q_bar` (only PrecondIWP does). "
+                f"Got {type(prior).__name__}; use the non-preconditioned loop "
+                f"or `calibration='dynamic'`/'none'."
+            )
+        Q_bar_time_sqr_lower = np.linalg.cholesky(Q_bar_time)
+
+    m_0_bar = np.linalg.solve(T_h, mu_0)
+    P_0_sqr_bar = np.linalg.solve(T_h, P_0_sqr.T).T
+
+    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
+
+    def scan_body(carry, step_data):
+        m_prev_bar, P_prev_sqr_bar, ll = carry
+        t_i = step_data
+
+        m_pred_prov_bar = A_bar @ m_prev_bar + b_bar
+        m_pred_prov = T_h @ m_pred_prov_bar
+        H_t, c_t = measure.linearize(m_pred_prov, t=t_i)
+        H_t_bar = H_t @ T_h
+        mz_pred = H_t_bar @ m_pred_prov_bar + c_t
+
+        if is_diagonal:
+            E1_bar = E1 @ T_h
+            H_for_calib = E1_bar if calibration == "diagonal_ekf0" else H_t_bar
+            denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_bar_full, H_for_calib)
+            sigma_sqr = mz_pred**2 / denom
+            sqrt_diag = np.sqrt(xi_diag * sigma_sqr)
+            Q_step_sqr_bar = np.kron(Q_bar_time_sqr_lower, np.diag(sqrt_diag)).T
+        else:
+            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_pred, H_t_bar, Q_sqr_bar)
+            sigma_sqr = sigma_scalar
+            if calibration == "dynamic":
+                Q_step_sqr_bar = np.sqrt(sigma_scalar) * Q_sqr_bar
+            else:  # "none"
+                Q_step_sqr_bar = Q_sqr_bar
+
+        (
+            (m_pred_bar, P_pred_sqr_bar),
+            (G_back_bar, d_back_bar, P_back_sqr_bar),
+            (mz, Pz_sqr),
+            (m_new_bar, P_new_sqr_bar),
+            (m_new, P_new_sqr),
+        ) = ekf1_sqr_filter_step_preconditioned(
+            A_bar,
+            b_bar,
+            Q_step_sqr_bar,
+            T_h,
+            m_prev_bar,
+            P_prev_sqr_bar,
+            measure,
+            t=t_i,
+        )
+
+        ll_step = _log_likelihood_contrib(mz, Pz_sqr)
+        ll = ll + ll_step
+
+        outputs = (
+            m_pred_bar,
+            P_pred_sqr_bar,
+            G_back_bar,
+            d_back_bar,
+            P_back_sqr_bar,
+            mz,
+            Pz_sqr,
+            sigma_sqr,
+            m_new_bar,
+            P_new_sqr_bar,
+            m_new,
+            P_new_sqr,
+        )
+        return (m_new_bar, P_new_sqr_bar, ll), outputs
+
+    init_carry = (m_0_bar, P_0_sqr_bar, np.array(0.0))
+    (_, _, ll), outputs = jax.lax.scan(scan_body, init_carry, ts[1:])
+
+    (
+        m_pred_seq_bar,
+        P_pred_seq_sqr_bar,
+        G_back_seq_bar,
+        d_back_seq_bar,
+        P_back_seq_sqr_bar,
+        mz_seq,
+        Pz_seq_sqr,
+        sigma_sqr_seq,
+        m_updates_bar,
+        P_updates_sqr_bar,
+        m_updates,
+        P_updates_sqr,
+    ) = outputs
+
+    m_seq = np.concatenate([mu_0[None, :], m_updates], axis=0)
+    P_seq_sqr = np.concatenate([P_0_sqr[None, :, :], P_updates_sqr], axis=0)
+    m_seq_bar = np.concatenate([m_0_bar[None, :], m_updates_bar], axis=0)
+    P_seq_sqr_bar = np.concatenate([P_0_sqr_bar[None, :, :], P_updates_sqr_bar], axis=0)
+
+    return (
+        m_seq,
+        P_seq_sqr,
+        m_seq_bar,
+        P_seq_sqr_bar,
+        m_pred_seq_bar,
+        P_pred_seq_sqr_bar,
+        G_back_seq_bar,
+        d_back_seq_bar,
+        P_back_seq_sqr_bar,
+        mz_seq,
+        Pz_seq_sqr,
+        sigma_sqr_seq,
+        T_h,
+        ll,
     )
