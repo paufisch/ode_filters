@@ -6,34 +6,48 @@ Python ``while`` driver around a jitted per-step body. The per-step body does
 the prediction + update + per-step quasi-MLE sigma and returns the normalised
 local-error estimate; the Python layer makes the accept/reject decision.
 
-Two coherent calibration schemes are exposed via the ``calibration``
-parameter; both share the per-step quasi-MLE *estimator* but differ in how
-``sigma_hat^2_n`` enters the stored posterior:
+Four calibration schemes are exposed via the ``calibration`` parameter:
 
 - ``"dynamic"`` (default, probdiffeq ``MLEDiffusion`` / Bosch 2021):
-  ``sigma_hat^2_n`` is estimated from the process-noise residual covariance
-  ``H Q(h) H.T`` and baked into the current step's ``Q_h`` *before*
-  propagation, i.e. ``P_pred = A P_prev A.T + sigma_hat^2 * Q_h``. Past
-  steps keep the ``sigma_hat^2`` they were assigned -- statistically honest
-  per-step, Markov-preserving.
+  scalar ``sigma_hat^2_n`` from ``H Q(h) H.T``, baked into the current
+  step's ``Q_h`` *before* propagation. Past steps keep their own
+  ``sigma_hat^2`` -- statistically honest per-step, Markov-preserving.
+  **Fails on multi-scale ODEs** (the scalar average is dominated by the
+  larger-residual component, which starves smaller-scale components).
 
-- ``"cumulative"`` (legacy scheme, robust to multi-scale):
-  ``sigma_hat^2_n`` is estimated from the *full* noise-free predicted-obs
-  covariance ``H P_pred H.T``, then the entire updated covariance is
-  post-multiplied by ``sigma_hat^2_n``. Past contributions in the carried
-  ``P`` inherit every subsequent ``sigma_hat^2``. Non-Markovian by design;
-  reads as an online empirical-Bayes update of a single global unknown
-  ``sigma``. *Not* per-step honest, but stays robust on multi-scale problems
-  where the dynamic scheme starves small-scale components.
+- ``"diagonal"`` (EKF1-flavoured) / ``"diagonal_ekf0"`` (EKF0-flavoured):
+  per-component ``sigma_hat^2_i = m_z[i]^2 / (H Q H.T)_ii``, baked into
+  ``Q`` as ``Q_calib = Q_time(h) kron diag(xi_diag * sigma_vec)``. The two
+  differ only in the calibration ``H``: ``"diagonal"`` uses the EKF1
+  Jacobian and takes the diagonal of a generally-dense matrix;
+  ``"diagonal_ekf0"`` uses ``H_0 = E_1`` so the matrix is *exactly*
+  diagonal when ``xi`` is diagonal. Both are statistically honest per-step
+  *and* per-component, resolve multi-scale systems that ``"dynamic"``
+  collapses on, and run at the same cost. **Recommended default for
+  problems with more than one ODE component.** Requires diagonal ``xi``.
 
-- ``"none"``: propagate uncalibrated, still report ``sigma_hat^2`` from the
-  ``H Q H.T`` estimator for diagnostics / post-hoc rescaling.
+- ``"cumulative"`` (legacy multiplicative scheme): scalar ``sigma_hat^2_n``
+  from the *full* noise-free predicted-obs covariance ``H P_pred H.T``;
+  post-multiplies the whole step's covariance, so past contributions
+  inherit every subsequent ``sigma_hat^2``. Non-Markovian by design; an
+  online empirical-Bayes update of a single global unknown ``sigma``. *Not*
+  per-step honest, but stays robust on multi-scale problems (the inflated
+  carried ``P`` accidentally compensates). ``"diagonal"`` is strictly
+  better when applicable; keep ``"cumulative"`` for non-diagonal Xi or for
+  backward compatibility with earlier runs.
 
-**Multi-scale caveat (both modes).** The quasi-MLE estimator is *scalar* --
-one ``sigma_hat^2`` shared across all ODE components. The principled fix for
-multi-scale is per-component diffusion (cf. probdiffeq's
-``BlockDiagDiffusion``); ``"cumulative"`` is a pragmatic workaround that
-inherits an inflated carried-``P`` from earlier transitions.
+- ``"none"``: propagate uncalibrated, still report ``sigma_hat^2`` for
+  diagnostics / post-hoc rescaling.
+
+A separate ``sigma_in_error`` parameter controls how ``sigma_hat^2`` enters
+the local-error estimate used for step-size selection. The quasi-MLE
+estimator has chi-squared noise (relative std ``sqrt(2/d)``) which
+propagates into ``h`` decisions, causing visible oscillations. The default
+``sigma_in_error="running_mean"`` substitutes the cumulative running mean
+in the error formula -- noise vanishes after a few accepted steps, ``h``
+becomes much smoother, reject counts drop. Per-step ``sigma_hat^2`` is
+still used in the actual Q calibration. Pass ``sigma_in_error="per_step"``
+to recover the original Bosch et al. 2021 recipe.
 
 The accepted-step outputs are stored in lists matching the shape conventions of
 :func:`ekf1_sqr_loop`, so the result can be passed directly to
@@ -57,7 +71,30 @@ from ..priors.gmp_priors import BasePrior
 from .adaptive_controller import PIController, StepSizeController
 from .ode_filter_step import ekf1_sqr_filter_step
 
-CalibrationMode = Literal["dynamic", "cumulative", "none"]
+CalibrationMode = Literal["dynamic", "cumulative", "diagonal", "diagonal_ekf0", "none"]
+SigmaInError = Literal["per_step", "running_mean"]
+_VALID_CALIBRATIONS = ("dynamic", "cumulative", "diagonal", "diagonal_ekf0", "none")
+
+
+def _diag_calib_Q_sqr(
+    Q_time_sqr_lower: Array, xi_diag: Array, sigma_vec: Array
+) -> Array:
+    """Build the calibrated process-noise sqrt for diagonal-mode diffusion.
+
+    ``Q_calib = Q_time(h) kron diag(xi_diag * sigma_vec)``. The Kronecker of
+    two Cholesky factors is a Cholesky factor of the Kronecker, so
+
+        L_calib = kron(L_time, diag(sqrt(xi_diag * sigma_vec)))
+
+    and the library's upper-triangular sqrt is ``L_calib.T``. This avoids a
+    re-Cholesky on the full ``((q+1)d, (q+1)d)`` matrix per step.
+
+    Assumes ``xi`` is diagonal (the default; per-component calibration is
+    only well-defined when Xi is diagonal).
+    """
+    sqrt_diag = np.sqrt(xi_diag * sigma_vec)
+    L = np.kron(Q_time_sqr_lower, np.diag(sqrt_diag))
+    return L.T  # upper-triangular convention
 
 
 class AdaptiveLoopResult(NamedTuple):
@@ -117,10 +154,23 @@ def _make_step_body(
         measure: Measurement model.
         atol: Absolute tolerance for the normalised local-error estimate.
         rtol: Relative tolerance for the normalised local-error estimate.
-        calibration: ``"dynamic"`` (default), ``"cumulative"``, or ``"none"``.
-            See module docstring for the model each scheme corresponds to.
+        calibration: ``"dynamic"`` (default), ``"cumulative"``, ``"diagonal"``,
+            or ``"none"``. See module docstring for the model each scheme
+            corresponds to.
+
+    The returned ``step_body`` produces (in order):
+      ``m_pred, P_pred_sqr, G_back, d_back, P_back_sqr, mz, Pz_sqr, m, P_sqr,
+      sigma_sqr_vec, err_per_step, loglik_step, D_unscaled_sqr_diag, m_value``.
+
+    The last two outputs let a driver recompute ``err`` with a smoothed sigma
+    (e.g. ``sigma_in_error="running_mean"``). ``sigma_sqr_vec`` is always a
+    length-``d`` array (broadcast from the scalar in non-diagonal modes), so
+    downstream code has a uniform shape.
     """
     E0 = prior.E0
+    E1 = prior.E1
+    d = E0.shape[0]
+    xi_diag = np.diag(prior.xi)
 
     @jax.jit
     def step_body(
@@ -141,9 +191,8 @@ def _make_step_body(
         mz_pred = H_t @ m_pred_provisional + c_t
 
         if calibration == "cumulative":
-            # Cumulative scheme: sigma from the full noise-free predicted-obs
+            # Cumulative: sigma from the full noise-free predicted-obs
             # covariance H P_pred H.T (P_pred includes A P_prev A.T plus Q).
-            # Compute via the standard predict, then estimate.
             _m_pred_pre, P_pred_pre_sqr = sqr_marginalization(
                 A_h, b_h, Q_h_sqr, m_prev, P_prev_sqr
             )
@@ -152,13 +201,34 @@ def _make_step_body(
             _, Pz_calib_sqr = sqr_marginalization(
                 H_t, c_t, zero_R_sqr, _m_pred_pre, P_pred_pre_sqr
             )
-            sigma_sqr = quasi_mle_sigma_sqr(mz_pred, Pz_calib_sqr)
+            sigma_scalar = quasi_mle_sigma_sqr(mz_pred, Pz_calib_sqr)
+            sigma_vec = sigma_scalar * np.ones(d)
             Q_step_sqr = Q_h_sqr
+        elif calibration in ("diagonal", "diagonal_ekf0"):
+            # Per-component sigma_hat^2_i.
+            #   "diagonal":      denom = (H1 Q H1.T)_ii  (EKF1 H, dense
+            #                    matrix's diagonal; uses info the step
+            #                    already has, marginally better on
+            #                    single-component problems).
+            #   "diagonal_ekf0": denom = (E1  Q  E1.T)_ii (EKF0 H = E1,
+            #                    the matrix is *exactly* diagonal when xi
+            #                    is diagonal -- mathematically clean; can
+            #                    be slightly better on multi-scale at
+            #                    loose tolerance).
+            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_t
+            denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_h, H_for_calib)
+            sigma_vec = mz_pred**2 / denom
+            # Build calibrated Q via Kronecker of Cholesky factors -- avoids
+            # the O((q+1)^3 d^3) cost of re-factoring the full Q_calib.
+            Q_time_h = prior._Q(h)
+            Q_time_sqr_lower = np.linalg.cholesky(Q_time_h)
+            Q_step_sqr = _diag_calib_Q_sqr(Q_time_sqr_lower, xi_diag, sigma_vec)
         else:
             # Dynamic / none: sigma from H Q(h) H.T only (process noise).
-            sigma_sqr = quasi_mle_sigma_sqr_from_Q(mz_pred, H_t, Q_h_sqr)
+            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_pred, H_t, Q_h_sqr)
+            sigma_vec = sigma_scalar * np.ones(d)
             if calibration == "dynamic":
-                Q_step_sqr = np.sqrt(sigma_sqr) * Q_h_sqr
+                Q_step_sqr = np.sqrt(sigma_scalar) * Q_h_sqr
             else:  # "none"
                 Q_step_sqr = Q_h_sqr
 
@@ -172,18 +242,19 @@ def _make_step_body(
         )
 
         if calibration == "cumulative":
-            # Post-multiply the full step covariance. P_prev (carried forward)
-            # accumulates every previous sigma_hat^2 multiplicatively.
-            scale = np.sqrt(sigma_sqr)
+            # Post-multiply the full step covariance. Carried P accumulates
+            # every previous sigma_hat^2 multiplicatively.
+            scale = np.sqrt(sigma_vec[0])  # scalar in cumulative mode
             P_pred_sqr = scale * P_pred_sqr
             P_back_sqr = scale * P_back_sqr
             Pz_sqr = scale * Pz_sqr
             P_sqr = scale * P_sqr
 
-        # Local error estimate (Bosch et al. 2021 Eq. 49) -- always uses the
-        # *uncalibrated* Q so the diffusion scale is explicit in the formula.
-        D_sqr = sigma_sqr * np.diag(E0 @ Q_h @ E0.T)
-        D = np.sqrt(np.maximum(D_sqr, 0.0))
+        # Local error estimate (Bosch et al. 2021 Eq. 49). diag(E0 Q E0.T)
+        # is the per-component, uncalibrated value-variance; the driver
+        # multiplies it by whatever sigma_for_err it chooses.
+        D_unscaled_sqr_diag = np.diag(E0 @ Q_h @ E0.T)
+        D = np.sqrt(np.maximum(sigma_vec * D_unscaled_sqr_diag, 0.0))
         m_value = E0 @ m_pred
         err = _local_error_norm(D, m_value, atol, rtol)
 
@@ -204,9 +275,11 @@ def _make_step_body(
             Pz_sqr,
             m,
             P_sqr,
-            sigma_sqr,
+            sigma_vec,
             err,
             loglik_step,
+            D_unscaled_sqr_diag,
+            m_value,
         )
 
     return step_body
@@ -226,6 +299,7 @@ def ekf1_sqr_adaptive_loop(
     h_max: float | None = None,
     controller: StepSizeController | None = None,
     calibration: CalibrationMode = "dynamic",
+    sigma_in_error: SigmaInError = "running_mean",
     calibrate: bool | None = None,
     max_steps: int = 100_000,
 ) -> AdaptiveLoopResult:
@@ -256,19 +330,50 @@ def ekf1_sqr_adaptive_loop(
             :class:`~ode_filters.filters.adaptive_controller.PController` for a
             memoryless proportional-only controller.
         calibration: How the per-step ``sigma_hat^2`` enters the stored
-            posterior. ``"dynamic"`` (default) follows probdiffeq's
-            ``MLEDiffusion`` / Bosch et al. 2021: ``sigma_hat^2`` from
-            ``H Q(h) H.T`` is baked into the current step's ``Q_h`` before
-            propagation; past steps keep their own calibration. ``"cumulative"``
-            is the legacy multiplicative scheme: ``sigma_hat^2`` from the full
-            noise-free predicted-obs covariance ``H P_pred H.T`` post-multiplies
-            the whole step's covariance, so past contributions inherit every
-            subsequent ``sigma_hat^2``. ``"cumulative"`` is *not* statistically
-            honest per-step (the same posterior corresponds to no single
-            piecewise-constant ``sigma(t)`` model) but is markedly more robust
-            on multi-scale problems where ``"dynamic"`` starves small-scale
-            components of process noise. ``"none"`` propagates ``sigma=1`` and
-            only reports ``sigma_hat^2`` for diagnostics.
+            posterior. See the module docstring for the four available modes:
+
+            - ``"dynamic"`` (default) -- probdiffeq ``MLEDiffusion`` /
+              Bosch et al. 2021. Scalar ``sigma_hat^2`` from ``H Q(h) H.T``
+              baked into ``Q_h``. Honest per-step but **scalar**: fails on
+              multi-scale ODE systems (one component's residual dominates
+              ``sigma_hat^2`` and starves the others).
+            - ``"diagonal"`` -- per-component ``sigma_hat^2_i = m_z[i]^2 /
+              (H1 Q H1.T)_ii`` (EKF1 H matrix's diagonal), baked into ``Q``
+              as ``Q_calib = Q_time(h) kron diag(xi_diag * sigma_vec)``. The
+              recommended choice for multi-component problems: it is
+              statistically honest per-step *and* per-component, and resolves
+              multi-scale ODEs that ``"dynamic"`` collapses on. Requires
+              ``prior.xi`` to be diagonal (the default).
+            - ``"diagonal_ekf0"`` -- same idea, but using the EKF0 H
+              matrix ``H_0 = E_1`` so the denominator ``E_1 Q E_1.T`` is
+              *exactly* diagonal when ``xi`` is diagonal. Mathematically
+              cleaner; empirically a close second on most problems but
+              sometimes a small win on multi-scale at loose tolerance.
+            - ``"cumulative"`` -- legacy multiplicative scheme; scalar sigma
+              from the full ``H P_pred H.T`` post-multiplies the whole step.
+              Non-Markovian; robust on multi-scale by accident (inflated P
+              inherited from earlier transitions). Prefer ``"diagonal"``.
+            - ``"none"`` -- propagate ``sigma=1``, still report
+              ``sigma_hat^2`` for post-hoc rescaling / diagnostics.
+
+            For ``"diagonal"`` the per-step entries of
+            ``result.sigma_sqr_seq`` are length-``d`` arrays; for the scalar
+            modes they are Python floats.
+        sigma_in_error: How ``sigma_hat^2`` enters the local-error estimate.
+
+            - ``"running_mean"`` (default) -- use the cumulative running
+              mean of past accepted-step ``sigma_hat^2`` values in the
+              error formula (``sigma_hat^2`` is still per-step in the Q
+              calibration). The running mean has variance ``2/(nd)``, so
+              estimator noise vanishes after a few accepted steps -- ``h``
+              becomes much smoother and reject counts typically drop by
+              several times. For ``"diagonal"`` modes the running mean is
+              per-component.
+            - ``"per_step"`` -- use the just-computed ``sigma_hat^2`` (Bosch
+              et al. 2021 original recipe). Honest but inherits the
+              chi-squared estimator noise (relative std ``sqrt(2/d)``),
+              which propagates into step-size decisions and causes visible
+              h oscillations in flat regions.
         calibrate: Deprecated. ``True`` maps to ``calibration="dynamic"``,
             ``False`` maps to ``calibration="none"``. Pass ``calibration``
             directly instead.
@@ -281,8 +386,8 @@ def ekf1_sqr_adaptive_loop(
     Raises:
         RuntimeError: If the controller proposes a step below ``h_min`` or the
             iteration cap is exceeded.
-        ValueError: If ``tspan`` is non-increasing or ``calibration`` is
-            unknown.
+        ValueError: If ``tspan`` is non-increasing or ``calibration`` /
+            ``sigma_in_error`` is unknown.
     """
     if calibrate is not None:
         warnings.warn(
@@ -292,11 +397,22 @@ def ekf1_sqr_adaptive_loop(
             stacklevel=2,
         )
         calibration = "dynamic" if calibrate else "none"
-    if calibration not in ("dynamic", "cumulative", "none"):
+    if calibration not in _VALID_CALIBRATIONS:
         raise ValueError(
-            f"calibration must be 'dynamic', 'cumulative', or 'none'; "
-            f"got {calibration!r}."
+            f"calibration must be one of {_VALID_CALIBRATIONS}; got {calibration!r}."
         )
+    if sigma_in_error not in ("per_step", "running_mean"):
+        raise ValueError(
+            f"sigma_in_error must be 'per_step' or 'running_mean'; "
+            f"got {sigma_in_error!r}."
+        )
+    if calibration in ("diagonal", "diagonal_ekf0"):
+        xi = np.asarray(prior.xi)
+        if not np.allclose(xi - np.diag(np.diag(xi)), 0.0):
+            raise ValueError(
+                f"calibration={calibration!r} requires prior.xi to be "
+                f"diagonal; got off-diagonal entries in xi of shape {xi.shape}."
+            )
     t_start, t_end = float(tspan[0]), float(tspan[1])
     if t_end <= t_start:
         raise ValueError(f"tspan must be increasing; got {tspan!r}")
@@ -310,11 +426,15 @@ def ekf1_sqr_adaptive_loop(
 
     step_body = _make_step_body(prior, measure, atol, rtol, calibration=calibration)
 
+    import numpy as onp  # used for the running-mean accumulator and err math
+
     t = t_start
     h = float(min(h_init, h_max))
     m_curr = mu_0
     P_curr_sqr = Sigma_0_sqr
     err_prev: float | None = None
+    d_components = int(prior.E0.shape[0])
+    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
 
     t_list: list[float] = [t_start]
     m_seq: list[Array] = [mu_0]
@@ -326,11 +446,15 @@ def ekf1_sqr_adaptive_loop(
     P_back_seq_sqr: list[Array] = []
     mz_seq: list[Array] = []
     Pz_seq_sqr: list[Array] = []
-    sigma_sqr_seq: list[float] = []
+    sigma_sqr_seq: list = []  # list[float] in scalar modes, list[Array] in diagonal
     h_seq: list[float] = []
     n_rejected = 0
     log_likelihood = 0.0
     iters = 0
+
+    # Running-mean accumulator for sigma_in_error="running_mean".
+    sigma_running_sum = onp.zeros(d_components, dtype=float)
+    n_accepted_so_far = 0
 
     while t < t_end:
         if iters >= max_steps:
@@ -357,19 +481,32 @@ def ekf1_sqr_adaptive_loop(
             Pz_sqr,
             m_new,
             P_new_sqr,
-            sigma_sqr,
-            err,
+            sigma_vec,
+            err_per_step,
             loglik_step,
+            D_unscaled_sqr_diag,
+            m_value,
         ) = step_body(h_try, t_next, m_curr, P_curr_sqr)
 
-        err_val = float(err)
-        sigma_val = float(sigma_sqr)
+        # Decide which sigma feeds the local-error / step-size decision.
+        if sigma_in_error == "running_mean" and n_accepted_so_far > 0:
+            sigma_for_err = sigma_running_sum / n_accepted_so_far
+            scale = atol + rtol * onp.abs(onp.asarray(m_value))
+            D = onp.sqrt(
+                onp.maximum(sigma_for_err * onp.asarray(D_unscaled_sqr_diag), 0.0)
+            )
+            err_val = float(onp.sqrt(onp.mean((D / scale) ** 2)))
+        else:
+            err_val = float(err_per_step)
 
         if err_val <= 1.0:
-            # Calibration (if enabled) was baked into Q_step_sqr inside the
-            # step body, so the returned covariances are already calibrated.
-            # No post-rescaling here -- past contributions in P_prev keep
-            # their own previously-applied sigma scaling.
+            # Calibration was baked into Q_step_sqr inside the step body (or
+            # post-multiplied for cumulative mode); the returned covariances
+            # are already correct.
+            sigma_arr = onp.asarray(sigma_vec)
+            sigma_running_sum = sigma_running_sum + sigma_arr
+            n_accepted_so_far += 1
+
             m_pred_seq.append(m_pred)
             P_pred_seq_sqr.append(P_pred_sqr)
             G_back_seq.append(G_back)
@@ -379,7 +516,8 @@ def ekf1_sqr_adaptive_loop(
             Pz_seq_sqr.append(Pz_sqr)
             m_seq.append(m_new)
             P_seq_sqr.append(P_new_sqr)
-            sigma_sqr_seq.append(sigma_val)
+            # Scalar modes store a float (back-compat); diagonal stores array.
+            sigma_sqr_seq.append(sigma_arr if is_diagonal else float(sigma_arr[0]))
             h_seq.append(h_try)
             t_list.append(t_next)
             log_likelihood += float(loglik_step)

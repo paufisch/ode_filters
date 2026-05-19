@@ -142,9 +142,34 @@ print(f"  endpoint L2 error = {err_dyn:.3e}")
 
 
 # ---------------------------------------------------------------------------
-# Mode 3: adaptive step + online dynamic per-step.
+# Mode 3: fixed-step + online diagonal per-component.
 # ---------------------------------------------------------------------------
-print("\nMode 3: adaptive step + online dynamic per-step")
+print("\nMode 3: fixed-step + online diagonal per-component")
+prior, mu0, S0, measure = _setup()
+r_diag = ekf1_sqr_loop_dynamic(
+    mu0, S0, prior, measure, TSPAN, N_FIXED, calibration="diagonal"
+)
+m_seq_diag = jnp.stack(list(r_diag[0]))
+P_sqr_diag = jnp.stack(list(r_diag[1]))
+sigma_diag_per_step = np.stack([np.asarray(s) for s in r_diag[9]])  # [N, d=2]
+err_diag = _l2_error_at_endpoint(m_seq_diag[-1], prior)
+print(
+    f"  steps={N_FIXED}, sigma^2_1: min={sigma_diag_per_step[:, 0].min():.2e}, "
+    f"max={sigma_diag_per_step[:, 0].max():.2e}, "
+    f"median={np.median(sigma_diag_per_step[:, 0]):.2e}"
+)
+print(
+    f"               sigma^2_2: min={sigma_diag_per_step[:, 1].min():.2e}, "
+    f"max={sigma_diag_per_step[:, 1].max():.2e}, "
+    f"median={np.median(sigma_diag_per_step[:, 1]):.2e}"
+)
+print(f"  endpoint L2 error = {err_diag:.3e}")
+
+
+# ---------------------------------------------------------------------------
+# Mode 4: adaptive step + online dynamic per-step.
+# ---------------------------------------------------------------------------
+print("\nMode 4: adaptive step + online dynamic per-step")
 prior, mu0, S0, measure = _setup()
 r_adapt = ekf1_sqr_adaptive_loop(
     mu0,
@@ -174,6 +199,34 @@ print(f"  endpoint L2 error = {err_adapt:.3e}")
 
 
 # ---------------------------------------------------------------------------
+# Mode 5: adaptive step + online diagonal per-component.
+# ---------------------------------------------------------------------------
+print("\nMode 5: adaptive step + online diagonal per-component")
+prior, mu0, S0, measure = _setup()
+r_adapt_diag = ekf1_sqr_adaptive_loop(
+    mu0,
+    S0,
+    prior,
+    measure,
+    TSPAN,
+    atol=1e-5,
+    rtol=1e-3,
+    controller=PIController(order=prior.q),
+    calibration="diagonal",
+)
+ts_adapt_diag = np.asarray(r_adapt_diag.t_seq)
+m_adapt_diag = np.stack([np.asarray(m) for m in r_adapt_diag.m_seq])
+sigma_adapt_diag = np.stack([np.asarray(s) for s in r_adapt_diag.sigma_sqr_seq])
+h_adapt_diag = np.asarray(r_adapt_diag.h_seq)
+err_adapt_diag = _l2_error_at_endpoint(r_adapt_diag.m_seq[-1], prior)
+print(
+    f"  accepted={len(r_adapt_diag.h_seq)}, rejected={r_adapt_diag.n_rejected}, "
+    f"h: min={h_adapt_diag.min():.2e}, max={h_adapt_diag.max():.2e}"
+)
+print(f"  endpoint L2 error = {err_adapt_diag:.3e}")
+
+
+# ---------------------------------------------------------------------------
 # Plot: x(t) trajectories, sigma^2 traces, calibrated 2-sigma bands.
 # ---------------------------------------------------------------------------
 fig, axes = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
@@ -188,9 +241,13 @@ ax.plot(
     ts_fixed, np.asarray(m_seq_fixed[:, 0]), "C0--", lw=0.8, label="fixed + post-hoc"
 )
 ax.plot(ts_fixed, np.asarray(m_seq_dyn[:, 0]), "C1:", lw=0.8, label="fixed + dynamic")
+ax.plot(
+    ts_fixed, np.asarray(m_seq_diag[:, 0]), "C4--", lw=0.8, label="fixed + diagonal"
+)
 ax.plot(ts_adapt, m_adapt[:, 0], "C2-", lw=0.8, label="adaptive + dynamic")
+ax.plot(ts_adapt_diag, m_adapt_diag[:, 0], "C3-", lw=0.8, label="adaptive + diagonal")
 ax.set_ylabel("x(t)")
-ax.set_title(f"van der Pol, mu={MU:g}  --  three calibration modes")
+ax.set_title(f"van der Pol, mu={MU:g}  --  five calibration modes")
 ax.legend(loc="upper right", fontsize=8)
 
 # 2-sigma bands on x(t).
@@ -220,6 +277,23 @@ ax.legend(loc="upper right", fontsize=8)
 # Per-step sigma^2 traces.
 ax = axes[2]
 ax.semilogy(ts_fixed[1:], sigma_dyn, "C1.-", ms=2, lw=0.5, label="fixed + dynamic")
+# For the diagonal mode, show the per-component sigmas separately.
+ax.semilogy(
+    ts_fixed[1:],
+    sigma_diag_per_step[:, 0],
+    "C4.-",
+    ms=2,
+    lw=0.5,
+    label=r"fixed + diagonal ($\sigma_1^2$)",
+)
+ax.semilogy(
+    ts_fixed[1:],
+    sigma_diag_per_step[:, 1],
+    "C5.-",
+    ms=2,
+    lw=0.5,
+    label=r"fixed + diagonal ($\sigma_2^2$)",
+)
 ax.semilogy(ts_adapt[1:], sigma_adapt, "C2.-", ms=2, lw=0.5, label="adaptive + dynamic")
 ax.axhline(
     sigma_global,
@@ -242,20 +316,22 @@ print(f"\nSaved figure to {out_path}")
 # ---------------------------------------------------------------------------
 # Summary table.
 # ---------------------------------------------------------------------------
-print("\n" + "=" * 78)
-print(f"{'mode':<32} {'work':<22} {'endpoint L2':<14} {'sigma^2':<10}")
-print("-" * 78)
+print("\n" + "=" * 80)
+print(f"{'mode':<34} {'work':<22} {'endpoint L2':<14}")
+print("-" * 80)
 print(
-    f"{'fixed + post-hoc global MLE':<32} {f'{N_FIXED} steps':<22} "
-    f"{err_fixed:<14.3e} {sigma_global:<10.3e}"
+    f"{'fixed + post-hoc global MLE':<34} {f'{N_FIXED} steps':<22} {err_fixed:<14.3e}"
 )
+print(f"{'fixed + online dynamic':<34} {f'{N_FIXED} steps':<22} {err_dyn:<14.3e}")
+print(f"{'fixed + online diagonal':<34} {f'{N_FIXED} steps':<22} {err_diag:<14.3e}")
 print(
-    f"{'fixed + online dynamic':<32} {f'{N_FIXED} steps':<22} "
-    f"{err_dyn:<14.3e} {f'~{np.median(sigma_dyn):.2e}':<10}"
-)
-print(
-    f"{'adaptive + online dynamic':<32} "
+    f"{'adaptive + online dynamic':<34} "
     f"{f'{len(h_adapt)} acc / {r_adapt.n_rejected} rej':<22} "
-    f"{err_adapt:<14.3e} {f'~{np.median(sigma_adapt):.2e}':<10}"
+    f"{err_adapt:<14.3e}"
 )
-print("=" * 78)
+print(
+    f"{'adaptive + online diagonal':<34} "
+    f"{f'{len(h_adapt_diag)} acc / {r_adapt_diag.n_rejected} rej':<22} "
+    f"{err_adapt_diag:<14.3e}"
+)
+print("=" * 80)

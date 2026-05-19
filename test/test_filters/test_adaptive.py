@@ -313,6 +313,146 @@ class TestAdaptiveLoopLogistic:
                 calibration="bogus",  # type: ignore[arg-type]
             )
 
+    def test_diagonal_mode_per_component_sigma_shape(self):
+        prior, mu_0, S0, measure = self._setup()
+        r = ekf1_sqr_adaptive_loop(
+            mu_0,
+            S0,
+            prior,
+            measure,
+            self.tspan,
+            atol=1e-4,
+            rtol=1e-2,
+            calibration="diagonal",
+        )
+        # Each entry is a length-d array, one sigma per ODE component.
+        assert all(s.shape == (prior.E0.shape[0],) for s in r.sigma_sqr_seq)
+        assert all((s > 0).all() for s in r.sigma_sqr_seq)
+
+    def test_diagonal_calibration_matches_closed_form(self):
+        """Per-component sigma_hat^2_i = m_z[i]^2 / (H Q H.T)_ii. Verify on
+        every accepted step."""
+        prior, mu_0, S0, measure = self._setup()
+        r = ekf1_sqr_adaptive_loop(
+            mu_0,
+            S0,
+            prior,
+            measure,
+            self.tspan,
+            atol=1e-4,
+            rtol=1e-2,
+            calibration="diagonal",
+        )
+        for i, h in enumerate(r.h_seq):
+            A_h = prior.A(float(h))
+            b_h = prior.b(float(h))
+            Q_h = prior.Q(float(h))
+            t_next = float(r.t_seq[i + 1])
+            m_prev = r.m_seq[i]
+            m_pred_prov = A_h @ m_prev + b_h
+            H_t, c_t = measure.linearize(m_pred_prov, t=t_next)
+            mz_pred = H_t @ m_pred_prov + c_t
+            H_Q_H_diag = np.einsum("ij,jk,ik->i", H_t, Q_h, H_t)
+            expected = mz_pred**2 / H_Q_H_diag
+            assert np.allclose(r.sigma_sqr_seq[i], expected, rtol=1e-10)
+
+    def test_diagonal_requires_diagonal_xi(self):
+        non_diag_xi = np.array([[1.0, 0.1], [0.1, 1.0]])
+        bad_prior = IWP(q=2, d=2, Xi=non_diag_xi)
+        mu_0, S0 = taylor_mode_initialization(
+            lambda x, *, t: x, np.array([0.1, 0.2]), q=2
+        )
+        measure = ODEInformation(lambda x, *, t: x, bad_prior.E0, bad_prior.E1)
+        with pytest.raises(ValueError, match="diagonal"):
+            ekf1_sqr_adaptive_loop(
+                mu_0,
+                S0,
+                bad_prior,
+                measure,
+                (0.0, 1.0),
+                atol=1e-3,
+                rtol=1e-2,
+                calibration="diagonal",
+            )
+
+    def test_sigma_in_error_running_mean_smooths_h(self):
+        """Running-mean sigma_in_error reduces step-size oscillations and
+        the reject count, while reaching tspan_end with similar accuracy."""
+        prior, mu_0, S0, measure = self._setup()
+        r_per = ekf1_sqr_adaptive_loop(
+            mu_0,
+            S0,
+            prior,
+            measure,
+            self.tspan,
+            atol=1e-5,
+            rtol=1e-3,
+            sigma_in_error="per_step",
+        )
+        r_run = ekf1_sqr_adaptive_loop(
+            mu_0,
+            S0,
+            prior,
+            measure,
+            self.tspan,
+            atol=1e-5,
+            rtol=1e-3,
+            sigma_in_error="running_mean",
+        )
+        # Both reach the endpoint.
+        assert float(r_per.t_seq[-1]) == pytest.approx(self.tspan[1], rel=1e-12)
+        assert float(r_run.t_seq[-1]) == pytest.approx(self.tspan[1], rel=1e-12)
+        # Running-mean rejects fewer steps -- usually by a large margin on the
+        # logistic, but at least not strictly more.
+        assert r_run.n_rejected <= r_per.n_rejected
+
+    def test_unknown_sigma_in_error_raises(self):
+        prior, mu_0, S0, measure = self._setup()
+        with pytest.raises(ValueError, match="sigma_in_error"):
+            ekf1_sqr_adaptive_loop(
+                mu_0,
+                S0,
+                prior,
+                measure,
+                self.tspan,
+                atol=1e-4,
+                rtol=1e-2,
+                sigma_in_error="ema",  # type: ignore[arg-type]
+            )
+
+    def test_diagonal_resolves_multiscale(self):
+        """Diagonal mode resolves x_2 on the staggered multi-scale logistic
+        where dynamic mode collapses -- and does so with fewer accepted steps
+        than cumulative (which also resolves it via inheritance)."""
+        r_rate = 2.0
+        x0_vec = np.asarray([1e-5, 1e-10])
+
+        def vf_dl(x, *, t):
+            return np.array([r_rate * x[0] * (1 - x[0]), r_rate * x[1] * (1 - x[1])])
+
+        tspan = (0.0, 15.0)
+        q = 3
+        prior = IWP(q=q, d=2)
+        mu_0, S0 = taylor_mode_initialization(vf_dl, x0_vec, q=q)
+        measure = ODEInformation(vf_dl, prior.E0, prior.E1)
+        x2_true = 1.0 / (
+            1.0 + (1.0 / float(x0_vec[1]) - 1.0) * np.exp(-r_rate * tspan[1])
+        )
+
+        r_diag = ekf1_sqr_adaptive_loop(
+            mu_0,
+            S0,
+            prior,
+            measure,
+            tspan,
+            atol=1e-5,
+            rtol=1e-3,
+            h_min=1e-9,
+            calibration="diagonal",
+        )
+        x2_diag = float((prior.E0 @ r_diag.m_seq[-1])[1])
+        assert abs(x2_diag - float(x2_true)) < 1e-3
+
     def test_cumulative_resolves_multiscale_where_dynamic_collapses(self):
         """Staggered two-component logistic with X0 = [1e-5, 1e-10]: dynamic
         sigma_hat collapses after x_1's transition and starves x_2 of process
@@ -429,13 +569,13 @@ class TestDynamicFixedStepLoop:
         assert len(sigma_seq) == self.N
         assert all(s > 0 for s in sigma_seq)
 
-    def test_calibrate_false_matches_uncalibrated_loop(self):
-        """With ``calibrate=False`` the dynamic loop should produce exactly
+    def test_calibration_none_matches_uncalibrated_loop(self):
+        """With ``calibration="none"`` the dynamic loop should produce exactly
         the same trajectory as :func:`ekf1_sqr_loop` (Q never gets scaled).
         Sigma is still computed for diagnostics."""
         prior, mu_0, S0, measure = self._setup()
         r_dyn = ekf1_sqr_loop_dynamic(
-            mu_0, S0, prior, measure, self.tspan, self.N, calibrate=False
+            mu_0, S0, prior, measure, self.tspan, self.N, calibration="none"
         )
         r_plain = ekf1_sqr_loop(mu_0, S0, prior, measure, self.tspan, self.N)
 
@@ -475,6 +615,16 @@ class TestDynamicFixedStepLoop:
         x_true = float(logistic_analytic(self.tspan[1], x0=float(self.x0[0])))
         # With N=50 steps on [0, 5] the EKF1+IWP(2) should be very accurate.
         assert abs(x_pred - x_true) < 1e-3
+
+    def test_diagonal_mode_returns_per_component_sigma(self):
+        prior, mu_0, S0, measure = self._setup()
+        result = ekf1_sqr_loop_dynamic(
+            mu_0, S0, prior, measure, self.tspan, self.N, calibration="diagonal"
+        )
+        sigma_seq = result[9]
+        assert len(sigma_seq) == self.N
+        # IWP with d=1: each entry is a length-1 array.
+        assert all(hasattr(s, "shape") for s in sigma_seq)
 
     def test_consumable_by_smoother(self):
         prior, mu_0, S0, measure = self._setup()
@@ -561,16 +711,80 @@ class TestDynamicLoopVariantsAgree:
         sigma_pre = np.asarray(r_pre[11])
         assert np.allclose(sigma_iwp, sigma_pre, atol=1e-6)
 
-    def test_calibrate_false_matches_across_variants(self):
+    def test_diagonal_mode_across_variants_agrees(self):
+        """All four loop variants (plain/scan x with/without preconditioning)
+        produce identical trajectories in diagonal mode on a multi-scale
+        problem, since calibration is invariant under preconditioning."""
+        r_rate = 2.0
+        x0 = np.asarray([1e-5, 1e-10])
+
+        def vf(x, *, t):
+            return np.array([r_rate * x[0] * (1 - x[0]), r_rate * x[1] * (1 - x[1])])
+
+        tspan = (0.0, 15.0)
+        N = 500
+        prior_iwp = IWP(q=3, d=2)
+        prior_pre = PrecondIWP(q=3, d=2)
+        mu0, S0 = taylor_mode_initialization(vf, x0, q=3)
+        meas_iwp = ODEInformation(vf, prior_iwp.E0, prior_iwp.E1)
+        meas_pre = ODEInformation(vf, prior_pre.E0, prior_pre.E1)
+
+        r1 = ekf1_sqr_loop_dynamic(
+            mu0, S0, prior_iwp, meas_iwp, tspan, N, calibration="diagonal"
+        )
+        r2 = ekf1_sqr_loop_dynamic_scan(
+            mu0, S0, prior_iwp, meas_iwp, tspan, N, calibration="diagonal"
+        )
+        r3 = ekf1_sqr_loop_preconditioned_dynamic(
+            mu0, S0, prior_pre, meas_pre, tspan, N, calibration="diagonal"
+        )
+        r4 = ekf1_sqr_loop_preconditioned_dynamic_scan(
+            mu0, S0, prior_pre, meas_pre, tspan, N, calibration="diagonal"
+        )
+        # Final filtered means agree to fp64 precision.
+        for r in (r2, r3, r4):
+            assert np.allclose(r1[0][-1], r[0][-1], atol=1e-8)
+
+    def test_diagonal_ekf0_variant_runs_across_loops(self):
+        """diagonal_ekf0 variant works in all four loop functions."""
+        r_rate = 2.0
+        x0 = np.asarray([1e-5, 1e-10])
+
+        def vf(x, *, t):
+            return np.array([r_rate * x[0] * (1 - x[0]), r_rate * x[1] * (1 - x[1])])
+
+        tspan = (0.0, 15.0)
+        N = 500
+        prior_iwp = IWP(q=3, d=2)
+        prior_pre = PrecondIWP(q=3, d=2)
+        mu0, S0 = taylor_mode_initialization(vf, x0, q=3)
+        meas_iwp = ODEInformation(vf, prior_iwp.E0, prior_iwp.E1)
+        meas_pre = ODEInformation(vf, prior_pre.E0, prior_pre.E1)
+        for func, prior, meas in [
+            (ekf1_sqr_loop_dynamic, prior_iwp, meas_iwp),
+            (ekf1_sqr_loop_dynamic_scan, prior_iwp, meas_iwp),
+            (ekf1_sqr_loop_preconditioned_dynamic, prior_pre, meas_pre),
+            (ekf1_sqr_loop_preconditioned_dynamic_scan, prior_pre, meas_pre),
+        ]:
+            r = func(mu0, S0, prior, meas, tspan, N, calibration="diagonal_ekf0")
+            # Final x_2 should be near 0.999 (true value) -- the multi-scale
+            # problem resolves under any diagonal variant.
+            m_last = r[0][-1]
+            x_last = m_last @ prior.E0.T
+            assert abs(float(x_last[1]) - 0.99907) < 1e-3, (
+                f"{func.__name__} failed: x_2 = {float(x_last[1])}"
+            )
+
+    def test_calibration_none_matches_across_variants(self):
         """With calibration disabled, all four dynamic variants reduce to
         their non-dynamic counterparts (modulo preconditioning) and so must
         produce the same final state."""
         prior, mu_0, S0, measure = self._setup_iwp()
         r_loop = ekf1_sqr_loop_dynamic(
-            mu_0, S0, prior, measure, self.tspan, self.N, calibrate=False
+            mu_0, S0, prior, measure, self.tspan, self.N, calibration="none"
         )
         r_scan = ekf1_sqr_loop_dynamic_scan(
-            mu_0, S0, prior, measure, self.tspan, self.N, calibrate=False
+            mu_0, S0, prior, measure, self.tspan, self.N, calibration="none"
         )
         assert np.allclose(r_loop[0][-1], r_scan[0][-1], atol=1e-8)
         assert np.allclose(r_loop[1][-1], r_scan[1][-1], atol=1e-8)

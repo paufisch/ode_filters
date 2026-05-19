@@ -116,13 +116,15 @@ class TestNoiseExclusion:
         m_zero = ODEInformation(vf, prior.E0, prior.E1)
         body_zero = _make_step_body(prior, m_zero, atol=1e-4, rtol=1e-2)
         out_zero = body_zero(h, t, mu_0, S0)
-        sigma_zero = float(out_zero[9])
+        # Step body always returns sigma as a length-d array (broadcast from
+        # scalar in non-diagonal modes). Index 0 for d=1 logistic.
+        sigma_zero = float(out_zero[9][0])
 
         m_with_R = ODEInformation(vf, prior.E0, prior.E1)
         m_with_R.R = 0.5  # large R to make any leakage obvious
         body_R = _make_step_body(prior, m_with_R, atol=1e-4, rtol=1e-2)
         out_R = body_R(h, t, mu_0, S0)
-        sigma_R = float(out_R[9])
+        sigma_R = float(out_R[9][0])
 
         # R=0 and R>0 calibration values agree: R never enters the
         # dynamic-diffusion estimator.
