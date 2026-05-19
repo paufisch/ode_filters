@@ -435,6 +435,69 @@ class TestLogLikelihoodSemantics:
 
 
 # ---------------------------------------------------------------------------
+# Boundary-condition regression: integration-endpoint roundoff
+# ---------------------------------------------------------------------------
+
+
+class TestAdaptiveBoundaryRoundoff:
+    """Regression: ``while t < t_end`` plus float accumulation of
+    ``t = t + h_try`` can leave a sub-fp residual at the endpoint. The
+    previous implementation tried to take a step of size ~ulp at the
+    boundary and crashed with ``h < h_min``. The fix is a span-scaled
+    endpoint tolerance on the loop predicate; the h_min guard still fires
+    for legitimate underflows mid-trajectory."""
+
+    def _setup(self):
+        prior = IWP(q=2, d=1)
+        mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
+        measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
+        return prior, mu_0, S0, measure
+
+    def test_non_fp_exact_h_terminates_cleanly(self):
+        """h=0.1 is not exactly representable in fp64; ten accumulated 0.1
+        steps don't reach 1.0 exactly. The old code raised h<h_min on the
+        spurious trailing iteration; the new code returns t_seq[-1] == 1.0."""
+        prior, mu_0, S0, measure = self._setup()
+        controller = PController(
+            order=prior.q,
+            safety=1.0,
+            alpha=1.0,
+            min_factor=1.0,
+            max_factor=1.0,
+        )
+        r = ekf1_sqr_adaptive_loop(
+            mu_0,
+            S0,
+            prior,
+            measure,
+            (0.0, 1.0),
+            h_init=10.0,  # clipped to h_max = 0.1
+            h_max=0.1,
+            atol=1.0,
+            rtol=1.0,
+            controller=controller,
+        )
+        assert len(r.h_seq) == 10
+        assert float(r.t_seq[-1]) == pytest.approx(1.0, abs=1e-13)
+
+    def test_legitimate_h_min_underflow_still_raises(self):
+        """A tolerance so tight the controller wants a step below h_min
+        anywhere *inside* the interval must still raise."""
+        prior, mu_0, S0, measure = self._setup()
+        with pytest.raises(RuntimeError, match="below h_min"):
+            ekf1_sqr_adaptive_loop(
+                mu_0,
+                S0,
+                prior,
+                measure,
+                (0.0, 1.0),
+                atol=1e-30,
+                rtol=1e-30,
+                h_min=0.5,  # higher than any reasonable proposal
+            )
+
+
+# ---------------------------------------------------------------------------
 # Preconditioned diagonal calibration: refuse non-PrecondIWP priors
 # ---------------------------------------------------------------------------
 

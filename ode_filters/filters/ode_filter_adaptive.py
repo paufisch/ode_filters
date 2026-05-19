@@ -479,7 +479,14 @@ def ekf1_sqr_adaptive_loop(
     sigma_running_sum = onp.zeros(d_components, dtype=float)
     n_accepted_so_far = 0
 
-    while t < t_end:
+    # Tolerance for "we are essentially at the endpoint". Accumulating
+    # ``t = t + h_try`` in float64 typically drifts by O(span * 2^-52) over
+    # many steps; allowing a small endpoint slack avoids a spurious
+    # sub-h_min residual step at termination when ``span / h`` does not
+    # divide evenly in fp64.
+    endpoint_tol = max(1e-12 * span, 1e-14)
+
+    while t_end - t > endpoint_tol:
         if iters >= max_steps:
             raise RuntimeError(
                 f"Adaptive loop exceeded max_steps={max_steps} "
