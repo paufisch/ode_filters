@@ -222,6 +222,15 @@ def ekf1_sqr_loop_dynamic(
             f"fixed-step dynamic loop; got {calibration!r}."
         )
     if calibration in ("diagonal", "diagonal_ekf0"):
+        from ..priors.gmp_priors import JointPrior, PrecondJointPrior
+
+        if isinstance(prior, (JointPrior, PrecondJointPrior)):
+            raise NotImplementedError(
+                f"calibration={calibration!r} is not supported with "
+                "JointPrior / PrecondJointPrior (the kron+xi construction "
+                "is structurally incompatible with block-diagonal priors). "
+                "Use calibration='dynamic'."
+            )
         xi = np.asarray(prior.xi)
         if not np.allclose(xi - np.diag(np.diag(xi)), 0.0):
             raise ValueError(
@@ -245,9 +254,10 @@ def ekf1_sqr_loop_dynamic(
     b_h = prior.b(h)
     Q_h = prior.Q(h)
     Q_h_sqr = np.linalg.cholesky(Q_h).T
-    xi_diag = np.diag(prior.xi)
     E1 = prior.E1
+    d_ode = measure.ode_dim
     if calibration in ("diagonal", "diagonal_ekf0"):
+        xi_diag = np.diag(prior.xi)
         Q_time_sqr_lower = np.linalg.cholesky(prior._Q(h))
 
     log_likelihood = 0.0
@@ -261,17 +271,27 @@ def ekf1_sqr_loop_dynamic(
         H_t, c_t = measure.linearize(m_pred_provisional, t=t)
         mz_pred = H_t @ m_pred_provisional + c_t
 
+        # Calibration uses only the ODE-defect rows of the stacked residual
+        # (Bosch, Tronarp, Hennig 2022 sec. 3 / ProbNumDiffEq.jl
+        # `perform_step!`). Conservation and observation rows still update
+        # the posterior and contribute to the log-likelihood; they just do
+        # not drive sigma.
+        H_ode = H_t[:d_ode]
+        mz_ode = mz_pred[:d_ode]
+
         if calibration in ("diagonal", "diagonal_ekf0"):
-            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_t
+            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_ode
             denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_h, H_for_calib)
-            sigma_vec = mz_pred**2 / denom
+            sigma_vec = mz_ode**2 / denom
             sqrt_diag = np.sqrt(xi_diag * sigma_vec)
             Q_step_sqr = np.kron(Q_time_sqr_lower, np.diag(sqrt_diag)).T
             sigma_to_store: float | Array = onp.asarray(sigma_vec)
         else:
-            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_pred, H_t, Q_h_sqr)
+            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode, Q_h_sqr)
             Q_step_sqr = (
-                np.sqrt(sigma_scalar) * Q_h_sqr if calibration == "dynamic" else Q_h_sqr
+                prior.apply_state_sigma_sqr(Q_h_sqr, sigma_scalar)
+                if calibration == "dynamic"
+                else Q_h_sqr
             )
             sigma_to_store = float(sigma_scalar)
 
@@ -546,6 +566,13 @@ def ekf1_sqr_loop_preconditioned_dynamic(
     if calibration not in _valid:
         raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
     if calibration in ("diagonal", "diagonal_ekf0"):
+        from ..priors.gmp_priors import JointPrior, PrecondJointPrior
+
+        if isinstance(prior, (JointPrior, PrecondJointPrior)):
+            raise NotImplementedError(
+                f"calibration={calibration!r} is not supported with "
+                "JointPrior / PrecondJointPrior. Use calibration='dynamic'."
+            )
         xi = np.asarray(prior.xi)
         if not np.allclose(xi - np.diag(np.diag(xi)), 0.0):
             raise ValueError(f"calibration={calibration!r} requires prior.xi diagonal.")
@@ -556,9 +583,10 @@ def ekf1_sqr_loop_preconditioned_dynamic(
     b_bar = prior.b(h)
     Q_sqr_bar = np.linalg.cholesky(prior.Q(h)).T
     T_h = prior.T(h)
-    xi_diag = np.diag(prior.xi)
     E1 = prior.E1
+    d_ode = measure.ode_dim
     if calibration in ("diagonal", "diagonal_ekf0"):
+        xi_diag = np.diag(prior.xi)
         # Only PrecondIWP exposes a true bar-space time-block ``_Q_bar``.
         # Other preconditioned priors store ``_Q(h)`` in original space; the
         # diagonal-mode Kronecker construction would silently produce a
@@ -602,20 +630,24 @@ def ekf1_sqr_loop_preconditioned_dynamic(
         H_t_bar = H_t @ T_h
         mz_pred = H_t_bar @ m_pred_prov_bar + c_t
 
+        # Calibration uses only the ODE-defect rows (Bosch et al. 2022 sec. 3).
+        H_ode_bar = H_t_bar[:d_ode]
+        mz_ode = mz_pred[:d_ode]
+
         if calibration in ("diagonal", "diagonal_ekf0"):
             # Note: E1 in original space; E1_bar = E1 @ T.
             E1_bar = E1 @ T_h
-            H_for_calib = E1_bar if calibration == "diagonal_ekf0" else H_t_bar
+            H_for_calib = E1_bar if calibration == "diagonal_ekf0" else H_ode_bar
             Q_bar_full = Q_sqr_bar.T @ Q_sqr_bar
             denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_bar_full, H_for_calib)
-            sigma_vec = mz_pred**2 / denom
+            sigma_vec = mz_ode**2 / denom
             sqrt_diag = np.sqrt(xi_diag * sigma_vec)
             Q_step_sqr_bar = np.kron(Q_bar_time_sqr_lower, np.diag(sqrt_diag)).T
             sigma_to_store: float | Array = onp.asarray(sigma_vec)
         else:
-            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_pred, H_t_bar, Q_sqr_bar)
+            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode_bar, Q_sqr_bar)
             Q_step_sqr_bar = (
-                np.sqrt(sigma_scalar) * Q_sqr_bar
+                prior.apply_state_sigma_sqr(Q_sqr_bar, sigma_scalar)
                 if calibration == "dynamic"
                 else Q_sqr_bar
             )
