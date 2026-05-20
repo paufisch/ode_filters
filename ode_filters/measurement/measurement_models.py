@@ -370,6 +370,20 @@ class BaseODEInformation(ABC):
         return R
 
     @property
+    def ode_dim(self) -> int:
+        """Number of ODE-defect rows at the top of ``linearize()`` output.
+
+        Calibration and step-size adaptation should use only
+        ``H_t[:ode_dim]`` and ``mz_pred[:ode_dim]`` so that conservation
+        and observation residuals (which live on different scales than the
+        ODE defect) cannot bias the diffusion estimate. See Bosch,
+        Tronarp, Hennig (2022), *Pick-and-Mix Information Operators*,
+        sec. 3 and ProbNumDiffEq.jl's ``perform_step!`` for the matching
+        design choice.
+        """
+        return self._d
+
+    @property
     def R(self) -> Array:
         """Base measurement noise covariance matrix (ODE part only)."""
         return self._base_R
