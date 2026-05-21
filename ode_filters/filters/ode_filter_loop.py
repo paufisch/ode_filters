@@ -229,8 +229,10 @@ def ekf1_sqr_loop_dynamic(
             f"fixed-step dynamic loop; got {calibration!r}."
         )
     if calibration in ("diagonal", "diagonal_ekf0"):
-        xi_state = np.asarray(prior.xi_state)
-        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
+        # Host-numpy on a host-converted xi so the bool stays concrete and
+        # this entire validation can survive being traced by jit / grad.
+        xi_state = onp.asarray(prior.xi_state)
+        if not onp.allclose(xi_state - onp.diag(onp.diag(xi_state)), 0.0):
             raise ValueError(
                 f"calibration={calibration!r} requires the state-block "
                 "Xi to be diagonal (joint priors: this is "
@@ -571,8 +573,10 @@ def ekf1_sqr_loop_preconditioned_dynamic(
     if calibration not in _valid:
         raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
     if calibration in ("diagonal", "diagonal_ekf0"):
-        xi_state = np.asarray(prior.xi_state)
-        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
+        # Host-numpy on a host-converted xi so the bool stays concrete and
+        # this entire validation can survive being traced by jit / grad.
+        xi_state = onp.asarray(prior.xi_state)
+        if not onp.allclose(xi_state - onp.diag(onp.diag(xi_state)), 0.0):
             raise ValueError(
                 f"calibration={calibration!r} requires the state-block "
                 "Xi to be diagonal (joint priors: this is "
@@ -1420,8 +1424,10 @@ def ekf1_sqr_loop_dynamic_scan(
         raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
     is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
     if is_diagonal:
-        xi_state = np.asarray(prior.xi_state)
-        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
+        # Host-numpy on a host-converted xi so the bool stays concrete and
+        # this entire validation can survive being traced by jit / grad.
+        xi_state = onp.asarray(prior.xi_state)
+        if not onp.allclose(xi_state - onp.diag(onp.diag(xi_state)), 0.0):
             raise ValueError(
                 f"calibration={calibration!r} requires the state-block "
                 "Xi to be diagonal (joint priors: this is "
@@ -1595,8 +1601,10 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
         raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
     is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
     if is_diagonal:
-        xi_state = np.asarray(prior.xi_state)
-        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
+        # Host-numpy on a host-converted xi so the bool stays concrete and
+        # this entire validation can survive being traced by jit / grad.
+        xi_state = onp.asarray(prior.xi_state)
+        if not onp.allclose(xi_state - onp.diag(onp.diag(xi_state)), 0.0):
             raise ValueError(
                 f"calibration={calibration!r} requires the state-block "
                 "Xi to be diagonal (joint priors: this is "

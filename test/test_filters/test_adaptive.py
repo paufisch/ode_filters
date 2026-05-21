@@ -942,6 +942,36 @@ class TestScanParityFullGrid:
         )
 
 
+class TestScanLoopIsGradTraceable:
+    """Top-of-function validation must not produce a traced bool, so the
+    loops can be wrapped in ``jax.jit`` / ``jax.value_and_grad`` end-to-end.
+    Regression for the upstream-blocker case reported by the LFM bench.
+    """
+
+    @pytest.mark.parametrize(
+        "calibration", ["dynamic", "diagonal", "diagonal_ekf0", "none"]
+    )
+    def test_scan_loop_traceable_under_grad(self, calibration):
+        import jax
+
+        prior = IWP(q=2, d=1)
+        mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
+        measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
+
+        def loss(mu_0):
+            r = ekf1_sqr_loop_dynamic_scan(
+                mu_0, S0, prior, measure, (0.0, 1.0), 10, calibration=calibration
+            )
+            return float(r[-1])  # log-likelihood is a scalar JAX array
+
+        # Just confirm it traces without TracerBoolConversionError.
+        _ = jax.value_and_grad(
+            lambda x: ekf1_sqr_loop_dynamic_scan(
+                x, S0, prior, measure, (0.0, 1.0), 10, calibration=calibration
+            )[-1]
+        )(mu_0)
+
+
 class TestScanParityWithStackedResidual:
     """When the measurement has rows beyond the ODE-defect (e.g. a
     Conservation constraint), only the first ``measure.ode_dim`` rows of the
