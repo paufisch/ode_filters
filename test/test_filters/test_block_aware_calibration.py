@@ -304,39 +304,81 @@ class TestJointPriorStateOnlyScaling:
 
 
 # ---------------------------------------------------------------------------
-# Joint-prior diagonal-mode guardrail
+# Joint-prior diagonal-mode correctness
 # ---------------------------------------------------------------------------
 
 
-class TestJointPriorDiagonalGuardrail:
-    """Diagonal calibration modes are structurally incompatible with joint priors."""
+class TestJointPriorDiagonalCalibration:
+    """Diagonal modes on JointPrior: per-component sigma on the state block,
+    input block untouched, output shape ``(N, d_x)``."""
 
     @pytest.mark.parametrize("mode", ["diagonal", "diagonal_ekf0"])
-    def test_fixed_step_rejects_diagonal_with_joint_prior(self, mode):
+    def test_fixed_step_runs_and_shapes_correct(self, mode):
         joint, measure, mu_0, Sigma_0_sqr = _joint_setup()
-        with pytest.raises(NotImplementedError, match="JointPrior"):
-            ekf1_sqr_loop_dynamic(
-                mu_0,
-                Sigma_0_sqr,
-                joint,
-                measure,
-                (0.0, 1.0),
-                N=5,
-                calibration=mode,
-            )
+        N = 5
+        result = ekf1_sqr_loop_dynamic(
+            mu_0,
+            Sigma_0_sqr,
+            joint,
+            measure,
+            (0.0, 1.0),
+            N=N,
+            calibration=mode,
+        )
+        sigmas = onp.asarray(result[-2], dtype=float)
+        # Per-component sigma on the state block: shape (N, d_x).
+        d_x = joint._prior_x._dim
+        assert sigmas.shape == (N, d_x)
+        assert onp.all(onp.isfinite(sigmas))
+        assert onp.all(np.isfinite(result[0][-1]))
 
     @pytest.mark.parametrize("mode", ["diagonal", "diagonal_ekf0"])
-    def test_adaptive_rejects_diagonal_with_joint_prior(self, mode):
+    def test_adaptive_runs_and_shapes_correct(self, mode):
         joint, measure, mu_0, Sigma_0_sqr = _joint_setup()
-        with pytest.raises(NotImplementedError, match="JointPrior"):
-            ekf1_sqr_adaptive_loop(
-                mu_0,
-                Sigma_0_sqr,
-                joint,
-                measure,
-                (0.0, 1.0),
-                calibration=mode,
-            )
+        result = ekf1_sqr_adaptive_loop(
+            mu_0,
+            Sigma_0_sqr,
+            joint,
+            measure,
+            (0.0, 1.0),
+            calibration=mode,
+        )
+        d_x = joint._prior_x._dim
+        for s in result.sigma_sqr_seq:
+            assert onp.asarray(s).shape == (d_x,)
+            assert onp.all(onp.isfinite(onp.asarray(s)))
+        assert onp.all(np.isfinite(result.m_seq[-1]))
+
+    def test_diagonal_leaves_input_block_of_Q_step_alone(self):
+        """``apply_state_sigma_sqr`` with a vector must not touch the
+        input block of ``Q_sqr``, regardless of the per-component values."""
+        joint, _measure, _mu_0, _S0 = _joint_setup()
+        h = 0.1
+        Q_h_sqr = np.linalg.cholesky(joint.Q(h)).T
+        sigma_vec = np.array([7.0, 0.3])  # arbitrary per-component values
+        Q_calib_sqr = joint.apply_state_sigma_sqr(Q_h_sqr, sigma_vec)
+        D_x = joint._D_x
+        # Input block of Q (reconstructed from sqrt) is unchanged.
+        Q_h = Q_h_sqr.T @ Q_h_sqr
+        Q_calib = Q_calib_sqr.T @ Q_calib_sqr
+        onp.testing.assert_allclose(
+            onp.asarray(Q_calib[D_x:, D_x:]),
+            onp.asarray(Q_h[D_x:, D_x:]),
+            rtol=1e-10,
+            atol=1e-12,
+        )
+        # State block: diag(sqrt(sigma_tile)) @ Q_x @ diag(sqrt(sigma_tile)),
+        # i.e. each component i scaled by sigma_vec[i] uniformly across all
+        # q_x + 1 derivative blocks.
+        sigma_tile = onp.tile(onp.asarray(sigma_vec), joint._prior_x.q + 1)
+        D = onp.diag(onp.sqrt(sigma_tile))
+        expected_state = D @ onp.asarray(Q_h[:D_x, :D_x]) @ D
+        onp.testing.assert_allclose(
+            onp.asarray(Q_calib[:D_x, :D_x]),
+            expected_state,
+            rtol=1e-10,
+            atol=1e-12,
+        )
 
 
 # ---------------------------------------------------------------------------

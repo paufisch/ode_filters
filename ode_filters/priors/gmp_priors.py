@@ -90,14 +90,39 @@ class BasePrior(ABC):
         """
         return self._E0
 
-    def apply_state_sigma_sqr(self, Q_sqr: Array, sigma_sqr: ArrayLike) -> Array:
-        """Apply scalar diffusion ``sigma_sqr`` to the state block of ``Q_sqr``.
+    @property
+    def xi_state(self) -> Array:
+        """State-block component-correlation matrix ``Xi`` (shape ``[d, d]``).
 
-        For non-joint priors the whole ``Q`` is the state block, so this is
-        ``sqrt(sigma_sqr) * Q_sqr``. Joint priors override to leave the
-        input block untouched (Schmidt et al. 2021 convention).
+        For non-joint priors this is just ``self.xi``. Joint priors override
+        to return the state-prior's ``Xi`` — diagonal-mode calibration only
+        needs the state block to be (per-component) diagonal; the input
+        block can have arbitrary structure.
         """
-        return np.sqrt(sigma_sqr) * Q_sqr
+        return self.xi
+
+    def apply_state_sigma_sqr(self, Q_sqr: Array, sigma_sqr: ArrayLike) -> Array:
+        """Apply diffusion ``sigma_sqr`` to the state block of ``Q_sqr``.
+
+        Accepts a scalar (uniform scaling) or a length-``d`` vector
+        (per-component scaling, used by ``calibration="diagonal"``). The
+        vector path scales each component's columns by ``sqrt(sigma_sqr[i])``
+        across all ``q + 1`` derivative orders.
+
+        For non-joint priors the whole ``Q`` is the state block, so the
+        scalar path is ``sqrt(sigma_sqr) * Q_sqr``. Joint priors override to
+        leave the input block untouched (Schmidt et al. 2021 convention).
+        """
+        sigma_sqr = np.asarray(sigma_sqr)
+        if sigma_sqr.ndim == 0:
+            return np.sqrt(sigma_sqr) * Q_sqr
+        if sigma_sqr.shape != (self._dim,):
+            raise ValueError(
+                f"sigma_sqr must be scalar or length-{self._dim} vector; "
+                f"got shape {sigma_sqr.shape}."
+            )
+        tiled = np.tile(sigma_sqr, self.q + 1)
+        return Q_sqr * np.sqrt(tiled)[None, :]
 
     def apply_state_sigma_to_cov_sqr(self, P_sqr: Array, sigma_sqr: ArrayLike) -> Array:
         """Apply ``sigma_sqr`` to the state block of a full-state covariance sqrt.
@@ -699,6 +724,8 @@ class JointPrior(BasePrior):
         # Precompute dimensions and zero blocks for efficiency
         _D_x = (prior_x.q + 1) * prior_x._dim
         _D_u = (prior_u.q + 1) * prior_u._dim
+        self._D_x = _D_x
+        self._D_u = _D_u
         self._zeros = np.zeros((_D_x, _D_u))
         zeros_up = np.zeros((prior_x._dim, _D_u))
         zeros_down = np.zeros((prior_u._dim, _D_x))
@@ -778,15 +805,37 @@ class JointPrior(BasePrior):
         """State-only value projection (Bosch et al. 2022 sec. 3)."""
         return self._E0_x
 
+    @property
+    def xi_state(self) -> Array:
+        """State-prior component-correlation matrix (shape ``[d_x, d_x]``).
+
+        Diagonal-mode calibration only requires the state block to be
+        per-component diagonal; the hidden block's xi can be arbitrary.
+        """
+        return self._prior_x.xi
+
     def apply_state_sigma_sqr(self, Q_sqr: Array, sigma_sqr: ArrayLike) -> Array:
         """Scale only the state block of ``Q_sqr`` by ``sqrt(sigma_sqr)``.
 
-        ``Q`` is block-diagonal, so its upper-triangular sqrt is also
-        block-diagonal. Scaling rows and columns ``:D_x`` of the sqrt by
-        ``sqrt(sigma_sqr)`` yields ``blkdiag(sigma_sqr * Q_x, Q_u)``.
+        Accepts a scalar (uniform state-block scaling) or a length-``d_x``
+        vector (per-component state-block scaling used by
+        ``calibration="diagonal"``). In both cases the input block is
+        untouched. ``Q`` is block-diagonal, so its upper-triangular sqrt is
+        also block-diagonal: column-scaling the state block of the sqrt by
+        ``sqrt(sigma_sqr_tiled)`` yields ``blkdiag(diag(sigma) Q_x diag(sigma),
+        Q_u)`` (where ``diag(sigma)`` collapses to a scalar in the scalar
+        case).
         """
-        D_x = (self._prior_x.q + 1) * self._prior_x._dim
-        return Q_sqr.at[:D_x, :D_x].multiply(np.sqrt(sigma_sqr))
+        sigma_sqr = np.asarray(sigma_sqr)
+        if sigma_sqr.ndim == 0:
+            return Q_sqr.at[: self._D_x, : self._D_x].multiply(np.sqrt(sigma_sqr))
+        if sigma_sqr.shape != (self._prior_x._dim,):
+            raise ValueError(
+                f"sigma_sqr must be scalar or length-{self._prior_x._dim} vector; "
+                f"got shape {sigma_sqr.shape}."
+            )
+        tiled = np.tile(sigma_sqr, self._prior_x.q + 1)
+        return Q_sqr.at[:, : self._D_x].multiply(np.sqrt(tiled)[None, :])
 
     def apply_state_sigma_to_cov_sqr(self, P_sqr: Array, sigma_sqr: ArrayLike) -> Array:
         """Scale only the state block of a full-state covariance sqrt.
@@ -969,12 +1018,27 @@ class PrecondJointPrior:
         """State-only value projection (Bosch et al. 2022 sec. 3)."""
         return self._E0_x
 
+    @property
+    def xi_state(self) -> Array:
+        """State-prior component-correlation matrix (shape ``[d_x, d_x]``)."""
+        return self._prior_x.xi
+
     def apply_state_sigma_sqr(self, Q_sqr: Array, sigma_sqr: ArrayLike) -> Array:
         """Scale only the state block of ``Q_sqr`` by ``sqrt(sigma_sqr)``.
 
-        See :meth:`JointPrior.apply_state_sigma_sqr` for the rationale.
+        Accepts a scalar or a length-``d_x`` vector. See
+        :meth:`JointPrior.apply_state_sigma_sqr` for the rationale.
         """
-        return Q_sqr.at[: self._D_x, : self._D_x].multiply(np.sqrt(sigma_sqr))
+        sigma_sqr = np.asarray(sigma_sqr)
+        if sigma_sqr.ndim == 0:
+            return Q_sqr.at[: self._D_x, : self._D_x].multiply(np.sqrt(sigma_sqr))
+        if sigma_sqr.shape != (self._prior_x._dim,):
+            raise ValueError(
+                f"sigma_sqr must be scalar or length-{self._prior_x._dim} vector; "
+                f"got shape {sigma_sqr.shape}."
+            )
+        tiled = np.tile(sigma_sqr, self._prior_x.q + 1)
+        return Q_sqr.at[:, : self._D_x].multiply(np.sqrt(tiled)[None, :])
 
     def apply_state_sigma_to_cov_sqr(self, P_sqr: Array, sigma_sqr: ArrayLike) -> Array:
         """Scale only the state block of a full-state covariance sqrt.

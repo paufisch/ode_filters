@@ -153,6 +153,7 @@ def ekf1_sqr_loop_dynamic(
     N: int,
     *,
     calibration: str = "dynamic",
+    min_sigma_sqr: float = 0.0,
     calibrate: bool | None = None,
 ) -> DynamicLoopResult:
     """Fixed-step square-root EKF with online per-step diffusion calibration.
@@ -197,14 +198,20 @@ def ekf1_sqr_loop_dynamic(
         tspan: Time interval ``(t_start, t_end)``.
         N: Number of filter steps.
         calibration: ``"dynamic"`` (default), ``"diagonal"``, or ``"none"``.
+            All modes work with :class:`JointPrior` /
+            :class:`PrecondJointPrior`; diagonal modes scale the state block
+            only and require ``prior._prior_x.xi`` to be diagonal.
+        min_sigma_sqr: Lower bound on the per-step ``sigma_hat^2`` (and on
+            each component in diagonal modes) before it is baked into
+            ``Q_step_sqr``. Default ``0.0`` preserves unclamped behavior.
         calibrate: Deprecated; ``True`` -> ``"dynamic"``, ``False`` -> ``"none"``.
 
     Returns:
         Tuple of 10 sequences plus the scalar log-marginal-likelihood:
         ``(m_seq, P_seq_sqr, m_pred_seq, P_pred_seq_sqr, G_back_seq,
         d_back_seq, P_back_seq_sqr, mz_seq, Pz_seq_sqr, sigma_sqr_seq,
-        log_likelihood)``. In ``"diagonal"`` mode ``sigma_sqr_seq``
-        entries are length-``d`` arrays; otherwise Python floats.
+        log_likelihood)``. In the diagonal modes ``sigma_sqr_seq``
+        entries are length-``d_ode`` arrays; otherwise Python floats.
     """
     import warnings
 
@@ -222,19 +229,12 @@ def ekf1_sqr_loop_dynamic(
             f"fixed-step dynamic loop; got {calibration!r}."
         )
     if calibration in ("diagonal", "diagonal_ekf0"):
-        from ..priors.gmp_priors import JointPrior, PrecondJointPrior
-
-        if isinstance(prior, (JointPrior, PrecondJointPrior)):
-            raise NotImplementedError(
-                f"calibration={calibration!r} is not supported with "
-                "JointPrior / PrecondJointPrior (the kron+xi construction "
-                "is structurally incompatible with block-diagonal priors). "
-                "Use calibration='dynamic'."
-            )
-        xi = np.asarray(prior.xi)
-        if not np.allclose(xi - np.diag(np.diag(xi)), 0.0):
+        xi_state = np.asarray(prior.xi_state)
+        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
             raise ValueError(
-                f"calibration={calibration!r} requires prior.xi to be diagonal."
+                f"calibration={calibration!r} requires the state-block "
+                "Xi to be diagonal (joint priors: this is "
+                "``prior._prior_x.xi``)."
             )
 
     m_seq = [mu_0]
@@ -256,9 +256,6 @@ def ekf1_sqr_loop_dynamic(
     Q_h_sqr = np.linalg.cholesky(Q_h).T
     E1 = prior.E1
     d_ode = measure.ode_dim
-    if calibration in ("diagonal", "diagonal_ekf0"):
-        xi_diag = np.diag(prior.xi)
-        Q_time_sqr_lower = np.linalg.cholesky(prior._Q(h))
 
     log_likelihood = 0.0
 
@@ -283,11 +280,12 @@ def ekf1_sqr_loop_dynamic(
             H_for_calib = E1 if calibration == "diagonal_ekf0" else H_ode
             denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_h, H_for_calib)
             sigma_vec = mz_ode**2 / denom
-            sqrt_diag = np.sqrt(xi_diag * sigma_vec)
-            Q_step_sqr = np.kron(Q_time_sqr_lower, np.diag(sqrt_diag)).T
+            sigma_vec = np.maximum(sigma_vec, min_sigma_sqr)
+            Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_vec)
             sigma_to_store: float | Array = onp.asarray(sigma_vec)
         else:
             sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode, Q_h_sqr)
+            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
             Q_step_sqr = (
                 prior.apply_state_sigma_sqr(Q_h_sqr, sigma_scalar)
                 if calibration == "dynamic"
@@ -515,6 +513,7 @@ def ekf1_sqr_loop_preconditioned_dynamic(
     N: int,
     *,
     calibration: str = "dynamic",
+    min_sigma_sqr: float = 0.0,
     calibrate: bool | None = None,
 ) -> PrecondDynamicLoopResult:
     """Preconditioned fixed-step square-root EKF with online calibration.
@@ -545,13 +544,19 @@ def ekf1_sqr_loop_preconditioned_dynamic(
         tspan: Time interval ``(t_start, t_end)``.
         N: Number of filter steps.
         calibration: ``"dynamic"`` (default), ``"diagonal"``,
-            ``"diagonal_ekf0"``, or ``"none"``.
+            ``"diagonal_ekf0"``, or ``"none"``. All modes work with
+            :class:`JointPrior` / :class:`PrecondJointPrior`; diagonal modes
+            scale the state block only and require ``prior._prior_x.xi`` to
+            be diagonal.
+        min_sigma_sqr: Lower bound applied to per-step ``sigma_hat^2``
+            before baking into ``Q_step_sqr_bar``. Default ``0.0``
+            preserves unclamped behavior.
         calibrate: Deprecated; ``True`` -> ``"dynamic"``, ``False`` -> ``"none"``.
 
     Returns:
         Tuple of 12 sequences, the preconditioning matrix ``T_h``, and the
         scalar log-marginal-likelihood. ``sigma_sqr_seq`` entries are
-        length-``d`` arrays for the diagonal modes; floats otherwise.
+        length-``d_ode`` arrays for the diagonal modes; floats otherwise.
     """
     import warnings
 
@@ -566,16 +571,13 @@ def ekf1_sqr_loop_preconditioned_dynamic(
     if calibration not in _valid:
         raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
     if calibration in ("diagonal", "diagonal_ekf0"):
-        from ..priors.gmp_priors import JointPrior, PrecondJointPrior
-
-        if isinstance(prior, (JointPrior, PrecondJointPrior)):
-            raise NotImplementedError(
-                f"calibration={calibration!r} is not supported with "
-                "JointPrior / PrecondJointPrior. Use calibration='dynamic'."
+        xi_state = np.asarray(prior.xi_state)
+        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
+            raise ValueError(
+                f"calibration={calibration!r} requires the state-block "
+                "Xi to be diagonal (joint priors: this is "
+                "``prior._prior_x.xi``)."
             )
-        xi = np.asarray(prior.xi)
-        if not np.allclose(xi - np.diag(np.diag(xi)), 0.0):
-            raise ValueError(f"calibration={calibration!r} requires prior.xi diagonal.")
 
     ts, h = onp.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     h = float(h)
@@ -585,21 +587,6 @@ def ekf1_sqr_loop_preconditioned_dynamic(
     T_h = prior.T(h)
     E1 = prior.E1
     d_ode = measure.ode_dim
-    if calibration in ("diagonal", "diagonal_ekf0"):
-        xi_diag = np.diag(prior.xi)
-        # Only PrecondIWP exposes a true bar-space time-block ``_Q_bar``.
-        # Other preconditioned priors store ``_Q(h)`` in original space; the
-        # diagonal-mode Kronecker construction would silently produce a
-        # wrong calibrated Q for those, so we refuse.
-        Q_bar_time = getattr(prior, "_Q_bar", None)
-        if Q_bar_time is None:
-            raise NotImplementedError(
-                f"calibration={calibration!r} requires the prior to expose a "
-                f"bar-space time-block `_Q_bar` (only PrecondIWP does). "
-                f"Got {type(prior).__name__}; use the non-preconditioned loop "
-                f"or `calibration='dynamic'`/'none'."
-            )
-        Q_bar_time_sqr_lower = np.linalg.cholesky(Q_bar_time)
 
     m_seq = [mu_0]
     P_seq_sqr = [P_0_sqr]
@@ -641,11 +628,12 @@ def ekf1_sqr_loop_preconditioned_dynamic(
             Q_bar_full = Q_sqr_bar.T @ Q_sqr_bar
             denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_bar_full, H_for_calib)
             sigma_vec = mz_ode**2 / denom
-            sqrt_diag = np.sqrt(xi_diag * sigma_vec)
-            Q_step_sqr_bar = np.kron(Q_bar_time_sqr_lower, np.diag(sqrt_diag)).T
+            sigma_vec = np.maximum(sigma_vec, min_sigma_sqr)
+            Q_step_sqr_bar = prior.apply_state_sigma_sqr(Q_sqr_bar, sigma_vec)
             sigma_to_store: float | Array = onp.asarray(sigma_vec)
         else:
             sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode_bar, Q_sqr_bar)
+            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
             Q_step_sqr_bar = (
                 prior.apply_state_sigma_sqr(Q_sqr_bar, sigma_scalar)
                 if calibration == "dynamic"
@@ -1386,6 +1374,7 @@ def ekf1_sqr_loop_dynamic_scan(
     N: int,
     *,
     calibration: str = "dynamic",
+    min_sigma_sqr: float = 0.0,
     calibrate: bool | None = None,
 ) -> DynamicScanLoopResult:
     """``jax.lax.scan`` variant of :func:`ekf1_sqr_loop_dynamic`.
@@ -1404,12 +1393,18 @@ def ekf1_sqr_loop_dynamic_scan(
         tspan: Time interval ``(t_start, t_end)``.
         N: Number of filter steps.
         calibration: ``"dynamic"`` (default), ``"diagonal"``,
-            ``"diagonal_ekf0"``, or ``"none"``.
+            ``"diagonal_ekf0"``, or ``"none"``. All modes work with
+            :class:`JointPrior` / :class:`PrecondJointPrior`; diagonal modes
+            require ``prior._prior_x.xi`` to be diagonal.
+        min_sigma_sqr: Lower bound applied to per-step ``sigma_hat^2`` (or
+            each component in diagonal modes) before baking into
+            ``Q_step_sqr``. Default ``0.0`` preserves unclamped behavior.
         calibrate: Deprecated; ``True`` -> ``"dynamic"``, ``False`` -> ``"none"``.
 
     Returns:
         :class:`DynamicScanLoopResult` -- 10 arrays plus the scalar
-        log-marginal-likelihood.
+        log-marginal-likelihood. ``sigma_sqr_seq`` has shape ``(N, d_ode)``
+        in the diagonal modes, ``(N,)`` otherwise.
     """
     import warnings
 
@@ -1423,25 +1418,23 @@ def ekf1_sqr_loop_dynamic_scan(
     _valid = ("dynamic", "diagonal", "diagonal_ekf0", "none")
     if calibration not in _valid:
         raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
-    if calibration in ("diagonal", "diagonal_ekf0"):
-        xi = np.asarray(prior.xi)
-        if not np.allclose(xi - np.diag(np.diag(xi)), 0.0):
-            raise ValueError(f"calibration={calibration!r} requires prior.xi diagonal.")
+    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
+    if is_diagonal:
+        xi_state = np.asarray(prior.xi_state)
+        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
+            raise ValueError(
+                f"calibration={calibration!r} requires the state-block "
+                "Xi to be diagonal (joint priors: this is "
+                "``prior._prior_x.xi``)."
+            )
 
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     A_h = prior.A(h)
     b_h = prior.b(h)
-    Q_h_sqr = np.linalg.cholesky(prior.Q(h)).T
     Q_h = prior.Q(h)
-    xi_diag = np.diag(prior.xi)
+    Q_h_sqr = np.linalg.cholesky(Q_h).T
     E1 = prior.E1
-    Q_time_sqr_lower = (
-        np.linalg.cholesky(prior._Q(h))
-        if calibration in ("diagonal", "diagonal_ekf0")
-        else None
-    )
-
-    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
+    d_ode = measure.ode_dim
 
     def scan_body(carry, step_data):
         m_prev, P_prev_sqr, ll = carry
@@ -1451,17 +1444,24 @@ def ekf1_sqr_loop_dynamic_scan(
         H_t, c_t = measure.linearize(m_pred_prov, t=t_i)
         mz_pred = H_t @ m_pred_prov + c_t
 
+        # Calibration uses only the ODE-defect rows of the stacked residual
+        # (Bosch, Tronarp, Hennig 2022 sec. 3). Conservation / observation
+        # rows still update the posterior but do not drive sigma.
+        H_ode = H_t[:d_ode]
+        mz_ode = mz_pred[:d_ode]
+
         if is_diagonal:
-            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_t
+            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_ode
             denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_h, H_for_calib)
-            sigma_sqr = mz_pred**2 / denom  # shape (d,)
-            sqrt_diag = np.sqrt(xi_diag * sigma_sqr)
-            Q_step_sqr = np.kron(Q_time_sqr_lower, np.diag(sqrt_diag)).T
+            sigma_sqr = mz_ode**2 / denom  # shape (d_ode,)
+            sigma_sqr = np.maximum(sigma_sqr, min_sigma_sqr)
+            Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_sqr)
         else:
-            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_pred, H_t, Q_h_sqr)
+            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode, Q_h_sqr)
+            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
             sigma_sqr = sigma_scalar  # scalar
             if calibration == "dynamic":
-                Q_step_sqr = np.sqrt(sigma_scalar) * Q_h_sqr
+                Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_scalar)
             else:  # "none"
                 Q_step_sqr = Q_h_sqr
 
@@ -1552,6 +1552,7 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
     N: int,
     *,
     calibration: str = "dynamic",
+    min_sigma_sqr: float = 0.0,
     calibrate: bool | None = None,
 ) -> PrecondDynamicScanLoopResult:
     """``jax.lax.scan`` variant of :func:`ekf1_sqr_loop_preconditioned_dynamic`.
@@ -1568,13 +1569,17 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
         tspan: Time interval ``(t_start, t_end)``.
         N: Number of filter steps.
         calibration: ``"dynamic"`` (default), ``"diagonal"``,
-            ``"diagonal_ekf0"``, or ``"none"``.
+            ``"diagonal_ekf0"``, or ``"none"``. All modes work with
+            :class:`PrecondJointPrior`; diagonal modes require
+            ``prior._prior_x.xi`` to be diagonal.
+        min_sigma_sqr: Lower bound applied to per-step ``sigma_hat^2``
+            before baking into ``Q_step_sqr_bar``. Default ``0.0``.
         calibrate: Deprecated; ``True`` -> ``"dynamic"``, ``False`` -> ``"none"``.
 
     Returns:
         :class:`PrecondDynamicScanLoopResult` -- 12 arrays, ``T_h``, and the
-        scalar log-marginal-likelihood. ``sigma_sqr_seq`` shape is ``(N, d)``
-        in diagonal modes, ``(N,)`` otherwise.
+        scalar log-marginal-likelihood. ``sigma_sqr_seq`` shape is
+        ``(N, d_ode)`` in diagonal modes, ``(N,)`` otherwise.
     """
     import warnings
 
@@ -1588,35 +1593,27 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
     _valid = ("dynamic", "diagonal", "diagonal_ekf0", "none")
     if calibration not in _valid:
         raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
-    if calibration in ("diagonal", "diagonal_ekf0"):
-        xi = np.asarray(prior.xi)
-        if not np.allclose(xi - np.diag(np.diag(xi)), 0.0):
-            raise ValueError(f"calibration={calibration!r} requires prior.xi diagonal.")
+    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
+    if is_diagonal:
+        xi_state = np.asarray(prior.xi_state)
+        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
+            raise ValueError(
+                f"calibration={calibration!r} requires the state-block "
+                "Xi to be diagonal (joint priors: this is "
+                "``prior._prior_x.xi``)."
+            )
 
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     A_bar = prior.A(h)
     b_bar = prior.b(h)
-    Q_sqr_bar = np.linalg.cholesky(prior.Q(h)).T
     Q_bar_full = prior.Q(h)
+    Q_sqr_bar = np.linalg.cholesky(Q_bar_full).T
     T_h = prior.T(h)
-    xi_diag = np.diag(prior.xi)
     E1 = prior.E1
-    Q_bar_time_sqr_lower = None
-    if calibration in ("diagonal", "diagonal_ekf0"):
-        Q_bar_time = getattr(prior, "_Q_bar", None)
-        if Q_bar_time is None:
-            raise NotImplementedError(
-                f"calibration={calibration!r} requires the prior to expose a "
-                f"bar-space time-block `_Q_bar` (only PrecondIWP does). "
-                f"Got {type(prior).__name__}; use the non-preconditioned loop "
-                f"or `calibration='dynamic'`/'none'."
-            )
-        Q_bar_time_sqr_lower = np.linalg.cholesky(Q_bar_time)
+    d_ode = measure.ode_dim
 
     m_0_bar = np.linalg.solve(T_h, mu_0)
     P_0_sqr_bar = np.linalg.solve(T_h, P_0_sqr.T).T
-
-    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
 
     def scan_body(carry, step_data):
         m_prev_bar, P_prev_sqr_bar, ll = carry
@@ -1628,18 +1625,23 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
         H_t_bar = H_t @ T_h
         mz_pred = H_t_bar @ m_pred_prov_bar + c_t
 
+        # Calibration uses only the ODE-defect rows (Bosch et al. 2022 sec. 3).
+        H_ode_bar = H_t_bar[:d_ode]
+        mz_ode = mz_pred[:d_ode]
+
         if is_diagonal:
             E1_bar = E1 @ T_h
-            H_for_calib = E1_bar if calibration == "diagonal_ekf0" else H_t_bar
+            H_for_calib = E1_bar if calibration == "diagonal_ekf0" else H_ode_bar
             denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_bar_full, H_for_calib)
-            sigma_sqr = mz_pred**2 / denom
-            sqrt_diag = np.sqrt(xi_diag * sigma_sqr)
-            Q_step_sqr_bar = np.kron(Q_bar_time_sqr_lower, np.diag(sqrt_diag)).T
+            sigma_sqr = mz_ode**2 / denom
+            sigma_sqr = np.maximum(sigma_sqr, min_sigma_sqr)
+            Q_step_sqr_bar = prior.apply_state_sigma_sqr(Q_sqr_bar, sigma_sqr)
         else:
-            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_pred, H_t_bar, Q_sqr_bar)
+            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode_bar, Q_sqr_bar)
+            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
             sigma_sqr = sigma_scalar
             if calibration == "dynamic":
-                Q_step_sqr_bar = np.sqrt(sigma_scalar) * Q_sqr_bar
+                Q_step_sqr_bar = prior.apply_state_sigma_sqr(Q_sqr_bar, sigma_scalar)
             else:  # "none"
                 Q_step_sqr_bar = Q_sqr_bar
 
