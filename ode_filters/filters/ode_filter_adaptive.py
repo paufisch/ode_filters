@@ -89,6 +89,7 @@ from ..inference.sqr_gaussian_inference import sqr_marginalization
 from ..measurement.measurement_models import BaseODEInformation
 from ..priors.gmp_priors import BasePrior
 from .adaptive_controller import PIController, StepSizeController
+from .ode_filter_loop import _check_state_xi_diagonal
 from .ode_filter_step import ekf1_sqr_filter_step
 
 CalibrationMode = Literal["dynamic", "cumulative", "diagonal", "diagonal_ekf0", "none"]
@@ -434,15 +435,7 @@ def ekf1_sqr_adaptive_loop(
             f"got {sigma_in_error!r}."
         )
     if calibration in ("diagonal", "diagonal_ekf0"):
-        # Host-numpy on a host-converted xi so the bool stays concrete and
-        # this entire validation can survive being traced by jit / grad.
-        xi_state = onp.asarray(prior.xi_state)
-        if not onp.allclose(xi_state - onp.diag(onp.diag(xi_state)), 0.0):
-            raise ValueError(
-                f"calibration={calibration!r} requires the state-block "
-                "Xi to be diagonal (joint priors: this is "
-                "``prior._prior_x.xi``)."
-            )
+        _check_state_xi_diagonal(prior, calibration)
     t_start, t_end = float(tspan[0]), float(tspan[1])
     if t_end <= t_start:
         raise ValueError(f"tspan must be increasing; got {tspan!r}")
