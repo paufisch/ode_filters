@@ -95,27 +95,6 @@ SigmaInError = Literal["per_step", "running_mean"]
 _VALID_CALIBRATIONS = ("dynamic", "cumulative", "diagonal", "diagonal_ekf0", "none")
 
 
-def _diag_calib_Q_sqr(
-    Q_time_sqr_lower: Array, xi_diag: Array, sigma_vec: Array
-) -> Array:
-    """Build the calibrated process-noise sqrt for diagonal-mode diffusion.
-
-    ``Q_calib = Q_time(h) kron diag(xi_diag * sigma_vec)``. The Kronecker of
-    two Cholesky factors is a Cholesky factor of the Kronecker, so
-
-        L_calib = kron(L_time, diag(sqrt(xi_diag * sigma_vec)))
-
-    and the library's upper-triangular sqrt is ``L_calib.T``. This avoids a
-    re-Cholesky on the full ``((q+1)d, (q+1)d)`` matrix per step.
-
-    Assumes ``xi`` is diagonal (the default; per-component calibration is
-    only well-defined when Xi is diagonal).
-    """
-    sqrt_diag = np.sqrt(xi_diag * sigma_vec)
-    L = np.kron(Q_time_sqr_lower, np.diag(sqrt_diag))
-    return L.T  # upper-triangular convention
-
-
 class AdaptiveLoopResult(NamedTuple):
     """Output of :func:`ekf1_sqr_adaptive_loop`.
 
@@ -165,6 +144,7 @@ def _make_step_body(
     rtol: float,
     *,
     calibration: CalibrationMode = "dynamic",
+    min_sigma_sqr: float = 0.0,
 ) -> Callable[[float, float, Array, Array], tuple]:
     """Construct and jit the per-step body of the adaptive loop.
 
@@ -190,8 +170,6 @@ def _make_step_body(
     E1 = prior.E1
     d = E0_state.shape[0]
     d_ode = measure.ode_dim
-    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
-    xi_diag = np.diag(prior.xi) if is_diagonal else None
 
     @jax.jit
     def step_body(
@@ -230,6 +208,7 @@ def _make_step_body(
                 H_ode, c_t[:d_ode], zero_R_sqr, _m_pred_pre, P_pred_pre_sqr
             )
             sigma_scalar = quasi_mle_sigma_sqr(mz_ode, Pz_calib_sqr)
+            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
             sigma_vec = sigma_scalar * np.ones(d)
             Q_step_sqr = Q_h_sqr
         elif calibration in ("diagonal", "diagonal_ekf0"):
@@ -246,14 +225,12 @@ def _make_step_body(
             H_for_calib = E1 if calibration == "diagonal_ekf0" else H_ode
             denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_h, H_for_calib)
             sigma_vec = mz_ode**2 / denom
-            # Build calibrated Q via Kronecker of Cholesky factors -- avoids
-            # the O((q+1)^3 d^3) cost of re-factoring the full Q_calib.
-            Q_time_h = prior._Q(h)
-            Q_time_sqr_lower = np.linalg.cholesky(Q_time_h)
-            Q_step_sqr = _diag_calib_Q_sqr(Q_time_sqr_lower, xi_diag, sigma_vec)
+            sigma_vec = np.maximum(sigma_vec, min_sigma_sqr)
+            Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_vec)
         else:
             # Dynamic / none: sigma from H_ode Q(h) H_ode.T only (process noise).
             sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode, Q_h_sqr)
+            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
             sigma_vec = sigma_scalar * np.ones(d)
             if calibration == "dynamic":
                 Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_scalar)
@@ -332,6 +309,7 @@ def ekf1_sqr_adaptive_loop(
     controller: StepSizeController | None = None,
     calibration: CalibrationMode = "dynamic",
     sigma_in_error: SigmaInError = "running_mean",
+    min_sigma_sqr: float = 0.0,
     calibrate: bool | None = None,
     max_steps: int = 100_000,
 ) -> AdaptiveLoopResult:
@@ -392,6 +370,11 @@ def ekf1_sqr_adaptive_loop(
             - ``"none"`` -- propagate ``sigma=1``, still report
               ``sigma_hat^2`` for post-hoc rescaling / diagnostics.
 
+            All four modes work with :class:`JointPrior` /
+            :class:`PrecondJointPrior`: the diagonal modes scale only the
+            state block per-component and require ``prior._prior_x.xi`` to
+            be diagonal.
+
             For the diagonal modes the per-step entries of
             ``result.sigma_sqr_seq`` are length-``d`` arrays; for the
             scalar modes they are Python floats.
@@ -410,6 +393,13 @@ def ekf1_sqr_adaptive_loop(
               chi-squared estimator noise (relative std ``sqrt(2/d)``),
               which propagates into step-size decisions and causes visible
               h oscillations in flat regions.
+        min_sigma_sqr: Lower bound applied to the per-step ``sigma_hat^2``
+            (and to each component of the per-component vector in diagonal
+            modes) before it is baked into ``Q_step_sqr``. Default ``0.0``
+            preserves the unclamped behavior. Use a small positive value
+            (e.g. ``1e-30``) on problems where the trivial zero-residual
+            fixed point would otherwise collapse the state-block diffusion
+            to zero and propagate NaN.
         calibrate: Deprecated. ``True`` maps to ``calibration="dynamic"``,
             ``False`` maps to ``calibration="none"``. Pass ``calibration``
             directly instead.
@@ -443,20 +433,12 @@ def ekf1_sqr_adaptive_loop(
             f"got {sigma_in_error!r}."
         )
     if calibration in ("diagonal", "diagonal_ekf0"):
-        from ..priors.gmp_priors import JointPrior, PrecondJointPrior
-
-        if isinstance(prior, (JointPrior, PrecondJointPrior)):
-            raise NotImplementedError(
-                f"calibration={calibration!r} is not supported with "
-                "JointPrior / PrecondJointPrior (the kron+xi construction "
-                "is structurally incompatible with block-diagonal priors). "
-                "Use calibration='dynamic'."
-            )
-        xi = np.asarray(prior.xi)
-        if not np.allclose(xi - np.diag(np.diag(xi)), 0.0):
+        xi_state = np.asarray(prior.xi_state)
+        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
             raise ValueError(
-                f"calibration={calibration!r} requires prior.xi to be "
-                f"diagonal; got off-diagonal entries in xi of shape {xi.shape}."
+                f"calibration={calibration!r} requires the state-block "
+                "Xi to be diagonal (joint priors: this is "
+                "``prior._prior_x.xi``)."
             )
     t_start, t_end = float(tspan[0]), float(tspan[1])
     if t_end <= t_start:
@@ -469,7 +451,14 @@ def ekf1_sqr_adaptive_loop(
     if controller is None:
         controller = PIController(order=max(int(prior.q), 1))
 
-    step_body = _make_step_body(prior, measure, atol, rtol, calibration=calibration)
+    step_body = _make_step_body(
+        prior,
+        measure,
+        atol,
+        rtol,
+        calibration=calibration,
+        min_sigma_sqr=min_sigma_sqr,
+    )
 
     import numpy as onp  # used for the running-mean accumulator and err math
 

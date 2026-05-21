@@ -12,8 +12,10 @@ Targets behaviours that the original ``test_adaptive.py`` does not exercise:
 - the adaptive driver, locked to a single h, must reproduce
   :func:`ekf1_sqr_loop_dynamic`;
 - log-likelihood semantics across calibration modes;
-- error path: preconditioned diagonal calibration on a non-PrecondIWP
-  prior is rejected rather than silently producing the wrong Q.
+- invariance under preconditioning: the preconditioned diagonal-mode
+  loop's trajectory agrees with the non-preconditioned variant for both
+  PrecondIWP and PrecondMaternPrior (a similarity transform leaves the
+  per-component sigma estimator invariant).
 """
 
 from __future__ import annotations
@@ -502,23 +504,31 @@ class TestAdaptiveBoundaryRoundoff:
 # ---------------------------------------------------------------------------
 
 
-class TestPreconditionedDiagonalRejectsNonPrecondIWP:
-    """The preconditioned dynamic loop's diagonal modes depend on the
-    bar-space time-block ``_Q_bar`` (only PrecondIWP exposes it). A prior
-    that does not have ``_Q_bar`` must raise rather than silently
-    constructing a wrong Q from the original-space ``_Q(h)``."""
+class TestPreconditionedDiagonalMatchesNonPreconditioned:
+    """Preconditioning is a similarity transform: it does not change the
+    per-component diffusion estimate. The diagonal-mode trajectory of the
+    preconditioned loop must therefore agree with the non-preconditioned
+    loop on the same prior family. This is the structural invariant that
+    used to require ``_Q_bar`` on every preconditioned prior; the current
+    implementation works through ``apply_state_sigma_sqr`` on a bar-space
+    ``Q_sqr`` and so handles every preconditioned prior whose ``Q(h)``
+    factors as ``Q_bar ⊗ xi``.
+    """
 
-    def test_precond_matern_diagonal_raises(self):
-        prior = PrecondMaternPrior(q=2, d=1, length_scale=1.0)
+    def test_precond_matern_diagonal_matches_matern(self):
+        from ode_filters.priors.gmp_priors import MaternPrior
+
+        prior_p = PrecondMaternPrior(q=2, d=1, length_scale=1.0)
+        prior_n = MaternPrior(q=2, d=1, length_scale=1.0)
         mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
-        measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
-        with pytest.raises(NotImplementedError, match="_Q_bar"):
-            ekf1_sqr_loop_preconditioned_dynamic(
-                mu_0,
-                S0,
-                prior,
-                measure,
-                (0.0, 1.0),
-                10,
-                calibration="diagonal_ekf0",
-            )
+        m_p = ODEInformation(logistic_vf, prior_p.E0, prior_p.E1)
+        m_n = ODEInformation(logistic_vf, prior_n.E0, prior_n.E1)
+
+        r_p = ekf1_sqr_loop_preconditioned_dynamic(
+            mu_0, S0, prior_p, m_p, (0.0, 1.0), 10, calibration="diagonal_ekf0"
+        )
+        r_n = ekf1_sqr_loop_dynamic(
+            mu_0, S0, prior_n, m_n, (0.0, 1.0), 10, calibration="diagonal_ekf0"
+        )
+        # Final filtered mean agrees up to fp64.
+        assert np.allclose(r_p[0][-1], r_n[0][-1], atol=1e-10)
