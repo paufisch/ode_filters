@@ -74,6 +74,39 @@ class BasePrior(ABC):
     def Q(self, h: float) -> Array:
         pass  # pragma: no cover
 
+    # ------------------------------------------------------------------
+    # Block-aware calibration hooks. Defaults treat the whole state as a
+    # single block; ``JointPrior`` / ``PrecondJointPrior`` override.
+    # ------------------------------------------------------------------
+
+    @property
+    def E0_state(self) -> Array:
+        """State-only value projection used by the step-size error norm.
+
+        Bosch, Tronarp, Hennig (2022) sec. 3 recommends that the local
+        error vector have the dimension of the ODE solution. For non-joint
+        priors the state is everything, so ``E0_state == E0``. Joint priors
+        override to return the state-only extractor.
+        """
+        return self._E0
+
+    def apply_state_sigma_sqr(self, Q_sqr: Array, sigma_sqr: ArrayLike) -> Array:
+        """Apply scalar diffusion ``sigma_sqr`` to the state block of ``Q_sqr``.
+
+        For non-joint priors the whole ``Q`` is the state block, so this is
+        ``sqrt(sigma_sqr) * Q_sqr``. Joint priors override to leave the
+        input block untouched (Schmidt et al. 2021 convention).
+        """
+        return np.sqrt(sigma_sqr) * Q_sqr
+
+    def apply_state_sigma_to_cov_sqr(self, P_sqr: Array, sigma_sqr: ArrayLike) -> Array:
+        """Apply ``sigma_sqr`` to the state block of a full-state covariance sqrt.
+
+        Used by cumulative-mode post-multiplication of carried covariances.
+        Default scales everything; joint priors override.
+        """
+        return np.sqrt(sigma_sqr) * P_sqr
+
 
 def taylor_mode_initialization(
     vf: VectorField,
@@ -657,6 +690,12 @@ class JointPrior(BasePrior):
         self._prior_x = prior_x
         self._prior_u = prior_u
 
+        # State-prior order is the natural choice for adaptive step-size
+        # control: convergence order in h depends on the regularity of the
+        # ODE-state prior, not on the input prior.
+        self.q = prior_x.q
+        self._dim = prior_x._dim + prior_u._dim
+
         # Precompute dimensions and zero blocks for efficiency
         _D_x = (prior_x.q + 1) * prior_x._dim
         _D_u = (prior_u.q + 1) * prior_u._dim
@@ -733,6 +772,32 @@ class JointPrior(BasePrior):
         return np.block(
             [[self._prior_x.Q(h), self._zeros], [self._zeros.T, self._prior_u.Q(h)]]
         )
+
+    @property
+    def E0_state(self) -> Array:
+        """State-only value projection (Bosch et al. 2022 sec. 3)."""
+        return self._E0_x
+
+    def apply_state_sigma_sqr(self, Q_sqr: Array, sigma_sqr: ArrayLike) -> Array:
+        """Scale only the state block of ``Q_sqr`` by ``sqrt(sigma_sqr)``.
+
+        ``Q`` is block-diagonal, so its upper-triangular sqrt is also
+        block-diagonal. Scaling rows and columns ``:D_x`` of the sqrt by
+        ``sqrt(sigma_sqr)`` yields ``blkdiag(sigma_sqr * Q_x, Q_u)``.
+        """
+        D_x = (self._prior_x.q + 1) * self._prior_x._dim
+        return Q_sqr.at[:D_x, :D_x].multiply(np.sqrt(sigma_sqr))
+
+    def apply_state_sigma_to_cov_sqr(self, P_sqr: Array, sigma_sqr: ArrayLike) -> Array:
+        """Scale only the state block of a full-state covariance sqrt.
+
+        ``P = P_sqr.T @ P_sqr``. Multiplying columns ``[:, :D_x]`` of the
+        upper-triangular sqrt by ``sqrt(sigma_sqr)`` scales rows and
+        columns ``:D_x`` of ``P`` by ``sigma_sqr`` and leaves the input
+        block alone.
+        """
+        D_x = (self._prior_x.q + 1) * self._prior_x._dim
+        return P_sqr.at[:, :D_x].multiply(np.sqrt(sigma_sqr))
 
 
 class PrecondJointPrior:
@@ -898,3 +963,22 @@ class PrecondJointPrior:
         T_u = self._prior_u.T(h)
         zeros_xu = np.zeros((self._D_x, self._D_u))
         return np.block([[T_x, zeros_xu], [zeros_xu.T, T_u]])
+
+    @property
+    def E0_state(self) -> Array:
+        """State-only value projection (Bosch et al. 2022 sec. 3)."""
+        return self._E0_x
+
+    def apply_state_sigma_sqr(self, Q_sqr: Array, sigma_sqr: ArrayLike) -> Array:
+        """Scale only the state block of ``Q_sqr`` by ``sqrt(sigma_sqr)``.
+
+        See :meth:`JointPrior.apply_state_sigma_sqr` for the rationale.
+        """
+        return Q_sqr.at[: self._D_x, : self._D_x].multiply(np.sqrt(sigma_sqr))
+
+    def apply_state_sigma_to_cov_sqr(self, P_sqr: Array, sigma_sqr: ArrayLike) -> Array:
+        """Scale only the state block of a full-state covariance sqrt.
+
+        See :meth:`JointPrior.apply_state_sigma_to_cov_sqr` for the rationale.
+        """
+        return P_sqr.at[:, : self._D_x].multiply(np.sqrt(sigma_sqr))

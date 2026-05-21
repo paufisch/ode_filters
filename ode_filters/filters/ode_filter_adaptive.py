@@ -186,10 +186,12 @@ def _make_step_body(
     length-``d`` array (broadcast from the scalar in non-diagonal modes), so
     downstream code has a uniform shape.
     """
-    E0 = prior.E0
+    E0_state = prior.E0_state
     E1 = prior.E1
-    d = E0.shape[0]
-    xi_diag = np.diag(prior.xi)
+    d = E0_state.shape[0]
+    d_ode = measure.ode_dim
+    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
+    xi_diag = np.diag(prior.xi) if is_diagonal else None
 
     @jax.jit
     def step_body(
@@ -209,18 +211,25 @@ def _make_step_body(
         H_t, c_t = measure.linearize(m_pred_provisional, t=t_next)
         mz_pred = H_t @ m_pred_provisional + c_t
 
+        # Calibration uses only the ODE-defect rows of the stacked residual
+        # (Bosch, Tronarp, Hennig 2022 sec. 3). Conservation and observation
+        # rows still update the posterior and contribute to the
+        # log-likelihood; they just do not drive sigma.
+        H_ode = H_t[:d_ode]
+        mz_ode = mz_pred[:d_ode]
+
         if calibration == "cumulative":
             # Cumulative: sigma from the full noise-free predicted-obs
-            # covariance H P_pred H.T (P_pred includes A P_prev A.T plus Q).
+            # covariance H P_pred H.T (P_pred includes A P_prev A.T plus Q),
+            # restricted to the ODE rows.
             _m_pred_pre, P_pred_pre_sqr = sqr_marginalization(
                 A_h, b_h, Q_h_sqr, m_prev, P_prev_sqr
             )
-            R_dim = mz_pred.shape[0]
-            zero_R_sqr = np.zeros((R_dim, R_dim))
+            zero_R_sqr = np.zeros((d_ode, d_ode))
             _, Pz_calib_sqr = sqr_marginalization(
-                H_t, c_t, zero_R_sqr, _m_pred_pre, P_pred_pre_sqr
+                H_ode, c_t[:d_ode], zero_R_sqr, _m_pred_pre, P_pred_pre_sqr
             )
-            sigma_scalar = quasi_mle_sigma_sqr(mz_pred, Pz_calib_sqr)
+            sigma_scalar = quasi_mle_sigma_sqr(mz_ode, Pz_calib_sqr)
             sigma_vec = sigma_scalar * np.ones(d)
             Q_step_sqr = Q_h_sqr
         elif calibration in ("diagonal", "diagonal_ekf0"):
@@ -234,20 +243,20 @@ def _make_step_body(
             #                    is diagonal -- mathematically clean; can
             #                    be slightly better on multi-scale at
             #                    loose tolerance).
-            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_t
+            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_ode
             denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_h, H_for_calib)
-            sigma_vec = mz_pred**2 / denom
+            sigma_vec = mz_ode**2 / denom
             # Build calibrated Q via Kronecker of Cholesky factors -- avoids
             # the O((q+1)^3 d^3) cost of re-factoring the full Q_calib.
             Q_time_h = prior._Q(h)
             Q_time_sqr_lower = np.linalg.cholesky(Q_time_h)
             Q_step_sqr = _diag_calib_Q_sqr(Q_time_sqr_lower, xi_diag, sigma_vec)
         else:
-            # Dynamic / none: sigma from H Q(h) H.T only (process noise).
-            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_pred, H_t, Q_h_sqr)
+            # Dynamic / none: sigma from H_ode Q(h) H_ode.T only (process noise).
+            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode, Q_h_sqr)
             sigma_vec = sigma_scalar * np.ones(d)
             if calibration == "dynamic":
-                Q_step_sqr = np.sqrt(sigma_scalar) * Q_h_sqr
+                Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_scalar)
             else:  # "none"
                 Q_step_sqr = Q_h_sqr
 
@@ -261,20 +270,24 @@ def _make_step_body(
         )
 
         if calibration == "cumulative":
-            # Post-multiply the full step covariance. Carried P accumulates
-            # every previous sigma_hat^2 multiplicatively.
-            scale = np.sqrt(sigma_vec[0])  # scalar in cumulative mode
-            P_pred_sqr = scale * P_pred_sqr
-            P_back_sqr = scale * P_back_sqr
-            Pz_sqr = scale * Pz_sqr
-            P_sqr = scale * P_sqr
+            # Post-multiply the carried covariance. For joint priors only
+            # the state block is scaled (delegated to the prior). Pz_sqr
+            # lives in measurement-row space, so we column-scale just the
+            # ODE rows there.
+            sigma_scalar = sigma_vec[0]
+            P_pred_sqr = prior.apply_state_sigma_to_cov_sqr(P_pred_sqr, sigma_scalar)
+            P_back_sqr = prior.apply_state_sigma_to_cov_sqr(P_back_sqr, sigma_scalar)
+            P_sqr = prior.apply_state_sigma_to_cov_sqr(P_sqr, sigma_scalar)
+            Pz_sqr = Pz_sqr.at[:, :d_ode].multiply(np.sqrt(sigma_scalar))
 
-        # Local error estimate (Bosch et al. 2021 Eq. 49). diag(E0 Q E0.T)
-        # is the per-component, uncalibrated value-variance; the driver
-        # multiplies it by whatever sigma_for_err it chooses.
-        D_unscaled_sqr_diag = np.diag(E0 @ Q_h @ E0.T)
+        # Local error estimate (Bosch et al. 2021 Eq. 49; Bosch et al. 2022
+        # sec. 3: error vector has the dimension of the ODE solution).
+        # diag(E0_state Q E0_state.T) is the per-component, uncalibrated
+        # state-value variance; the driver multiplies it by whatever
+        # sigma_for_err it chooses.
+        D_unscaled_sqr_diag = np.diag(E0_state @ Q_h @ E0_state.T)
         D = np.sqrt(np.maximum(sigma_vec * D_unscaled_sqr_diag, 0.0))
-        m_value = E0 @ m_pred
+        m_value = E0_state @ m_pred
         err = _local_error_norm(D, m_value, atol, rtol)
 
         # Per-step log-likelihood (reflects whatever scaling was applied).
@@ -430,6 +443,15 @@ def ekf1_sqr_adaptive_loop(
             f"got {sigma_in_error!r}."
         )
     if calibration in ("diagonal", "diagonal_ekf0"):
+        from ..priors.gmp_priors import JointPrior, PrecondJointPrior
+
+        if isinstance(prior, (JointPrior, PrecondJointPrior)):
+            raise NotImplementedError(
+                f"calibration={calibration!r} is not supported with "
+                "JointPrior / PrecondJointPrior (the kron+xi construction "
+                "is structurally incompatible with block-diagonal priors). "
+                "Use calibration='dynamic'."
+            )
         xi = np.asarray(prior.xi)
         if not np.allclose(xi - np.diag(np.diag(xi)), 0.0):
             raise ValueError(
@@ -456,7 +478,7 @@ def ekf1_sqr_adaptive_loop(
     m_curr = mu_0
     P_curr_sqr = Sigma_0_sqr
     err_prev: float | None = None
-    d_components = int(prior.E0.shape[0])
+    d_components = int(prior.E0_state.shape[0])
     is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
 
     t_list: list[float] = [t_start]
