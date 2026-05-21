@@ -81,6 +81,7 @@ from typing import Literal, NamedTuple
 
 import jax
 import jax.numpy as np
+import numpy as onp
 from jax import Array
 
 from ..calibration.sigma import quasi_mle_sigma_sqr, quasi_mle_sigma_sqr_from_Q
@@ -433,8 +434,10 @@ def ekf1_sqr_adaptive_loop(
             f"got {sigma_in_error!r}."
         )
     if calibration in ("diagonal", "diagonal_ekf0"):
-        xi_state = np.asarray(prior.xi_state)
-        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
+        # Host-numpy on a host-converted xi so the bool stays concrete and
+        # this entire validation can survive being traced by jit / grad.
+        xi_state = onp.asarray(prior.xi_state)
+        if not onp.allclose(xi_state - onp.diag(onp.diag(xi_state)), 0.0):
             raise ValueError(
                 f"calibration={calibration!r} requires the state-block "
                 "Xi to be diagonal (joint priors: this is "
@@ -459,8 +462,6 @@ def ekf1_sqr_adaptive_loop(
         calibration=calibration,
         min_sigma_sqr=min_sigma_sqr,
     )
-
-    import numpy as onp  # used for the running-mean accumulator and err math
 
     t = t_start
     h = float(min(h_init, h_max))
