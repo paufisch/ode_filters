@@ -942,6 +942,76 @@ class TestScanParityFullGrid:
         )
 
 
+class TestScanLoopIsGradTraceable:
+    """Top-of-function validation must not block tracing. Two regressions:
+
+    - ``jax.value_and_grad`` over ``mu_0`` with constant ``xi`` (the
+      original upstream-blocker case): xi is concrete, validation runs
+      with host numpy.
+    - ``jax.value_and_grad`` over ``xi`` itself (outer-loop hyperparameter
+      optimization): xi is a tracer, validation gracefully skips and the
+      loop becomes fully diff-traceable through ``xi``.
+
+    And a concrete-non-diagonal-xi case must still raise ``ValueError``
+    at call time -- the skip only kicks in under tracing.
+    """
+
+    @pytest.mark.parametrize(
+        "calibration", ["dynamic", "diagonal", "diagonal_ekf0", "none"]
+    )
+    def test_scan_loop_traceable_under_grad_over_mu0(self, calibration):
+        import jax
+
+        prior = IWP(q=2, d=1)
+        mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
+        measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
+
+        _ = jax.value_and_grad(
+            lambda x: ekf1_sqr_loop_dynamic_scan(
+                x, S0, prior, measure, (0.0, 1.0), 10, calibration=calibration
+            )[-1]
+        )(mu_0)
+
+    @pytest.mark.parametrize(
+        "calibration", ["dynamic", "diagonal", "diagonal_ekf0", "none"]
+    )
+    def test_scan_loop_traceable_under_grad_over_xi(self, calibration):
+        """xi-as-traced-argument: outer-loop optimization over Xi must
+        survive tracing through the diagonal-mode validation."""
+        import jax
+
+        mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
+
+        def loss(xi_diag):
+            prior = IWP(q=2, d=1, Xi=np.diag(xi_diag))
+            measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
+            r = ekf1_sqr_loop_dynamic_scan(
+                mu_0, S0, prior, measure, (0.0, 1.0), 5, calibration=calibration
+            )
+            return r[-1]
+
+        v, g = jax.value_and_grad(loss)(np.array([1.0]))
+        assert np.isfinite(v)
+        assert np.all(np.isfinite(g))
+
+    def test_concrete_non_diagonal_xi_still_rejected(self):
+        """The tracer-aware skip must not silently accept a clearly-wrong
+        concrete non-diagonal xi: that user error should still surface."""
+        bad_xi = np.array([[1.0, 0.3], [0.3, 1.0]])  # symmetric, not diagonal
+        prior = IWP(q=2, d=2, Xi=bad_xi)
+        mu_0 = np.zeros(prior.E0.shape[1])
+        S0 = np.eye(mu_0.shape[0])
+
+        def vf(x, *, t):
+            return -x
+
+        measure = ODEInformation(vf, prior.E0, prior.E1)
+        with pytest.raises(ValueError, match="Xi to be diagonal"):
+            ekf1_sqr_loop_dynamic_scan(
+                mu_0, S0, prior, measure, (0.0, 1.0), 5, calibration="diagonal"
+            )
+
+
 class TestScanParityWithStackedResidual:
     """When the measurement has rows beyond the ODE-defect (e.g. a
     Conservation constraint), only the first ``measure.ode_dim`` rows of the

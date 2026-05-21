@@ -29,6 +29,34 @@ from .ode_filter_step import (
 StateFunction = Callable[[Array], Array]
 JacobianFunction = Callable[[Array], Array]
 
+
+def _check_state_xi_diagonal(prior: BasePrior, calibration: str) -> None:
+    """Verify ``prior.xi_state`` is diagonal for diagonal-mode calibration.
+
+    Per-component diagonal calibration estimates ``sigma_hat^2_i`` from a
+    per-row formula that is only correct when ``Xi`` is diagonal -- the
+    estimator silently mis-allocates variance across components otherwise.
+
+    The check is gated on whether ``xi`` is concretely materializable: if
+    we're under outer-loop tracing (e.g. ``jax.grad`` over ``Xi`` itself)
+    we trust the caller's invariant and skip the check. This is the only
+    pattern that lets the loop be both ``jit``-traceable end-to-end and
+    diff-traceable through ``Xi`` while still catching the common
+    misconfiguration of passing a non-diagonal ``Xi`` to a diagonal-mode
+    call.
+    """
+    try:
+        xi_h = onp.asarray(prior.xi_state)
+    except jax.errors.TracerArrayConversionError:
+        return
+    if not onp.allclose(xi_h - onp.diag(onp.diag(xi_h)), 0.0):
+        raise ValueError(
+            f"calibration={calibration!r} requires the state-block "
+            "Xi to be diagonal (joint priors: this is "
+            "``prior._prior_x.xi``)."
+        )
+
+
 LoopResult = tuple[
     Array,
     Array,
@@ -229,13 +257,7 @@ def ekf1_sqr_loop_dynamic(
             f"fixed-step dynamic loop; got {calibration!r}."
         )
     if calibration in ("diagonal", "diagonal_ekf0"):
-        xi_state = np.asarray(prior.xi_state)
-        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
-            raise ValueError(
-                f"calibration={calibration!r} requires the state-block "
-                "Xi to be diagonal (joint priors: this is "
-                "``prior._prior_x.xi``)."
-            )
+        _check_state_xi_diagonal(prior, calibration)
 
     m_seq = [mu_0]
     P_seq_sqr = [Sigma_0_sqr]
@@ -571,13 +593,7 @@ def ekf1_sqr_loop_preconditioned_dynamic(
     if calibration not in _valid:
         raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
     if calibration in ("diagonal", "diagonal_ekf0"):
-        xi_state = np.asarray(prior.xi_state)
-        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
-            raise ValueError(
-                f"calibration={calibration!r} requires the state-block "
-                "Xi to be diagonal (joint priors: this is "
-                "``prior._prior_x.xi``)."
-            )
+        _check_state_xi_diagonal(prior, calibration)
 
     ts, h = onp.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     h = float(h)
@@ -1420,13 +1436,7 @@ def ekf1_sqr_loop_dynamic_scan(
         raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
     is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
     if is_diagonal:
-        xi_state = np.asarray(prior.xi_state)
-        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
-            raise ValueError(
-                f"calibration={calibration!r} requires the state-block "
-                "Xi to be diagonal (joint priors: this is "
-                "``prior._prior_x.xi``)."
-            )
+        _check_state_xi_diagonal(prior, calibration)
 
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     A_h = prior.A(h)
@@ -1595,13 +1605,7 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
         raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
     is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
     if is_diagonal:
-        xi_state = np.asarray(prior.xi_state)
-        if not np.allclose(xi_state - np.diag(np.diag(xi_state)), 0.0):
-            raise ValueError(
-                f"calibration={calibration!r} requires the state-block "
-                "Xi to be diagonal (joint priors: this is "
-                "``prior._prior_x.xi``)."
-            )
+        _check_state_xi_diagonal(prior, calibration)
 
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     A_bar = prior.A(h)
