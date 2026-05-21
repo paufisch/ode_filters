@@ -788,3 +788,193 @@ class TestDynamicLoopVariantsAgree:
         )
         assert np.allclose(r_loop[0][-1], r_scan[0][-1], atol=1e-8)
         assert np.allclose(r_loop[1][-1], r_scan[1][-1], atol=1e-8)
+
+
+# ---------------------------------------------------------------------------
+# Scan vs non-scan parity: full (prior x calibration) cross-product
+# ---------------------------------------------------------------------------
+
+
+class TestScanParityFullGrid:
+    """For every supported (prior, calibration) combination, the JIT-scan
+    loop must produce the same trajectory and per-step sigma as the Python
+    non-scan loop. Each of the three bugs fixed in this PR shows up
+    somewhere in this grid:
+
+    - Joint priors crashed at scan setup (`prior.xi` is undefined on
+      `JointPrior` / `PrecondJointPrior`).
+    - The scan body skipped the ``[:d_ode]`` slicing of the residual; for
+      measurements with stacked rows the scan sigma was wrong.
+    - In dynamic mode the scan body multiplied the full Q by sigma instead
+      of routing through ``apply_state_sigma_sqr``; for joint priors this
+      poisoned the input block.
+    """
+
+    tspan = (0.0, 2.0)
+    N = 30
+
+    @staticmethod
+    def _iwp_setup():
+        from ode_filters.priors.gmp_priors import IWP
+
+        prior = IWP(q=2, d=1)
+        mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
+        measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
+        return (
+            prior,
+            mu_0,
+            S0,
+            measure,
+            ekf1_sqr_loop_dynamic,
+            ekf1_sqr_loop_dynamic_scan,
+        )
+
+    @staticmethod
+    def _precond_iwp_setup():
+        from ode_filters.priors.gmp_priors import PrecondIWP
+
+        prior = PrecondIWP(q=2, d=1)
+        mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
+        measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
+        return (
+            prior,
+            mu_0,
+            S0,
+            measure,
+            ekf1_sqr_loop_preconditioned_dynamic,
+            ekf1_sqr_loop_preconditioned_dynamic_scan,
+        )
+
+    @staticmethod
+    def _joint_setup():
+        from ode_filters.measurement.measurement_models import (
+            ODEInformationWithHidden,
+        )
+        from ode_filters.priors.gmp_priors import IWP, JointPrior
+
+        prior_x = IWP(q=2, d=2)
+        prior_u = IWP(q=0, d=1, Xi=1e-3 * np.eye(1))
+        joint = JointPrior(prior_x, prior_u)
+
+        def _vf_hidden_linear(x, u, *, t):
+            return -u[0] * x
+
+        measure = ODEInformationWithHidden(
+            _vf_hidden_linear,
+            E0=joint.E0_x,
+            E1=joint.E1,
+            E0_hidden=joint.E0_hidden,
+        )
+        D = joint.E0.shape[1]
+        mu_0 = np.zeros(D).at[0].set(1.0).at[1].set(0.5).at[6].set(0.7)
+        S0 = 1e-6 * np.eye(D)
+        return (
+            joint,
+            mu_0,
+            S0,
+            measure,
+            ekf1_sqr_loop_dynamic,
+            ekf1_sqr_loop_dynamic_scan,
+        )
+
+    @staticmethod
+    def _precond_joint_setup():
+        from ode_filters.measurement.measurement_models import (
+            ODEInformationWithHidden,
+        )
+        from ode_filters.priors.gmp_priors import PrecondIWP, PrecondJointPrior
+
+        prior_x = PrecondIWP(q=2, d=2)
+        prior_u = PrecondIWP(q=0, d=1, Xi=1e-3 * np.eye(1))
+        joint = PrecondJointPrior(prior_x, prior_u)
+
+        def _vf_hidden_linear(x, u, *, t):
+            return -u[0] * x
+
+        measure = ODEInformationWithHidden(
+            _vf_hidden_linear,
+            E0=joint.E0_x,
+            E1=joint.E1,
+            E0_hidden=joint.E0_hidden,
+        )
+        D = joint.E0.shape[1]
+        mu_0 = np.zeros(D).at[0].set(1.0).at[1].set(0.5).at[6].set(0.7)
+        S0 = 1e-6 * np.eye(D)
+        return (
+            joint,
+            mu_0,
+            S0,
+            measure,
+            ekf1_sqr_loop_preconditioned_dynamic,
+            ekf1_sqr_loop_preconditioned_dynamic_scan,
+        )
+
+    @pytest.mark.parametrize(
+        "prior_kind", ["iwp", "precond_iwp", "joint", "precond_joint"]
+    )
+    @pytest.mark.parametrize(
+        "calibration", ["dynamic", "diagonal", "diagonal_ekf0", "none"]
+    )
+    def test_scan_matches_python_loop(self, prior_kind, calibration):
+        setup = {
+            "iwp": self._iwp_setup,
+            "precond_iwp": self._precond_iwp_setup,
+            "joint": self._joint_setup,
+            "precond_joint": self._precond_joint_setup,
+        }[prior_kind]
+        prior, mu_0, S0, measure, loop_fn, scan_fn = setup()
+        r_loop = loop_fn(
+            mu_0, S0, prior, measure, self.tspan, self.N, calibration=calibration
+        )
+        r_scan = scan_fn(
+            mu_0, S0, prior, measure, self.tspan, self.N, calibration=calibration
+        )
+        # m_seq is at index 0 in both shapes. Compare final means and per-step sigma.
+        assert np.allclose(r_loop[0][-1], r_scan[0][-1], atol=1e-8), (
+            f"{prior_kind}+{calibration}: final mean disagrees"
+        )
+        # sigma_sqr_seq position: 9 in basic loops, 11 in preconditioned.
+        sigma_idx = 11 if "precond" in prior_kind else 9
+        sigma_loop = np.asarray(r_loop[sigma_idx])
+        sigma_scan = np.asarray(r_scan[sigma_idx])
+        assert np.allclose(sigma_loop, sigma_scan, atol=1e-8), (
+            f"{prior_kind}+{calibration}: per-step sigma disagrees"
+        )
+
+
+class TestScanParityWithStackedResidual:
+    """When the measurement has rows beyond the ODE-defect (e.g. a
+    Conservation constraint), only the first ``measure.ode_dim`` rows of the
+    residual should drive sigma. The scan body used to skip this slicing."""
+
+    def test_conservation_row_does_not_affect_sigma(self):
+        from ode_filters.measurement.measurement_models import (
+            Conservation,
+            ODEInformation,
+        )
+
+        def vf_sir(x, *, t, beta=0.5, gamma=0.1):
+            return np.array(
+                [-beta * x[0] * x[1], beta * x[0] * x[1] - gamma * x[1], gamma * x[1]]
+            )
+
+        from ode_filters.priors.gmp_priors import IWP
+
+        prior = IWP(q=2, d=3)
+        x0 = np.array([0.99, 0.01, 0.0])
+        mu_0, S0 = taylor_mode_initialization(vf_sir, x0, q=2)
+        measure = ODEInformation(
+            vf_sir,
+            prior.E0,
+            prior.E1,
+            constraints=[Conservation(np.array([[1.0, 1.0, 1.0]]), np.array([1.0]))],
+        )
+        r_loop = ekf1_sqr_loop_dynamic(
+            mu_0, S0, prior, measure, (0.0, 2.0), 30, calibration="dynamic"
+        )
+        r_scan = ekf1_sqr_loop_dynamic_scan(
+            mu_0, S0, prior, measure, (0.0, 2.0), 30, calibration="dynamic"
+        )
+        sigma_loop = np.asarray(r_loop[9])
+        sigma_scan = np.asarray(r_scan[9])
+        assert np.allclose(sigma_loop, sigma_scan, atol=1e-10)
