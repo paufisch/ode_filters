@@ -14,6 +14,13 @@ from jax.typing import ArrayLike
 # Default measurement noise for observations
 DEFAULT_MEASUREMENT_NOISE = 1e-6
 
+# Tolerances for matching a query time t against Measurement.z_t. Set to
+# absorb the ~1e-8 drift between numpy.linspace and jax.numpy.linspace on
+# typical grids. Re-exported so the adaptive loop's "did we land on a
+# measurement time?" check uses the same tolerance as find_index.
+MEASUREMENT_TIME_RTOL = 1e-5
+MEASUREMENT_TIME_ATOL = 1e-7
+
 # Small jitter for Cholesky of PSD matrices with zero eigenvalues
 _JITTER = 1e-32
 
@@ -253,16 +260,19 @@ class Measurement:
             )
 
     def find_index(
-        self, t: float, rtol: float = 1e-5, atol: float = 1e-7
+        self,
+        t: float,
+        rtol: float = MEASUREMENT_TIME_RTOL,
+        atol: float = MEASUREMENT_TIME_ATOL,
     ) -> int | None:
         """Find measurement index for time t, or None if not found.
 
         Uses binary search with tolerance for robust floating-point comparison.
         Times are assumed to be sorted.
 
-        Note: Default tolerances (rtol=1e-5, atol=1e-7) are set to handle
-        discrepancies between NumPy and JAX linspace implementations, which
-        can differ by ~1e-8 for typical time grids.
+        Note: Default tolerances are set to handle discrepancies between
+        NumPy and JAX linspace implementations, which can differ by ~1e-8
+        for typical time grids.
         """
         z_t = onp.asarray(self.z_t)
         t_val = float(t)
@@ -382,6 +392,39 @@ class BaseODEInformation(ABC):
         design choice.
         """
         return self._d
+
+    def measurement_times(self) -> Array:
+        """Sorted, deduplicated list of fixed times where Measurements fire.
+
+        Returned as a 1D numpy array (consumed by the Python adaptive
+        driver, not by the jitted step body). Conservation constraints and
+        nonlinear black-box measurements have no fixed times and contribute
+        nothing here. Returns an empty array if no ``Measurement``
+        constraints are registered, in which case adaptive callers can
+        treat clamping as a no-op.
+
+        Deduplication uses the same tolerances as :meth:`Measurement.find_index`
+        so that two ``Measurement`` constraints scheduled at the "same"
+        time (modulo float drift between numpy/jax linspace) collapse to a
+        single landing point.
+        """
+        meas_arrays = [
+            onp.asarray(c.z_t) for c in self._constraints if isinstance(c, Measurement)
+        ]
+        if not meas_arrays:
+            return onp.empty((0,), dtype=float)
+        all_times = onp.sort(onp.concatenate(meas_arrays))
+        # Collapse near-duplicates within the find_index tolerance.
+        keep = onp.ones(all_times.shape, dtype=bool)
+        for i in range(1, len(all_times)):
+            if onp.isclose(
+                all_times[i],
+                all_times[i - 1],
+                rtol=MEASUREMENT_TIME_RTOL,
+                atol=MEASUREMENT_TIME_ATOL,
+            ):
+                keep[i] = False
+        return all_times[keep]
 
     @property
     def R(self) -> Array:
@@ -944,6 +987,10 @@ class BlackBoxMeasurement:
         """
         return _safe_cholesky_sqr(self._R, self._obs_dim)
 
+    def measurement_times(self) -> Array:
+        """No fixed measurement times (the model is always active)."""
+        return onp.empty((0,), dtype=float)
+
     def linearize(self, state: Array, *, t: float) -> tuple[Array, Array]:
         """Linearize the measurement model around the given state.
 
@@ -1081,6 +1128,13 @@ class TransformedMeasurement:
             Upper-triangular square root of the noise covariance matrix.
         """
         return self._base.get_noise(t=t)
+
+    def measurement_times(self) -> Array:
+        """Forward the base model's fixed measurement times, if any."""
+        base_fn = getattr(self._base, "measurement_times", None)
+        if base_fn is None:
+            return onp.empty((0,), dtype=float)
+        return onp.asarray(base_fn())
 
     def linearize(self, state: Array, *, t: float) -> tuple[Array, Array]:
         """Linearize the transformed measurement model.
