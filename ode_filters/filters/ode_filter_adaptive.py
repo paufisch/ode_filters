@@ -86,7 +86,12 @@ from jax import Array
 
 from ..calibration.sigma import quasi_mle_sigma_sqr, quasi_mle_sigma_sqr_from_Q
 from ..inference.sqr_gaussian_inference import sqr_marginalization
-from ..measurement.measurement_models import BaseODEInformation
+from ..measurement.measurement_models import (
+    MEASUREMENT_TIME_ATOL,
+    MEASUREMENT_TIME_RTOL,
+    BaseODEInformation,
+    Measurement,
+)
 from ..priors.gmp_priors import BasePrior
 from .adaptive_controller import PIController, StepSizeController
 from .ode_filter_loop import _check_state_xi_diagonal
@@ -173,7 +178,15 @@ def _make_step_body(
     d = E0_state.shape[0]
     d_ode = measure.ode_dim
 
-    @jax.jit
+    # Measurement.find_index uses Python control flow on ``t`` (float cast +
+    # binary-search loop returning Optional[int]), so it cannot be traced
+    # under jax.jit when ``t_next`` is a tracer. When the model registers
+    # any time-gated Measurement we drop the jit wrapper -- correctness over
+    # speed. Pure-ODE / Conservation-only runs keep the fast path.
+    _has_time_gated_meas = any(
+        isinstance(c, Measurement) for c in getattr(measure, "_constraints", ())
+    )
+
     def step_body(
         h: float,
         t_next: float,
@@ -293,6 +306,8 @@ def _make_step_body(
             m_value,
         )
 
+    if not _has_time_gated_meas:
+        step_body = jax.jit(step_body)
     return step_body
 
 
@@ -491,6 +506,18 @@ def ekf1_sqr_adaptive_loop(
     # divide evenly in fp64.
     endpoint_tol = max(1e-12 * span, 1e-14)
 
+    # Fixed measurement times the adaptive controller must land on. Times at
+    # or outside the open interval (t_start, t_end) are dropped: the endpoints
+    # are already covered by the initial condition and the existing t_end
+    # clamp. When the model has no ``Measurement`` constraints this is empty
+    # and the clamp below is a no-op.
+    meas_times = onp.asarray(measure.measurement_times(), dtype=float).reshape(-1)
+    meas_times = meas_times[
+        (meas_times > t + endpoint_tol) & (meas_times < t_end - endpoint_tol)
+    ]
+    meas_times = onp.sort(meas_times)
+    meas_idx = 0
+
     while t_end - t > endpoint_tol:
         if iters >= max_steps:
             raise RuntimeError(
@@ -500,12 +527,22 @@ def ekf1_sqr_adaptive_loop(
         iters += 1
 
         h_try = min(h, t_end - t)
+        clamped_to_measurement = False
+        if meas_idx < len(meas_times):
+            h_to_meas = float(meas_times[meas_idx] - t)
+            if h_to_meas < h_try:
+                h_try = h_to_meas
+                clamped_to_measurement = True
         if h_try < h_min:
+            origin = "measurement time" if clamped_to_measurement else "t_end"
             raise RuntimeError(
-                f"Proposed step h={h_try:.3g} below h_min={h_min:.3g} at t={t:.6g}."
+                f"Proposed step h={h_try:.3g} below h_min={h_min:.3g} "
+                f"at t={t:.6g} (clamped to {origin})."
             )
 
-        t_next = t + h_try
+        # When clamped, snap to the exact measurement time so find_index
+        # inside the step body sees a bit-exact match.
+        t_next = float(meas_times[meas_idx]) if clamped_to_measurement else t + h_try
         (
             m_pred,
             P_pred_sqr,
@@ -559,6 +596,13 @@ def ekf1_sqr_adaptive_loop(
             m_curr = m_new
             P_curr_sqr = P_new_sqr
             t = t_next
+            if meas_idx < len(meas_times) and onp.isclose(
+                t_next,
+                meas_times[meas_idx],
+                rtol=MEASUREMENT_TIME_RTOL,
+                atol=MEASUREMENT_TIME_ATOL,
+            ):
+                meas_idx += 1
             h = min(h_max, controller.propose(h_try, err_val, err_prev))
             err_prev = err_val
         else:
