@@ -63,3 +63,7 @@ CLAUDE.md
 .claude/*
 
 benchmarks/*.png
+
+vault-notes/*
+
+vault-notes
