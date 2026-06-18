@@ -53,6 +53,8 @@ from .filters import (
 )
 from .inference import (
     InferenceProblem,
+    ODEFilter,
+    fit,
     marginal_loglik,
     sqr_inversion,
     sqr_marginalization,
@@ -83,6 +85,7 @@ __all__ = [
     "InferenceProblem",
     "JointPrior",
     "MaternPrior",
+    "ODEFilter",
     "ODEInformation",
     "ODEconservation",
     "ODEconservationmeasurement",
@@ -113,6 +116,7 @@ __all__ = [
     "ekf1_sqr_loop_preconditioned_sequential_scan",
     "ekf1_sqr_loop_sequential",
     "ekf1_sqr_loop_sequential_scan",
+    "fit",
     "marginal_loglik",
     "posthoc_mle_sigma_sqr",
     "prepare_observations",

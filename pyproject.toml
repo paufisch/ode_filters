@@ -39,6 +39,7 @@ dev = [
     "hypothesis>=6.142.5",
     "ipykernel>=7.1.0",
     "nbconvert>=7.16.6",
+    "optax>=0.2.0",
     "pre-commit>=4.3.0",
     "probdiffeq>=0.8.0",
     "pytest>=8.4.2",
