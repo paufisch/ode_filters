@@ -18,6 +18,8 @@ A JAX-based implementation of probabilistic ODE solvers using Gaussian filtering
 - **State-parameter estimation** - Joint inference with hidden states
 - **Black-box measurements** - Custom observation models with autodiff Jacobians
 - **Transformed measurements** - Nonlinear state transformations with chain-rule Jacobians
+- **Pluggable linearization** - EK0 / EK1 corrections, selectable per solve
+- **Parameter estimation** - Differentiable marginal likelihood with an Optax-friendly `fit` API
 
 ## Installation
 

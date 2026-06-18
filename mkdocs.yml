@@ -28,6 +28,8 @@ nav:
   - Guides:
       - Diffusion calibration: calibration.md
       - Adaptive step-size control: adaptive-steps.md
+      - Linearization schemes: corrections.md
+      - Parameter estimation: parameter-estimation.md
   - API Reference:
       - Overview: api/index.md
       - Filters: api/filters/index.md
