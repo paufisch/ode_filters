@@ -51,7 +51,12 @@ from .filters import (
     rts_sqr_smoother_step,
     rts_sqr_smoother_step_preconditioned,
 )
-from .inference import sqr_inversion, sqr_marginalization
+from .inference import (
+    InferenceProblem,
+    marginal_loglik,
+    sqr_inversion,
+    sqr_marginalization,
+)
 from .measurement import (
     ObsModel,
     ODEconservation,
@@ -75,6 +80,7 @@ __all__ = [
     "AdaptiveLoopResult",
     "Correction",
     "CorrectionResult",
+    "InferenceProblem",
     "JointPrior",
     "MaternPrior",
     "ODEInformation",
@@ -107,6 +113,7 @@ __all__ = [
     "ekf1_sqr_loop_preconditioned_sequential_scan",
     "ekf1_sqr_loop_sequential",
     "ekf1_sqr_loop_sequential_scan",
+    "marginal_loglik",
     "posthoc_mle_sigma_sqr",
     "prepare_observations",
     "quasi_mle_sigma_sqr",
