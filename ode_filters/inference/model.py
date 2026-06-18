@@ -35,7 +35,7 @@ from .parameter_inference import InferenceProblem, marginal_loglik
 class ODEFilter(eqx.Module):
     """A fittable first-order probabilistic ODE solver.
 
-    Args:
+    Attributes:
         vf: Vector field ``vf(x, params, *, t) -> dx/dt`` (``params`` is the
             differentiable parameter pytree, ``ode_params``).
         init_fn: Callable ``params -> (mu_0, Sigma_0_sqr)`` producing the initial

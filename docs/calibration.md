@@ -130,9 +130,10 @@ Calibration scales the posterior to match the size of the residuals. It does
 not correct a prior with the wrong smoothness (`q` too low), a vector field
 that is miscoded, or a Jacobian that the EKF linearisation cannot
 approximate. To check that the calibrated filter is honest, plot the whitened
-residual diagnostics described in the wiki note
-*whitened-residual-diagnostics* -- `||z_n||^2 / d` should hover near 1 on a
-well-specified problem.
+residuals: for each step the standardized innovation `z_n = P_z_sqr^{-T} m_z`
+should look like standard normal noise, so `||z_n||^2 / d` hovers near 1 on a
+well-specified problem (much larger means the uncertainty is too tight; much
+smaller means it is too loose).
 
 ## See also
 

@@ -50,7 +50,7 @@ def vf(x, *, t):
     return -x
 
 x0 = np.array([1.0])
-tspan = [0, 5]
+tspan = (0, 5)  # a tuple: hashable for use as a jax.jit static argument
 
 # Setup prior and measurement model
 prior = IWP(q=2, d=1, Xi=0.5 * np.eye(1))

@@ -103,7 +103,7 @@ class Correction(eqx.Module):
 class TaylorCorrection(Correction):
     """Taylor-series correction: EK1 (``order=1``) or EK0 (``order=0``).
 
-    Args:
+    Attributes:
         order: ``1`` for the first-order (EK1) linearization with the full
             vector-field Jacobian (default; bit-identical to the historical
             filter step). ``0`` for the zeroth-order (EK0) linearization, which

@@ -6,80 +6,68 @@
 [![Docs](https://img.shields.io/badge/docs-latest-brightgreen)](https://paufisch.github.io/ode_filters/)
 [![Coverage](https://codecov.io/gh/paufisch/ode_filters/branch/main/graph/badge.svg)](https://codecov.io/gh/paufisch/ode_filters)
 
-A JAX-based implementation of probabilistic ODE solvers using Gaussian filtering and smoothing. This package provides tools for solving ordinary differential equations while quantifying uncertainty through Bayesian inference.
+**`ode_filters` is `solve_ivp`, but it returns a mean *and* a calibrated
+uncertainty.** It is a pure-JAX library of *probabilistic* ODE solvers: instead of
+a single trajectory, you get a Gaussian posterior over the solution, computed by
+numerically stable square-root Kalman filtering and smoothing — and a
+differentiable likelihood you can use to fit ODE parameters to data.
+
+```python
+import jax.numpy as np
+from ode_filters.filters import ekf1_sqr_loop
+from ode_filters.measurement import ODEInformation
+from ode_filters.priors import IWP, taylor_mode_initialization
+
+
+def vf(x, *, t):          # the ODE: dx/dt = -x
+    return -x
+
+
+prior = IWP(q=2, d=1)                              # 1. a smoothness prior
+mu_0, S0 = taylor_mode_initialization(vf, np.array([1.0]), q=2)
+measure = ODEInformation(vf, prior.E0, prior.E1)   # 2. the ODE as data
+
+# 3. forward filter -> mean + square-root covariance at each grid point
+m_seq, P_seq_sqr, *_ = ekf1_sqr_loop(mu_0, S0, prior, measure, (0.0, 5.0), N=50)
+
+std = np.sqrt((P_seq_sqr.transpose(0, 2, 1) @ P_seq_sqr)[:, 0, 0])  # uncertainty
+```
+
+New here? Read **[What is a probabilistic ODE solver?](probabilistic-ode-solvers.md)**
+for the intuition, then run the **[Quickstart](examples/quickstart.ipynb)**.
+
+## Where to go next
+
+| You want to… | Start here |
+| --- | --- |
+| understand the idea | [What is a probabilistic ODE solver?](probabilistic-ode-solvers.md) |
+| run your first solve | [Quickstart](examples/quickstart.ipynb) |
+| look up a symbol or convention | [Notation & conventions](notation.md) |
+| pick a prior / order / correction | [How to choose](how-to-choose.md) |
+| fit ODE parameters to data | [Parameter estimation](parameter-estimation.md) |
+| avoid common pitfalls | [Sharp bits & FAQ](sharp-bits.md) |
+| browse the API | [API Reference](api/index.md) |
 
 ## Features
 
-- **Pure JAX implementation** - Fully differentiable and JIT-compilable
-- **Square-root filtering** - Numerically stable EKF and RTS smoothing
-- **Flexible priors** - Integrated Wiener Process (IWP), Matern, and joint priors
-- **First and second-order ODEs** - Native support for both ODE types
-- **Constraint handling** - Conservation laws and time-varying measurements
-- **State-parameter estimation** - Joint inference with hidden states
-- **Black-box measurements** - Custom observation models with autodiff Jacobians
-- **Transformed measurements** - Nonlinear state transformations with chain-rule Jacobians
-- **Pluggable linearization** - EK0 / EK1 corrections, selectable per solve (see [Linearization schemes](corrections.md))
-- **Parameter estimation** - Differentiable marginal likelihood with an Optax-friendly `fit` API (see [Parameter estimation](parameter-estimation.md))
-- **Diffusion calibration** - Per-step quasi-MLE, running aggregate, and post-hoc MLE estimators for the prior diffusion scale (see [Calibration](calibration.md))
-- **Adaptive step-size control** - Tolerance-based accept/reject with a PI controller, built on the calibrated local error estimate (see [Adaptive steps](adaptive-steps.md))
+- **Pure JAX** — `jit` / `grad` / `vmap`-compatible on the scan-based paths.
+- **Square-root filtering** — numerically stable EKF and RTS smoothing (Krämer–Hennig 2024).
+- **Pluggable linearization** — EK0 / EK1 [corrections](corrections.md), selectable per solve.
+- **Flexible priors** — IWP, Matern, and joint priors.
+- **First- and second-order ODEs**, conservation laws, and time-varying measurements.
+- **Parameter & latent-force estimation** — a differentiable [marginal likelihood](parameter-estimation.md) with an Optax-friendly `fit` API.
+- **Diffusion calibration** and **adaptive step-size control**.
 
 ## Installation
-
-Install the latest release from PyPI:
 
 ```bash
 pip install ode-filters
 ```
 
-Or install from source with development dependencies:
+Or from source with development dependencies:
 
 ```bash
 git clone https://github.com/paufisch/ode_filters.git
 cd ode_filters
 pip install -e ".[dev]"
 ```
-
-## Quick Example
-
-```python
-import jax.numpy as np
-from ode_filters.filters import ekf1_sqr_loop, rts_sqr_smoother_loop
-from ode_filters.measurement import ODEInformation
-from ode_filters.priors import IWP, taylor_mode_initialization
-
-# Define ODE: dx/dt = -x (exponential decay)
-def vf(x, *, t):
-    return -x
-
-x0 = np.array([1.0])
-tspan = [0, 5]
-
-# Setup prior and measurement model
-prior = IWP(q=2, d=1, Xi=0.5 * np.eye(1))
-mu_0, Sigma_0_sqr = taylor_mode_initialization(vf, x0, q=2)
-measure = ODEInformation(vf, prior.E0, prior.E1)
-
-# Run filter and smoother
-m_seq, P_sqr, *_, G, d, P_back, _, _ = ekf1_sqr_loop(
-    mu_0, Sigma_0_sqr, prior, measure, tspan, N=50
-)
-m_smooth, P_smooth_sqr = rts_sqr_smoother_loop(
-    m_seq[-1], P_sqr[-1], G, d, P_back, N=50
-)
-```
-
-## Package Structure
-
-```
-ode_filters/
-├── filters/          # EKF and RTS smoothing loops
-├── inference/        # Square-root Gaussian algebra
-├── measurement/      # ODE and observation models
-└── priors/           # Gaussian Markov process priors
-```
-
-## Next Steps
-
-- Check out the [Quickstart Guide](examples/quickstart.ipynb) for a hands-on tutorial
-- Browse the [API Reference](api/index.md) for detailed documentation
-- Explore [Examples](examples/examples.ipynb) for more advanced use cases

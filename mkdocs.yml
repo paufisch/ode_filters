@@ -2,33 +2,96 @@ site_name: ODE Filters
 site_url: https://paufisch.github.io/ode_filters/
 repo_url: https://github.com/paufisch/ode_filters
 docs_dir: docs
+not_in_nav: |
+  /examples/README.md
 theme:
   name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
 plugins:
   - search
   - mkdocs-jupyter:
       execute: true
   - mkdocstrings:
       default_handler: python
+      handlers:
+        python:
+          options:
+            heading_level: 3
+            show_root_heading: false
+            show_root_toc_entry: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            summary: true
+            members_order: alphabetical
+            filters: ["!^_"]
+            separate_signature: true
+            signature_crossrefs: true
+            show_signature_annotations: true
+            docstring_section_style: table
+            merge_init_into_class: true
+            group_by_category: true
+            show_category_heading: true
+            show_source: false
+            show_if_no_docstring: false
 markdown_extensions:
   - pymdownx.arithmatex:
       generic: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
 extra_javascript:
   - javascripts/mathjax.js
   - https://polyfill.io/v3/polyfill.min.js?features=es6
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 nav:
   - Home: index.md
-  - Quickstart example: examples/quickstart.ipynb
-  - Examples:
+  - Getting started:
+      - What is a probabilistic ODE solver?: probabilistic-ode-solvers.md
+      - Quickstart: examples/quickstart.ipynb
+      - Notation & conventions: notation.md
+      - Sharp bits & FAQ: sharp-bits.md
+  - Tutorials:
       - Basic usage: examples/examples.ipynb
       - Second-order systems: examples/second-order-systems.ipynb
       - Advanced features: examples/advanced-features.ipynb
-      - Adaptive steps and calibration: examples/adaptive-and-calibration.ipynb
-  - Guides:
+      - Calibration & adaptive steps: examples/adaptive-and-calibration.ipynb
+  - How-to guides:
+      - How to choose: how-to-choose.md
+      - Linearization schemes: corrections.md
       - Diffusion calibration: calibration.md
       - Adaptive step-size control: adaptive-steps.md
-      - Linearization schemes: corrections.md
       - Parameter estimation: parameter-estimation.md
   - API Reference:
       - Overview: api/index.md

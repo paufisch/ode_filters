@@ -19,7 +19,7 @@ This directory contains comprehensive tutorials and examples for the `ode_filter
 - Joint state-parameter estimation (basic example)
 - Working with second-order systems
 
-### 4. **advanced-features.ipynb** - Advanced Capabilities ⭐ NEW
+### 4. **advanced-features.ipynb** - Advanced Capabilities
 This comprehensive tutorial covers all advanced features:
 
 #### 4.1 First-Order ODEs with Hidden States
@@ -42,28 +42,23 @@ This comprehensive tutorial covers all advanced features:
 - Lotka-Volterra with sparse predator observations
 - Using the `Measurement` class
 
-### 5. **additional_info.ipynb** - Conservation and Measurements
-- SIR model with conservation constraints
-- Combining conservation and measurements
-- Real-world data integration examples
-
-### 6. **adaptive-and-calibration.ipynb** - Calibration and Adaptive Steps
+### 5. **adaptive-and-calibration.ipynb** - Calibration and Adaptive Steps
 - Fixed-step uncalibrated vs. post-hoc MLE vs. adaptive per-step quasi-MLE
 - Step-size and per-step sigma diagnostics
 - Whitened-residual sanity check
 
 ## Feature Coverage Matrix
 
-| Feature | Quickstart | Examples | Second-Order | Advanced | Additional |
-|---------|-----------|----------|--------------|----------|------------|
-| First-order ODEs | ✅ | ✅ | - | ✅ | ✅ |
-| Second-order ODEs | - | - | ✅ | ✅ | - |
-| Hidden states (1st order) | - | - | - | ✅ | - |
-| Hidden states (2nd order) | - | - | - | ✅ | - |
-| Conservation constraints | - | - | - | ✅ | ✅ |
-| Time-varying measurements | - | - | - | ✅ | ✅ |
-| Multi-dimensional systems | - | ✅ | - | ✅ | ✅ |
-| Parameter estimation | - | - | ✅ | ✅ | - |
+| Feature | Quickstart | Examples | Second-Order | Advanced |
+|---------|-----------|----------|--------------|----------|
+| First-order ODEs | ✅ | ✅ | - | ✅ |
+| Second-order ODEs | - | - | ✅ | ✅ |
+| Hidden states (1st order) | - | - | - | ✅ |
+| Hidden states (2nd order) | - | - | - | ✅ |
+| Conservation constraints | - | - | - | ✅ |
+| Time-varying measurements | - | - | - | ✅ |
+| Multi-dimensional systems | - | ✅ | - | ✅ |
+| Parameter estimation | - | - | ✅ | ✅ |
 
 ## Key Classes by Use Case
 
@@ -105,7 +100,7 @@ from ode_filters.measurement import BlackBoxMeasurement, TransformedMeasurement
 2. **Expand**: `examples.ipynb` - See different first-order ODEs
 3. **Second-order**: `second-order-systems.ipynb` - Understand higher-order systems
 4. **Advanced**: `advanced-features.ipynb` - Master all advanced capabilities
-5. **Real-world**: `additional_info.ipynb` - See practical applications
+5. **Calibration**: `adaptive-and-calibration.ipynb` - Calibrate uncertainty and adapt step size
 
 ## Running the Examples
 

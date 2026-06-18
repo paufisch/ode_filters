@@ -51,6 +51,7 @@ docs = [
     "mkdocs-jupyter>=0.24.1",
     "mkdocs-material>=9.5,<9.6",
     "mkdocstrings[python]>=0.28.3",
+    "ruff>=0.6",  # lets mkdocstrings format rendered signatures
 ]
 
 [tool.pytest.ini_options]
