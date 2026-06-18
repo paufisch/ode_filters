@@ -1381,6 +1381,171 @@ DynamicScanLoopResult = tuple[
 ]
 
 
+DynamicObsScanLoopResult = tuple[
+    Array,  # m_seq [N+1, state_dim]
+    Array,  # P_seq_sqr [N+1, state_dim, state_dim]
+    Array,  # m_pred_seq [N, state_dim]
+    Array,  # P_pred_seq_sqr [N, state_dim, state_dim]
+    Array,  # G_back_seq [N, state_dim, state_dim]
+    Array,  # d_back_seq [N, state_dim]
+    Array,  # P_back_seq_sqr [N, state_dim, state_dim]
+    Array,  # mz_ode_seq [N, fixed_dim]
+    Array,  # Pz_ode_seq_sqr [N, fixed_dim, fixed_dim]
+    Array,  # mz_obs_seq [N, obs_dim]
+    Array,  # Pz_obs_seq_sqr [N, obs_dim, obs_dim]
+    Array,  # sigma_sqr_seq [N] or [N, d_ode] in diagonal modes
+    Array,  # log_likelihood_ode (scalar)
+    Array,  # log_likelihood_obs (scalar)
+]
+
+
+def _ekf1_sqr_loop_dynamic_obs_scan(
+    mu_0: Array,
+    Sigma_0_sqr: Array,
+    prior: BasePrior,
+    measure: BaseODEInformation,
+    tspan: tuple[float, float],
+    N: int,
+    obs_model: ObsModel,
+    calibration: str,
+    min_sigma_sqr: float,
+) -> DynamicObsScanLoopResult:
+    """Observation-update branch of :func:`ekf1_sqr_loop_dynamic_scan`.
+
+    Per step: (1) estimate ``sigma_hat^2`` from the ODE-defect residual at
+    the provisional prediction and bake it into the process noise (same
+    calibration semantics as the no-observation path -- observation rows
+    never drive sigma); (2) run the combined ODE + masked-observation
+    update of :func:`ekf1_sqr_filter_step_sequential_scan`.
+    """
+    ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
+    A_h = prior.A(h)
+    b_h = prior.b(h)
+    Q_h = prior.Q(h)
+    Q_h_sqr = np.linalg.cholesky(Q_h).T
+    E1 = prior.E1
+    d_ode = measure.ode_dim
+    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
+
+    H_obs = obs_model.H
+    R_obs_sqr = obs_model.R_sqr
+    c_obs_seq = obs_model.c_seq  # [N, obs_dim]
+    mask_seq = obs_model.mask  # [N, obs_dim]
+
+    def scan_body(carry, step_data):
+        m_prev, P_prev_sqr, ll_ode, ll_obs = carry
+        t_i, c_obs_i, mask_i = step_data
+        obs_active = mask_i.any()
+
+        m_pred_prov = A_h @ m_prev + b_h
+        H_t, c_t = measure.linearize_fixed(m_pred_prov, t=t_i)
+        mz_pred = H_t @ m_pred_prov + c_t
+
+        # Calibration uses only the ODE-defect rows of the residual
+        # (Bosch, Tronarp, Hennig 2022 sec. 3); Conservation rows and the
+        # external observations update the posterior but do not drive sigma.
+        H_ode = H_t[:d_ode]
+        mz_ode_prov = mz_pred[:d_ode]
+
+        if is_diagonal:
+            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_ode
+            denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_h, H_for_calib)
+            sigma_sqr = mz_ode_prov**2 / denom  # shape (d_ode,)
+            sigma_sqr = np.maximum(sigma_sqr, min_sigma_sqr)
+            Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_sqr)
+        else:
+            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode_prov, H_ode, Q_h_sqr)
+            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
+            sigma_sqr = sigma_scalar  # scalar
+            if calibration == "dynamic":
+                Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_scalar)
+            else:  # "none"
+                Q_step_sqr = Q_h_sqr
+
+        (
+            (m_pred, P_pred_sqr),
+            (G_back, d_back, P_back_sqr),
+            (mz_ode, Pz_ode_sqr),
+            (mz_obs, Pz_obs_sqr),
+            (m_new, P_new_sqr),
+        ) = ekf1_sqr_filter_step_sequential_scan(
+            A_h,
+            b_h,
+            Q_step_sqr,
+            m_prev,
+            P_prev_sqr,
+            measure,
+            t_i,
+            H_obs,
+            c_obs_i,
+            R_obs_sqr,
+            obs_active,
+        )
+
+        ll_ode = ll_ode + _log_likelihood_contrib(mz_ode, Pz_ode_sqr)
+        ll_obs = ll_obs + jax.lax.select(
+            obs_active,
+            _log_likelihood_contrib(mz_obs, Pz_obs_sqr),
+            np.array(0.0),
+        )
+
+        outputs = (
+            m_pred,
+            P_pred_sqr,
+            G_back,
+            d_back,
+            P_back_sqr,
+            mz_ode,
+            Pz_ode_sqr,
+            mz_obs,
+            Pz_obs_sqr,
+            sigma_sqr,
+            m_new,
+            P_new_sqr,
+        )
+        return (m_new, P_new_sqr, ll_ode, ll_obs), outputs
+
+    init_carry = (mu_0, Sigma_0_sqr, np.array(0.0), np.array(0.0))
+    step_data = (ts[1:], c_obs_seq, mask_seq)
+
+    (_, _, ll_ode, ll_obs), outputs = jax.lax.scan(scan_body, init_carry, step_data)
+
+    (
+        m_pred_seq,
+        P_pred_seq_sqr,
+        G_back_seq,
+        d_back_seq,
+        P_back_seq_sqr,
+        mz_ode_seq,
+        Pz_ode_seq_sqr,
+        mz_obs_seq,
+        Pz_obs_seq_sqr,
+        sigma_sqr_seq,
+        m_updates,
+        P_updates_sqr,
+    ) = outputs
+
+    m_seq = np.concatenate([mu_0[None, :], m_updates], axis=0)
+    P_seq_sqr = np.concatenate([Sigma_0_sqr[None, :, :], P_updates_sqr], axis=0)
+
+    return (
+        m_seq,
+        P_seq_sqr,
+        m_pred_seq,
+        P_pred_seq_sqr,
+        G_back_seq,
+        d_back_seq,
+        P_back_seq_sqr,
+        mz_ode_seq,
+        Pz_ode_seq_sqr,
+        mz_obs_seq,
+        Pz_obs_seq_sqr,
+        sigma_sqr_seq,
+        ll_ode,
+        ll_obs,
+    )
+
+
 def ekf1_sqr_loop_dynamic_scan(
     mu_0: Array,
     Sigma_0_sqr: Array,
@@ -1391,8 +1556,9 @@ def ekf1_sqr_loop_dynamic_scan(
     *,
     calibration: str = "dynamic",
     min_sigma_sqr: float = 0.0,
+    obs_model: ObsModel | None = None,
     calibrate: bool | None = None,
-) -> DynamicScanLoopResult:
+) -> DynamicScanLoopResult | DynamicObsScanLoopResult:
     """``jax.lax.scan`` variant of :func:`ekf1_sqr_loop_dynamic`.
 
     Same per-step semantics, executed inside a single ``jax.lax.scan`` for
@@ -1405,7 +1571,9 @@ def ekf1_sqr_loop_dynamic_scan(
         mu_0: Initial state mean.
         Sigma_0_sqr: Initial state covariance (square-root form).
         prior: Prior (e.g. ``IWP``).
-        measure: Measurement model.
+        measure: Measurement model (ODE + Conservation only when
+            *obs_model* is given; bundle no :class:`Measurement`
+            constraints -- their time matching is not scan-compatible).
         tspan: Time interval ``(t_start, t_end)``.
         N: Number of filter steps.
         calibration: ``"dynamic"`` (default), ``"diagonal"``,
@@ -1415,11 +1583,19 @@ def ekf1_sqr_loop_dynamic_scan(
         min_sigma_sqr: Lower bound applied to per-step ``sigma_hat^2`` (or
             each component in diagonal modes) before baking into
             ``Q_step_sqr``. Default ``0.0`` preserves unclamped behavior.
+        obs_model: Pre-computed observation data from
+            :func:`prepare_observations`, or ``None`` for ODE-only.
+            Combines online calibration with external observation updates
+            (e.g. joint state-parameter estimation from sensor data).
+            Observation rows update the posterior but never drive sigma.
         calibrate: Deprecated; ``True`` -> ``"dynamic"``, ``False`` -> ``"none"``.
 
     Returns:
-        :class:`DynamicScanLoopResult` -- 10 arrays plus the scalar
-        log-marginal-likelihood. ``sigma_sqr_seq`` has shape ``(N, d_ode)``
+        With ``obs_model=None``: :class:`DynamicScanLoopResult` -- 10 arrays
+        plus the scalar log-marginal-likelihood. With an *obs_model*:
+        :class:`DynamicObsScanLoopResult` -- 12 arrays (ODE and observation
+        marginals reported separately) plus ``(log_likelihood_ode,
+        log_likelihood_obs)``. ``sigma_sqr_seq`` has shape ``(N, d_ode)``
         in the diagonal modes, ``(N,)`` otherwise.
     """
     import warnings
@@ -1437,6 +1613,19 @@ def ekf1_sqr_loop_dynamic_scan(
     is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
     if is_diagonal:
         _check_state_xi_diagonal(prior, calibration)
+
+    if obs_model is not None:
+        return _ekf1_sqr_loop_dynamic_obs_scan(
+            mu_0,
+            Sigma_0_sqr,
+            prior,
+            measure,
+            tspan,
+            N,
+            obs_model,
+            calibration,
+            min_sigma_sqr,
+        )
 
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     A_h = prior.A(h)
