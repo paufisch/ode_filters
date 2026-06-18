@@ -8,6 +8,7 @@ from jax import Array
 
 from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
 from ..measurement.measurement_models import BaseODEInformation
+from .correction import Correction, TaylorCorrection
 
 StateFunction = Callable[[Array], Array]
 JacobianFunction = Callable[[Array], Array]
@@ -38,8 +39,14 @@ def ekf1_sqr_filter_step(
     P_prev_sqr: Array,
     measure: BaseODEInformation,
     t: float = 0.0,
+    *,
+    correction: Correction | None = None,
 ) -> FilterStepResult:
-    """Perform a single square-root EKF prediction and update step.
+    """Perform a single square-root Gaussian prediction and update step.
+
+    The prediction is a square-root marginalization; the measurement update is
+    delegated to a :class:`Correction` strategy, which decides *how* to
+    linearize (EK0/EK1/...) given *what* the measurement model observes.
 
     Args:
         A_t: State transition matrix for current step.
@@ -49,10 +56,15 @@ def ekf1_sqr_filter_step(
         P_prev_sqr: Previous state covariance (square-root form).
         measure: Measurement model (e.g., ODEInformation or subclass).
         t: Current time (default 0.0).
+        correction: Linearization/correction strategy. Defaults to
+            ``TaylorCorrection(order=1)`` (EK1), which reproduces the historical
+            behavior exactly.
 
     Returns:
         Tuple of 4 tuples containing prediction, backward pass, and update results.
     """
+    if correction is None:
+        correction = TaylorCorrection(order=1)
 
     m_pred, P_pred_sqr = sqr_marginalization(A_t, b_t, Q_t_sqr, m_prev, P_prev_sqr)
     # this is optional if only filtering is relevant
@@ -60,18 +72,13 @@ def ekf1_sqr_filter_step(
         A_t, m_prev, P_prev_sqr, m_pred, P_pred_sqr, Q_t_sqr
     )
 
-    H_t, c_t = measure.linearize(m_pred, t=t)
-    R_t_sqr = measure.get_noise(t=t)
-
-    m_z, P_z_sqr = sqr_marginalization(H_t, c_t, R_t_sqr, m_pred, P_pred_sqr)
-    _, d, P_t_sqr = sqr_inversion(H_t, m_pred, P_pred_sqr, m_z, P_z_sqr, R_t_sqr)
-    m_t = d  # for no zero measurements: m_t = K_t @ z_observed_t + d
+    result = correction.correct(measure, m_pred, P_pred_sqr, t=t)
 
     return (
         (m_pred, P_pred_sqr),
         (G_back, d_back, P_back_sqr),
-        (m_z, P_z_sqr),
-        (m_t, P_t_sqr),
+        (result.mz, result.Pz_sqr),
+        (result.m, result.P_sqr),
     )
 
 
