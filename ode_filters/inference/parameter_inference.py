@@ -30,6 +30,7 @@ from typing import Any, NamedTuple
 from jax import Array
 
 from ..measurement.measurement_models import BaseODEInformation, ObsModel
+from .parameters import unwrap
 
 
 class InferenceProblem(NamedTuple):
@@ -60,7 +61,9 @@ def marginal_loglik(theta: Any, data: ObsModel, *, model: InferenceProblem) -> A
     """Data marginal log-likelihood for gradient-based ODE-parameter inference.
 
     Args:
-        theta: Differentiable parameter pytree, consumed by ``model.build``.
+        theta: Differentiable parameter pytree, consumed by ``model.build``. May
+            contain :class:`~ode_filters.PositiveReal` / :class:`~ode_filters.Real`
+            wrappers, which are unwrapped automatically.
         data: Observations as an :class:`ObsModel` (e.g. from
             :func:`prepare_observations`); the measured values live in
             ``data.c_seq``.
@@ -84,6 +87,8 @@ def marginal_loglik(theta: Any, data: ObsModel, *, model: InferenceProblem) -> A
             "prepare_observations(...)."
         )
 
+    # Resolve any unconstrained-parameter wrappers (identity on plain arrays).
+    theta = unwrap(theta)
     mu_0, Sigma_0_sqr, measure = model.build(theta)
     result = ekf1_sqr_loop_dynamic_scan(
         mu_0,

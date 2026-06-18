@@ -84,6 +84,51 @@ grad = jax.grad(lambda th: marginal_loglik(th, data, model=problem))(
 bridge from parameters to solver inputs; everything else is static configuration.
 `model` and `data` are closed over (static); only `theta` is differentiated.
 
+## Constrained parameters
+
+Most ODE parameters are constrained — a rate, a diffusion scale, or a noise
+level must be positive. Optimizers and samplers prefer *unconstrained* space, so
+wrap such a parameter in `PositiveReal` (constructed with the constrained value);
+`marginal_loglik` unwraps it automatically, and `jax.grad` / Optax see the
+unconstrained leaf:
+
+```python
+from ode_filters import PositiveReal, marginal_loglik
+
+theta = {"lam": PositiveReal(0.5)}     # stored unconstrained, always > 0
+ll = marginal_loglik(theta, data, model=problem)   # unwrapped internally
+```
+
+`unwrap(theta)` is the identity on plain arrays, so wrapping is opt-in and
+non-breaking. Use `Real` for an unconstrained parameter.
+
+## Bayesian inference (NumPyro / BlackJAX)
+
+Because the likelihood is a plain differentiable function of a parameter pytree,
+it drops straight into a probabilistic programming language. With **NumPyro**, add
+it to the model via `numpyro.factor`:
+
+```python
+import numpyro, numpyro.distributions as dist
+from numpyro.infer import MCMC, NUTS
+
+
+def model():
+    lam = numpyro.sample("lam", dist.LogNormal(0.0, 1.0))
+    numpyro.factor("loglik", marginal_loglik({"lam": lam}, data, model=problem))
+
+
+mcmc = MCMC(NUTS(model), num_warmup=300, num_samples=300)
+mcmc.run(jax.random.PRNGKey(0))
+```
+
+With **BlackJAX**, expose a `logdensity_fn(theta) = marginal_loglik(...) + log_prior`
+and run NUTS. Complete, runnable scripts are in
+[`examples/numpyro_inference.py`](https://github.com/paufisch/ode_filters/blob/main/examples/numpyro_inference.py)
+and
+[`examples/blackjax_inference.py`](https://github.com/paufisch/ode_filters/blob/main/examples/blackjax_inference.py)
+(both recover the decay rate to `0.80 ± 0.004`).
+
 ## Turn calibration off during inference
 
 The likelihood is computed with `calibration="none"` by default. A dynamic

@@ -52,12 +52,16 @@ from .filters import (
     rts_sqr_smoother_step_preconditioned,
 )
 from .inference import (
+    AbstractParameter,
     InferenceProblem,
     ODEFilter,
+    PositiveReal,
+    Real,
     fit,
     marginal_loglik,
     sqr_inversion,
     sqr_marginalization,
+    unwrap,
 )
 from .measurement import (
     ObsModel,
@@ -79,6 +83,7 @@ from .priors import (
 
 __all__ = [
     "IWP",
+    "AbstractParameter",
     "AdaptiveLoopResult",
     "Correction",
     "CorrectionResult",
@@ -93,8 +98,10 @@ __all__ = [
     "ObsModel",
     "PController",
     "PIController",
+    "PositiveReal",
     "PrecondIWP",
     "PrecondMaternPrior",
+    "Real",
     "StepSizeController",
     "TaylorCorrection",
     "aggregate_sigma_sqr",
@@ -131,4 +138,5 @@ __all__ = [
     "sqr_inversion",
     "sqr_marginalization",
     "taylor_mode_initialization",
+    "unwrap",
 ]
