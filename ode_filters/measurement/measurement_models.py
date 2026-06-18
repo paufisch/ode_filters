@@ -393,6 +393,19 @@ class BaseODEInformation(ABC):
         """
         return self._d
 
+    @property
+    def E_constraint(self) -> Array:
+        """Selection matrix for the highest-derivative ODE-defect rows.
+
+        This is the Jacobian of the *linear* part of the ODE residual (``E1``
+        for first-order systems, ``E2`` for second-order). A zeroth-order (EK0)
+        correction uses it directly as the ODE-row Jacobian (vector field
+        treated as locally constant); the first-order (EK1) Jacobian
+        additionally subtracts the vector-field Jacobian (see
+        :meth:`_ode_jacobian`). Shape ``[ode_dim, state_dim]``.
+        """
+        return self._E_constraint
+
     def measurement_times(self) -> Array:
         """Sorted, deduplicated list of fixed times where Measurements fire.
 

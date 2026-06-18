@@ -23,9 +23,12 @@ from .calibration import (
 )
 from .filters import (
     AdaptiveLoopResult,
+    Correction,
+    CorrectionResult,
     PController,
     PIController,
     StepSizeController,
+    TaylorCorrection,
     ekf1_sqr_adaptive_loop,
     ekf1_sqr_filter_step,
     ekf1_sqr_filter_step_preconditioned,
@@ -70,6 +73,8 @@ from .priors import (
 __all__ = [
     "IWP",
     "AdaptiveLoopResult",
+    "Correction",
+    "CorrectionResult",
     "JointPrior",
     "MaternPrior",
     "ODEInformation",
@@ -82,6 +87,7 @@ __all__ = [
     "PrecondIWP",
     "PrecondMaternPrior",
     "StepSizeController",
+    "TaylorCorrection",
     "aggregate_sigma_sqr",
     "build_obs_at_time",
     "ekf1_sqr_adaptive_loop",
