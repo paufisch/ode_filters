@@ -15,6 +15,7 @@ from ..measurement.measurement_models import (
     build_obs_at_time,
 )
 from ..priors.gmp_priors import BasePrior
+from .correction import Correction, TaylorCorrection
 from .ode_filter_step import (
     ekf1_sqr_filter_step,
     ekf1_sqr_filter_step_preconditioned,
@@ -1558,6 +1559,7 @@ def ekf1_sqr_loop_dynamic_scan(
     min_sigma_sqr: float = 0.0,
     obs_model: ObsModel | None = None,
     calibrate: bool | None = None,
+    correction: Correction | None = None,
 ) -> DynamicScanLoopResult | DynamicObsScanLoopResult:
     """``jax.lax.scan`` variant of :func:`ekf1_sqr_loop_dynamic`.
 
@@ -1589,6 +1591,12 @@ def ekf1_sqr_loop_dynamic_scan(
             (e.g. joint state-parameter estimation from sensor data).
             Observation rows update the posterior but never drive sigma.
         calibrate: Deprecated; ``True`` -> ``"dynamic"``, ``False`` -> ``"none"``.
+        correction: Linearization/correction strategy for the measurement
+            update (default ``TaylorCorrection(order=1)``, i.e. EK1). Note that
+            this controls only the *update*; the diffusion calibration uses its
+            own linearization selected by ``calibration`` (the
+            ``"diagonal_ekf0"`` mode pairs an ``E1``-based sigma estimate with
+            an EK0 update). Not yet supported together with ``obs_model``.
 
     Returns:
         With ``obs_model=None``: :class:`DynamicScanLoopResult` -- 10 arrays
@@ -1615,6 +1623,12 @@ def ekf1_sqr_loop_dynamic_scan(
         _check_state_xi_diagonal(prior, calibration)
 
     if obs_model is not None:
+        if correction is not None:
+            raise NotImplementedError(
+                "correction= is not yet supported together with obs_model; the "
+                "observation branch uses a sequential step that is not "
+                "correction-aware yet."
+            )
         return _ekf1_sqr_loop_dynamic_obs_scan(
             mu_0,
             Sigma_0_sqr,
@@ -1626,6 +1640,9 @@ def ekf1_sqr_loop_dynamic_scan(
             calibration,
             min_sigma_sqr,
         )
+
+    if correction is None:
+        correction = TaylorCorrection(order=1)
 
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     A_h = prior.A(h)
@@ -1670,7 +1687,14 @@ def ekf1_sqr_loop_dynamic_scan(
             (mz, Pz_sqr),
             (m_new, P_new_sqr),
         ) = ekf1_sqr_filter_step(
-            A_h, b_h, Q_step_sqr, m_prev, P_prev_sqr, measure, t=t_i
+            A_h,
+            b_h,
+            Q_step_sqr,
+            m_prev,
+            P_prev_sqr,
+            measure,
+            t=t_i,
+            correction=correction,
         )
 
         ll_step = _log_likelihood_contrib(mz, Pz_sqr)

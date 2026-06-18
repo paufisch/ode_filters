@@ -29,12 +29,15 @@ from ode_filters.filters import (
     CorrectionResult,
     TaylorCorrection,
     ekf1_sqr_filter_step,
+    ekf1_sqr_loop_dynamic_scan,
 )
 from ode_filters.inference import sqr_inversion, sqr_marginalization
 from ode_filters.measurement import (
+    Measurement,
     ODEconservation,
     ODEInformation,
     ODEInformationWithHidden,
+    prepare_observations,
 )
 from ode_filters.priors import IWP, JointPrior, taylor_mode_initialization
 
@@ -309,3 +312,92 @@ def test_step_is_jittable_with_correction():
 
     out = run(m0, P0_sqr)
     assert np.all(np.isfinite(out[3][0]))
+
+
+# --------------------------------------------------------------------------- #
+# 6. Loop wiring: ekf1_sqr_loop_dynamic_scan (W3)                             #
+# --------------------------------------------------------------------------- #
+
+
+def test_loop_explicit_ek1_equals_default():
+    """Passing correction=EK1 reproduces the default loop bit-for-bit."""
+    prior, measure, m0, P0_sqr = _decay_ode()
+    tspan, n = (0.0, 2.0), 50
+
+    default = ekf1_sqr_loop_dynamic_scan(m0, P0_sqr, prior, measure, tspan, n)
+    explicit = ekf1_sqr_loop_dynamic_scan(
+        m0, P0_sqr, prior, measure, tspan, n, correction=TaylorCorrection(order=1)
+    )
+    assert np.allclose(default[0], explicit[0], atol=1e-12)  # m_seq
+    assert np.allclose(default[-1], explicit[-1], atol=1e-12)  # log-likelihood
+
+
+def test_loop_ek0_differs_from_ek1_nonlinear():
+    prior, measure, m0, P0_sqr = _decay_ode()  # nonlinear vf
+    tspan, n = (0.0, 1.0), 50
+
+    m_seq0 = ekf1_sqr_loop_dynamic_scan(
+        m0, P0_sqr, prior, measure, tspan, n, correction=TaylorCorrection(order=0)
+    )[0]
+    m_seq1 = ekf1_sqr_loop_dynamic_scan(
+        m0, P0_sqr, prior, measure, tspan, n, correction=TaylorCorrection(order=1)
+    )[0]
+    assert np.all(np.isfinite(m_seq0))
+    assert not np.allclose(m_seq0, m_seq1, atol=1e-8)
+
+
+def test_loop_ek0_solves_linear_decay():
+    """EK0 through the loop produces a correct end-to-end ODE solution."""
+
+    def vf(x, *, t):
+        return -x
+
+    prior = IWP(q=2, d=1, Xi=np.eye(1))
+    m0, P0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
+    measure = ODEInformation(vf, prior.E0, prior.E1)
+
+    m_seq = ekf1_sqr_loop_dynamic_scan(
+        m0,
+        P0_sqr,
+        prior,
+        measure,
+        (0.0, 2.0),
+        200,
+        correction=TaylorCorrection(order=0),
+    )[0]
+    x_final = (prior.E0 @ m_seq[-1])[0]
+    assert np.isclose(x_final, np.exp(-2.0), atol=1e-2)
+
+
+def test_loop_correction_with_obs_model_raises():
+    """correction= is not yet supported alongside obs_model (clear error)."""
+
+    def vf(x, u, *, t):
+        return -u * x
+
+    prior_x = IWP(q=2, d=1, Xi=np.eye(1))
+    prior_lam = IWP(q=0, d=1, Xi=1e-10 * np.eye(1))
+    joint = JointPrior(prior_x, prior_lam)
+    measure = ODEInformationWithHidden(
+        vf=vf, E0=joint.E0_x, E1=joint.E1, E0_hidden=joint.E0_hidden
+    )
+    n = 20
+    ts = np.linspace(0.0, 1.0, n + 1)
+    measurement = Measurement(np.eye(1), np.ones((n, 1)), ts[1:], noise=1e-2)
+    obs_model = prepare_observations([measurement], joint.E0_x, ts)
+
+    state_dim = joint.E1.shape[1]
+    m0 = np.zeros(state_dim)
+    P0_sqr = 0.3 * np.eye(state_dim)
+
+    with pytest.raises(NotImplementedError, match="obs_model"):
+        ekf1_sqr_loop_dynamic_scan(
+            m0,
+            P0_sqr,
+            joint,
+            measure,
+            (0.0, 1.0),
+            n,
+            obs_model=obs_model,
+            correction=TaylorCorrection(order=1),
+        )
