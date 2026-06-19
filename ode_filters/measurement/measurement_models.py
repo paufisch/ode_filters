@@ -120,11 +120,32 @@ def prepare_observations(
         c_list.append(c_i)
         mask_list.append(mask_i)
 
+    mask = np.stack(mask_list)
+
+    # Guard against asynchronous / partial-dimension observations. The masked
+    # update consumed by the scan / adaptive paths is all-or-nothing per step
+    # (it gates on ``mask.any()``), so a step where only *some* of the stacked
+    # measurements fire would silently condition the inactive rows on a
+    # fabricated "observe 0". Such a step has a mask row that is neither all-on
+    # nor all-off. Reject it loudly until per-dimension masking is implemented
+    # (see ROADMAP: observation-API consolidation).
+    row_any = mask.any(axis=1)
+    row_all = mask.all(axis=1)
+    if bool(np.any(row_any & ~row_all)):
+        raise NotImplementedError(
+            "Asynchronous / partial observations are not supported by the "
+            "fixed-shape masked update: at some time step only a subset of the "
+            "stacked measurements fire, which would corrupt the inactive rows. "
+            "Use measurements that share the same observation times, or the "
+            "embedded-Measurement Python path (ekf1_sqr_adaptive_loop). "
+            "Per-dimension masking is planned."
+        )
+
     return ObsModel(
         H=H,
         R_sqr=R_sqr,
         c_seq=np.stack(c_list),
-        mask=np.stack(mask_list),
+        mask=mask,
     )
 
 

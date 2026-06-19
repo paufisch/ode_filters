@@ -23,6 +23,7 @@ from .calibration import (
 )
 from .filters import (
     AdaptiveLoopResult,
+    AdaptiveSolveResult,
     Correction,
     CorrectionResult,
     IteratedTaylorCorrection,
@@ -31,6 +32,7 @@ from .filters import (
     StepSizeController,
     TaylorCorrection,
     ekf1_sqr_adaptive_loop,
+    ekf1_sqr_adaptive_solve,
     ekf1_sqr_filter_step,
     ekf1_sqr_filter_step_preconditioned,
     ekf1_sqr_filter_step_preconditioned_sequential,
@@ -86,6 +88,7 @@ __all__ = [
     "IWP",
     "AbstractParameter",
     "AdaptiveLoopResult",
+    "AdaptiveSolveResult",
     "Correction",
     "CorrectionResult",
     "InferenceProblem",
@@ -109,6 +112,7 @@ __all__ = [
     "aggregate_sigma_sqr",
     "build_obs_at_time",
     "ekf1_sqr_adaptive_loop",
+    "ekf1_sqr_adaptive_solve",
     "ekf1_sqr_filter_step",
     "ekf1_sqr_filter_step_preconditioned",
     "ekf1_sqr_filter_step_preconditioned_sequential",

@@ -150,3 +150,35 @@ def test_no_obs_backward_compatible():
     )
     assert len(result) == 11
     assert result[0].shape == (N + 1, mu_0.shape[0])
+
+
+def test_prepare_observations_rejects_asynchronous():
+    """Measurements firing at different times produce partial mask rows, which
+    the all-or-nothing masked update would silently corrupt -- reject loudly."""
+    prior = IWP(q=2, d=2)
+    ts = np.linspace(0.0, 2.0, 9)
+    sensor_a = Measurement(
+        np.array([[1.0, 0.0]]), np.array([[0.1]]), np.array([1.0]), noise=1e-3
+    )
+    sensor_b = Measurement(
+        np.array([[0.0, 1.0]]), np.array([[0.1]]), np.array([2.0]), noise=1e-3
+    )
+    with pytest.raises(NotImplementedError, match=r"synchronous|Asynchronous"):
+        prepare_observations([sensor_a, sensor_b], prior.E0, ts)
+
+
+def test_prepare_observations_allows_synchronous():
+    """Measurements sharing the same times give all-on / all-off mask rows."""
+    prior = IWP(q=2, d=2)
+    ts = np.linspace(0.0, 2.0, 9)
+    z_t = np.array([1.0, 2.0])
+    sensor_a = Measurement(
+        np.array([[1.0, 0.0]]), np.array([[0.1], [0.2]]), z_t, noise=1e-3
+    )
+    sensor_b = Measurement(
+        np.array([[0.0, 1.0]]), np.array([[0.3], [0.4]]), z_t, noise=1e-3
+    )
+    obs = prepare_observations([sensor_a, sensor_b], prior.E0, ts)
+    assert obs is not None
+    row_sums = set(onp.asarray(obs.mask).sum(axis=1).tolist())
+    assert row_sums <= {0, 2}  # never a partial row

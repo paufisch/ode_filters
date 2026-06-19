@@ -7,7 +7,12 @@ from .correction import (
     IteratedTaylorCorrection,
     TaylorCorrection,
 )
-from .ode_filter_adaptive import AdaptiveLoopResult, ekf1_sqr_adaptive_loop
+from .ode_filter_adaptive import (
+    AdaptiveLoopResult,
+    AdaptiveSolveResult,
+    ekf1_sqr_adaptive_loop,
+    ekf1_sqr_adaptive_solve,
+)
 from .ode_filter_loop import (
     ekf1_sqr_loop,
     ekf1_sqr_loop_dynamic,
@@ -35,6 +40,7 @@ from .ode_filter_step import (
 
 __all__ = [
     "AdaptiveLoopResult",
+    "AdaptiveSolveResult",
     "Correction",
     "CorrectionResult",
     "IteratedTaylorCorrection",
@@ -43,6 +49,7 @@ __all__ = [
     "StepSizeController",
     "TaylorCorrection",
     "ekf1_sqr_adaptive_loop",
+    "ekf1_sqr_adaptive_solve",
     "ekf1_sqr_filter_step",
     "ekf1_sqr_filter_step_preconditioned",
     "ekf1_sqr_filter_step_preconditioned_sequential",

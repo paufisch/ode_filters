@@ -79,18 +79,20 @@ import warnings
 from collections.abc import Callable
 from typing import Literal, NamedTuple
 
+import equinox.internal as eqxi
 import jax
 import jax.numpy as np
 import numpy as onp
 from jax import Array
 
 from ..calibration.sigma import quasi_mle_sigma_sqr, quasi_mle_sigma_sqr_from_Q
-from ..inference.sqr_gaussian_inference import sqr_marginalization
+from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
 from ..measurement.measurement_models import (
     MEASUREMENT_TIME_ATOL,
     MEASUREMENT_TIME_RTOL,
     BaseODEInformation,
     Measurement,
+    ObsModel,
 )
 from ..priors.gmp_priors import BasePrior
 from .adaptive_controller import PIController, StepSizeController
@@ -628,7 +630,236 @@ def ekf1_sqr_adaptive_loop(
     )
 
 
+class AdaptiveSolveResult(NamedTuple):
+    """Output of :func:`ekf1_sqr_adaptive_solve` (fixed-shape, save-at-grid).
+
+    Attributes:
+        t: The save grid (the ``save_at`` times), shape ``[K]``.
+        m: Filtered state means at the save times, shape ``[K, state_dim]``.
+        P_sqr: Square-root covariances at the save times, shape
+            ``[K, state_dim, state_dim]`` (``P = P_sqr.T @ P_sqr``).
+        log_likelihood: Accumulated Gaussian log-marginal-likelihood (scalar),
+            summed over every accepted step.
+    """
+
+    t: Array
+    m: Array
+    P_sqr: Array
+    log_likelihood: Array
+
+
+def _controller_coeffs(
+    controller: StepSizeController | None, order: int
+) -> tuple[float, float, float, float, float]:
+    """Static ``(safety, alpha, beta, min_factor, max_factor)`` for the jnp PI law.
+
+    The dataclass controllers cast through Python ``float`` / ``min`` / ``max`` and
+    so cannot run under tracing; here we extract their (static) coefficients and
+    re-implement the proposal in ``jax.numpy`` inside the loop. ``beta = 0``
+    recovers the proportional-only :class:`PController`.
+    """
+    if controller is None:
+        controller = PIController(order=order)
+    beta = float(controller._beta) if isinstance(controller, PIController) else 0.0
+    return (
+        float(controller.safety),
+        float(controller._alpha),
+        beta,
+        float(controller.min_factor),
+        float(controller.max_factor),
+    )
+
+
+def _gaussian_loglik(mz: Array, Pz_sqr: Array) -> Array:
+    """Gaussian log-density of observing 0 under ``N(mz, Pz_sqr.T @ Pz_sqr)``."""
+    log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
+    v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
+    return -0.5 * (mz.shape[0] * np.log(2.0 * np.pi) + log_det + v @ v)
+
+
+def ekf1_sqr_adaptive_solve(
+    mu_0: Array,
+    Sigma_0_sqr: Array,
+    prior: BasePrior,
+    measure: BaseODEInformation,
+    save_at: Array,
+    *,
+    obs_model: ObsModel | None = None,
+    atol: float = 1e-4,
+    rtol: float = 1e-2,
+    h_init: float | None = None,
+    calibration: CalibrationMode = "dynamic",
+    controller: StepSizeController | None = None,
+    min_sigma_sqr: float = 0.0,
+    max_steps: int = 4096,
+) -> AdaptiveSolveResult:
+    """``jit`` / ``vmap`` / ``grad``-able adaptive EKF1, saved on a fixed grid.
+
+    Unlike :func:`ekf1_sqr_adaptive_loop` (a Python ``while`` driver that returns
+    *every* accepted step and feeds the smoother), this returns the **filtered
+    solution at a fixed array of query times** ``save_at`` -- the shape is known at
+    trace time, so the whole solve is jittable, vmappable, and reverse-mode
+    differentiable. It is built as a ``jax.lax.scan`` over ``save_at`` whose body is
+    a *checkpointed* ``equinox`` while-loop (``eqx.internal.while_loop``); the
+    checkpointing is what makes reverse-mode autodiff work (plain ``lax.while_loop``
+    does not support it).
+
+    Adaptive accept/reject sub-stepping happens *between* consecutive save times;
+    the final sub-step of each interval is clamped to land exactly on the next save
+    time, so no interpolation is needed (adaptivity within an interval is preserved
+    -- only that last sub-step is shortened). Filtering only: the RTS smoother stays
+    on the fixed-grid path.
+
+    **Observations at fixed locations.** Pass ``obs_model`` to assimilate linear
+    observations: the adaptive solver integrates to each save time and then applies
+    a masked affine observation update there. Because the save times are already
+    mandatory landing points, observations must be aligned to ``save_at`` -- build
+    the model with ``prepare_observations(measurements, prior.E0, save_at)`` (its
+    per-step offset/mask sequences then index ``save_at[1:]``). The update is exact
+    (observations are linear, so no linearization/correction is needed) and the
+    post-observation state is what propagates onward (proper filtering). Time-gated
+    ``Measurement`` constraints *embedded in* ``measure`` are still unsupported (they
+    need non-traceable Python control flow); use ``obs_model`` instead.
+
+    The per-step calibration, local-error estimate and log-likelihood are shared
+    with :func:`ekf1_sqr_adaptive_loop` (same ``_make_step_body``); the controller
+    uses the per-step error (the ``sigma_in_error="running_mean"`` variant of the
+    Python loop is not reproduced here).
+
+    Args:
+        mu_0: Initial state mean.
+        Sigma_0_sqr: Initial state covariance (square-root form).
+        prior: Gauss-Markov prior (e.g. :class:`IWP`); supplies ``A``/``b``/``Q``
+            and the default controller order ``prior.q``.
+        measure: Measurement model (ODE + Conservation only).
+        save_at: Strictly increasing 1-D array of save times; ``save_at[0]`` is the
+            initial time (the initial state is returned there unchanged).
+        obs_model: Optional linear observations to assimilate at the save times,
+            built via ``prepare_observations(measurements, prior.E0, save_at)`` (so
+            its ``c_seq``/``mask`` index ``save_at[1:]``). ``None`` for a pure solve.
+        atol: Absolute tolerance for the normalised local-error estimate.
+        rtol: Relative tolerance.
+        h_init: Initial step. Defaults to ``(save_at[-1] - save_at[0]) / 100``.
+        calibration: Diffusion calibration mode (see :func:`ekf1_sqr_adaptive_loop`).
+        controller: Step-size controller; defaults to ``PIController(order=prior.q)``.
+        min_sigma_sqr: Lower bound on the per-step ``sigma_hat^2``.
+        max_steps: Hard cap on sub-steps per save interval (bounds the checkpointed
+            while-loop). Raise it (or loosen tolerances) if a solve fails to reach a
+            save time.
+
+    Returns:
+        An :class:`AdaptiveSolveResult` with the solution sampled at ``save_at``.
+    """
+    if any(isinstance(c, Measurement) for c in getattr(measure, "_constraints", ())):
+        raise NotImplementedError(
+            "ekf1_sqr_adaptive_solve supports ODE + Conservation models only; "
+            "time-gated Measurement constraints need Python control flow and are "
+            "not traceable. Use ekf1_sqr_adaptive_loop for those."
+        )
+
+    save_at = np.asarray(save_at, dtype=float)
+    safety, alpha, beta, min_factor, max_factor = _controller_coeffs(
+        controller, prior.q
+    )
+    step_body = _make_step_body(
+        prior,
+        measure,
+        atol,
+        rtol,
+        calibration=calibration,
+        min_sigma_sqr=min_sigma_sqr,
+    )
+    span = save_at[-1] - save_at[0]
+    h0 = span / 100.0 if h_init is None else np.asarray(h_init, dtype=float)
+
+    def propose(h, err, err_prev):
+        # Gustafsson PI law (jax form of adaptive_controller.PIController.propose);
+        # err_prev < 0 signals "no memory" (first step / right after a reject) and
+        # drops the integral term.
+        err = np.maximum(err, 1e-12)
+        proportional = err ** (-alpha)
+        integral = np.where(
+            err_prev > 0.0, (np.maximum(err_prev, 1e-12) / err) ** beta, 1.0
+        )
+        factor = np.clip(safety * proportional * integral, min_factor, max_factor)
+        return h * factor
+
+    def integrate_to(target, carry):
+        rel_tol = 1e-10 * np.abs(target) + 1e-12
+
+        def cond(c):
+            t = c[0]
+            return t < target - rel_tol
+
+        def body(c):
+            t, m, P_sqr, h, ll, err_prev = c
+            h_try = np.minimum(h, target - t)  # clamp so we land on `target`
+            t_next = t + h_try
+            out = step_body(h_try, t_next, m, P_sqr)
+            m_new, P_new_sqr = out[7], out[8]
+            err, loglik_step = out[10], out[11]
+            accept = err <= 1.0
+            t2 = np.where(accept, t_next, t)
+            m2 = np.where(accept, m_new, m)
+            P2 = np.where(accept, P_new_sqr, P_sqr)
+            ll2 = np.where(accept, ll + loglik_step, ll)
+            h2 = propose(h_try, err, np.where(accept, err_prev, -1.0))
+            err_prev2 = np.where(accept, err, err_prev)
+            return (t2, m2, P2, h2, ll2, err_prev2)
+
+        return eqxi.while_loop(
+            cond, body, carry, max_steps=max_steps, kind="checkpointed"
+        )
+
+    init = (save_at[0], mu_0, Sigma_0_sqr, h0, np.array(0.0), np.array(-1.0))
+
+    if obs_model is None:
+
+        def scan_body(carry, target):
+            carry = integrate_to(target, carry)
+            return carry, (carry[1], carry[2])
+
+        final, (m_seq, P_seq_sqr) = jax.lax.scan(scan_body, init, save_at[1:])
+    else:
+        n_obs_steps = obs_model.c_seq.shape[0]
+        if n_obs_steps != save_at.shape[0] - 1:
+            raise ValueError(
+                f"obs_model has {n_obs_steps} steps but save_at has "
+                f"{save_at.shape[0]} points; build it with "
+                f"prepare_observations(measurements, prior.E0, save_at) so its "
+                f"per-step sequences index save_at[1:]."
+            )
+        H_obs = obs_model.H
+        R_obs_sqr = obs_model.R_sqr
+
+        def scan_body(carry, step_data):
+            target, c_obs, mask = step_data
+            t, m, P_sqr, h, ll, err_prev = integrate_to(target, carry)
+            # Exact (linear) observation update at the save time, masked off when
+            # no observation is active there (same all-or-nothing convention as the
+            # dynamic-observation scan loop).
+            obs_active = mask.any()
+            mz_obs, Pz_obs_sqr = sqr_marginalization(H_obs, c_obs, R_obs_sqr, m, P_sqr)
+            _, m_obs, P_obs_sqr = sqr_inversion(
+                H_obs, m, P_sqr, mz_obs, Pz_obs_sqr, R_obs_sqr
+            )
+            m = np.where(obs_active, m_obs, m)
+            P_sqr = np.where(obs_active, P_obs_sqr, P_sqr)
+            ll = ll + np.where(obs_active, _gaussian_loglik(mz_obs, Pz_obs_sqr), 0.0)
+            return (t, m, P_sqr, h, ll, err_prev), (m, P_sqr)
+
+        final, (m_seq, P_seq_sqr) = jax.lax.scan(
+            scan_body, init, (save_at[1:], obs_model.c_seq, obs_model.mask)
+        )
+
+    m_out = np.concatenate([mu_0[None], m_seq], axis=0)
+    P_out = np.concatenate([Sigma_0_sqr[None], P_seq_sqr], axis=0)
+    return AdaptiveSolveResult(t=save_at, m=m_out, P_sqr=P_out, log_likelihood=final[4])
+
+
 __all__ = [
     "AdaptiveLoopResult",
+    "AdaptiveSolveResult",
     "ekf1_sqr_adaptive_loop",
+    "ekf1_sqr_adaptive_solve",
 ]
