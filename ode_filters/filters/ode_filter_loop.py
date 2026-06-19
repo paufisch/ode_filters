@@ -204,10 +204,6 @@ def ekf1_sqr_loop_dynamic(
       rescaling (combine with :func:`posthoc_mle_sigma_sqr` /
       :func:`rescale_sqr_seq`).
 
-    ``"cumulative"`` is intentionally *not* exposed on the fixed-step loop:
-    the cumulative scheme's appeal is robust adaptive-step control, and at
-    fixed step there's nothing to gain over post-hoc rescaling.
-
     The returned ``log_likelihood`` reflects the *calibrated* posterior --
     each step's contribution uses the calibrated ``Pz_sqr``. With
     ``calibration="none"`` it matches the log-likelihood from
@@ -531,8 +527,7 @@ def ekf1_sqr_loop_preconditioned_dynamic(
 
     Supported ``calibration`` modes: ``"dynamic"``, ``"diagonal"``,
     ``"diagonal_ekf0"``, ``"none"`` -- see
-    :func:`ekf1_sqr_adaptive_loop` for the full description. (``"cumulative"``
-    is not exposed for fixed-step loops.)
+    :func:`ekf1_sqr_adaptive_loop` for the full description.
 
     For the diagonal modes the bar-space time-block ``Q_bar_time`` is
     obtained from ``prior._Q_bar`` if present (the ``PrecondIWP``
@@ -771,10 +766,9 @@ def _calibrate_diffusion(
     """Per-step diffusion calibration for the ``dynamic`` / ``diagonal`` /
     ``diagonal_ekf0`` / ``none`` modes.
 
-    Shared by every fixed-grid loop variant (plain and preconditioned; the
-    preconditioned callers pass the bar-space ``E1`` / ``H_ode`` / ``Q``). The
-    ``cumulative`` mode of the adaptive loop is *not* handled here -- it
-    post-multiplies the carried covariance and lives in its own step body.
+    Shared by every fixed-grid loop variant and the adaptive step body (plain
+    and preconditioned; the preconditioned callers pass the bar-space ``E1`` /
+    ``H_ode`` / ``Q``).
 
     Args:
         calibration: One of ``"dynamic"``, ``"diagonal"``, ``"diagonal_ekf0"``,

@@ -127,8 +127,9 @@ class BasePrior(ABC):
     def apply_state_sigma_to_cov_sqr(self, P_sqr: Array, sigma_sqr: ArrayLike) -> Array:
         """Apply ``sigma_sqr`` to the state block of a full-state covariance sqrt.
 
-        Used by cumulative-mode post-multiplication of carried covariances.
-        Default scales everything; joint priors override.
+        A post-hoc covariance-rescaling utility (multiplies the stored square-root
+        covariance by ``sqrt(sigma_sqr)``). Default scales everything; joint priors
+        override to scale only the state block.
         """
         return np.sqrt(sigma_sqr) * P_sqr
 

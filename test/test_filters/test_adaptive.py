@@ -424,8 +424,7 @@ class TestAdaptiveLoopLogistic:
 
     def test_diagonal_resolves_multiscale(self):
         """Diagonal mode resolves x_2 on the staggered multi-scale logistic
-        where dynamic mode collapses -- and does so with fewer accepted steps
-        than cumulative (which also resolves it via inheritance)."""
+        where the scalar dynamic mode collapses."""
         r_rate = 2.0
         x0_vec = np.asarray([1e-5, 1e-10])
 
@@ -454,49 +453,6 @@ class TestAdaptiveLoopLogistic:
         )
         x2_diag = float((prior.E0 @ r_diag.m_seq[-1])[1])
         assert abs(x2_diag - float(x2_true)) < 1e-3
-
-    def test_cumulative_resolves_multiscale_where_dynamic_collapses(self):
-        """Staggered two-component logistic with X0 = [1e-5, 1e-10]: dynamic
-        sigma_hat collapses after x_1's transition and starves x_2 of process
-        noise, so x_2 is stuck near 0. The cumulative scheme inherits the
-        inflated carried-P from x_1's transition and resolves x_2 correctly.
-        """
-        r_rate = 2.0
-        x0_vec = np.asarray([1e-5, 1e-10])
-
-        def vf_dl(x, *, t):
-            return np.array([r_rate * x[0] * (1 - x[0]), r_rate * x[1] * (1 - x[1])])
-
-        tspan = (0.0, 15.0)
-        q = 3
-        prior = IWP(q=q, d=2)
-        mu_0, S0 = taylor_mode_initialization(vf_dl, x0_vec, q=q)
-        measure = ODEInformation(vf_dl, prior.E0, prior.E1)
-
-        def x2_final(mode):
-            r = ekf1_sqr_adaptive_loop(
-                mu_0,
-                S0,
-                prior,
-                measure,
-                tspan,
-                atol=1e-5,
-                rtol=1e-3,
-                h_min=1e-9,
-                calibration=mode,
-            )
-            return float((prior.E0 @ r.m_seq[-1])[1])
-
-        x2_dyn = x2_final("dynamic")
-        x2_cum = x2_final("cumulative")
-        x2_true = 1.0 / (
-            1.0 + (1.0 / float(x0_vec[1]) - 1.0) * np.exp(-r_rate * tspan[1])
-        )
-
-        # Dynamic mode misses the transition (x_2 stays near zero).
-        assert abs(x2_dyn) < 1e-3
-        # Cumulative mode resolves x_2 near the true value (~0.999).
-        assert abs(x2_cum - float(x2_true)) < 1e-2
 
     def test_dynamic_diffusion_matches_probdiffeq_formula(self):
         """The per-step sigma_hat^2 returned by the adaptive loop must equal
