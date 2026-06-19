@@ -12,7 +12,6 @@ from .measurement_models import (
     SecondOrderODEInformation,
     SecondOrderODEInformationWithHidden,
     TransformedMeasurement,
-    build_obs_at_time,
     prepare_observations,
 )
 
@@ -28,6 +27,5 @@ __all__ = [
     "SecondOrderODEInformationWithHidden",
     "SecondOrderODEconservation",
     "TransformedMeasurement",
-    "build_obs_at_time",
     "prepare_observations",
 ]

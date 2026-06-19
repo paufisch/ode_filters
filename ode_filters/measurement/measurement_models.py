@@ -149,53 +149,6 @@ def prepare_observations(
     )
 
 
-def build_obs_at_time(
-    observations: list[Measurement],
-    E0: ArrayLike,
-    t: float,
-) -> tuple[Array, Array, Array] | None:
-    """Build an observation update tuple for a single time step.
-
-    Returns ``(H, c, R_sqr)`` for the active observations at time *t*,
-    or ``None`` when no observation is active.
-
-    Args:
-        observations: List of Measurement constraints.
-        E0: State extraction matrix, shape ``[d, state_dim]``.
-        t: Current time.
-
-    Returns:
-        Tuple ``(H, c, R_sqr)`` or ``None``.
-    """
-    E0 = np.asarray(E0)
-    active: list[tuple[Measurement, int]] = []
-    for m in observations:
-        idx = m.find_index(t)
-        if idx is not None:
-            active.append((m, idx))
-    if not active:
-        return None
-
-    jacobians = []
-    offsets = []
-    for m, idx in active:
-        jacobians.append(m.A if m.full_state else m.A @ E0)
-        offsets.append(-m.z[idx])
-
-    H = np.concatenate(jacobians) if len(jacobians) > 1 else jacobians[0]
-    c = np.concatenate(offsets) if len(offsets) > 1 else offsets[0]
-
-    obs_dim = H.shape[0]
-    R = np.zeros((obs_dim, obs_dim))
-    off = 0
-    for m, _ in active:
-        R = R.at[off : off + m.dim, off : off + m.dim].set(m.get_noise_matrix())
-        off += m.dim
-    R_sqr = _safe_cholesky_sqr(R, obs_dim)
-
-    return H, c, R_sqr
-
-
 @dataclass(frozen=True)
 class Conservation:
     """Conservation constraint: A @ x = p (always active).

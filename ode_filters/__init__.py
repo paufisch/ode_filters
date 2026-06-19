@@ -50,7 +50,6 @@ from .measurement import (
     ObsModel,
     ODEconservation,
     ODEInformation,
-    build_obs_at_time,
     prepare_observations,
 )
 from .priors import (
@@ -85,7 +84,6 @@ __all__ = [
     "StepSizeController",
     "TaylorCorrection",
     "aggregate_sigma_sqr",
-    "build_obs_at_time",
     "fit",
     "gaussian_filter",
     "gaussian_filter_adaptive",
