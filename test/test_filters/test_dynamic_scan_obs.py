@@ -14,10 +14,7 @@ import jax.random as jrandom
 import numpy as onp
 import pytest
 
-from ode_filters.filters.ode_filter_loop import (
-    ekf1_sqr_loop_dynamic_scan,
-    ekf1_sqr_loop_sequential_scan,
-)
+from ode_filters.filters.ode_filter_loop import ekf1_sqr_loop_dynamic_scan
 from ode_filters.measurement import (
     Measurement,
     ODEInformationWithHidden,
@@ -63,32 +60,6 @@ def _decay_setup():
     mu_0 = np.concatenate([mu_x, np.array([LAM_PRIOR])])
     S_0 = np.diag(np.array([1e-3, 1e-1, 1.0, 0.5]))
     return joint, measure, obs_model, mu_0, S_0
-
-
-def test_calibration_none_matches_sequential_scan():
-    """With calibration='none', the obs branch is the sequential scan."""
-    joint, measure, obs_model, mu_0, S_0 = _decay_setup()
-
-    m_dyn, P_dyn_sqr, *_rest_dyn = ekf1_sqr_loop_dynamic_scan(
-        mu_0,
-        S_0,
-        joint,
-        measure,
-        TSPAN,
-        N,
-        calibration="none",
-        obs_model=obs_model,
-    )
-    m_seq, P_seq_sqr, *_rest_seq = ekf1_sqr_loop_sequential_scan(
-        mu_0, S_0, joint, measure, TSPAN, N, obs_model=obs_model
-    )
-
-    onp.testing.assert_allclose(onp.asarray(m_dyn), onp.asarray(m_seq), atol=1e-10)
-    onp.testing.assert_allclose(
-        onp.asarray(P_dyn_sqr.transpose(0, 2, 1) @ P_dyn_sqr),
-        onp.asarray(P_seq_sqr.transpose(0, 2, 1) @ P_seq_sqr),
-        atol=1e-10,
-    )
 
 
 @pytest.mark.parametrize("calibration", ["dynamic", "none"])

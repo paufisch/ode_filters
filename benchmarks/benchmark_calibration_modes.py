@@ -40,13 +40,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.integrate import solve_ivp
 
+from ode_filters import gaussian_filter
 from ode_filters.calibration import posthoc_mle_sigma_sqr, rescale_sqr_seq
 from ode_filters.filters import PIController
 from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
-from ode_filters.filters.ode_filter_loop import (
-    ekf1_sqr_loop,
-    ekf1_sqr_loop_dynamic,
-)
 from ode_filters.measurement import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
 
@@ -109,11 +106,11 @@ def _l2_error_at_endpoint(m_final, prior):
 print("\nMode 1: fixed-step + post-hoc global MLE")
 N_FIXED = 5000
 prior, mu0, S0, measure = _setup()
-r_fixed = ekf1_sqr_loop(mu0, S0, prior, measure, TSPAN, N_FIXED)
-m_seq_fixed = jnp.stack(list(r_fixed[0]))
-P_sqr_fixed = jnp.stack(list(r_fixed[1]))
-mz_fixed = jnp.stack(list(r_fixed[-3]))
-Pz_sqr_fixed = jnp.stack(list(r_fixed[-2]))
+r_fixed = gaussian_filter(mu0, S0, prior, measure, TSPAN, N_FIXED, calibration="none")
+m_seq_fixed = r_fixed.m
+P_sqr_fixed = r_fixed.P_sqr
+mz_fixed = r_fixed.mz
+Pz_sqr_fixed = r_fixed.Pz_sqr
 
 sigma_global = float(posthoc_mle_sigma_sqr(mz_fixed, Pz_sqr_fixed))
 P_sqr_fixed_calibrated = rescale_sqr_seq(P_sqr_fixed, sigma_global)
@@ -127,10 +124,10 @@ print(f"  endpoint L2 error = {err_fixed:.3e}")
 # ---------------------------------------------------------------------------
 print("\nMode 2: fixed-step + online dynamic per-step")
 prior, mu0, S0, measure = _setup()
-r_dyn = ekf1_sqr_loop_dynamic(mu0, S0, prior, measure, TSPAN, N_FIXED)
-m_seq_dyn = jnp.stack(list(r_dyn[0]))
-P_sqr_dyn = jnp.stack(list(r_dyn[1]))
-sigma_dyn = np.asarray(r_dyn[9])
+r_dyn = gaussian_filter(mu0, S0, prior, measure, TSPAN, N_FIXED, calibration="dynamic")
+m_seq_dyn = r_dyn.m
+P_sqr_dyn = r_dyn.P_sqr
+sigma_dyn = np.asarray(r_dyn.sigma_sqr)
 err_dyn = _l2_error_at_endpoint(m_seq_dyn[-1], prior)
 print(
     f"  steps={N_FIXED}, sigma^2: "
@@ -146,12 +143,12 @@ print(f"  endpoint L2 error = {err_dyn:.3e}")
 # ---------------------------------------------------------------------------
 print("\nMode 3: fixed-step + online diagonal per-component")
 prior, mu0, S0, measure = _setup()
-r_diag = ekf1_sqr_loop_dynamic(
+r_diag = gaussian_filter(
     mu0, S0, prior, measure, TSPAN, N_FIXED, calibration="diagonal"
 )
-m_seq_diag = jnp.stack(list(r_diag[0]))
-P_sqr_diag = jnp.stack(list(r_diag[1]))
-sigma_diag_per_step = np.stack([np.asarray(s) for s in r_diag[9]])  # [N, d=2]
+m_seq_diag = r_diag.m
+P_sqr_diag = r_diag.P_sqr
+sigma_diag_per_step = np.asarray(r_diag.sigma_sqr)  # [N, d=2]
 err_diag = _l2_error_at_endpoint(m_seq_diag[-1], prior)
 print(
     f"  steps={N_FIXED}, sigma^2_1: min={sigma_diag_per_step[:, 0].min():.2e}, "

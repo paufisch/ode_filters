@@ -179,7 +179,7 @@ adapted -- big steps on smooth stretches, small steps near features.
 
 ## Calibration off
 
-Pass `calibrate=False` to skip the rescaling of stored covariances. The
+Pass `calibration="none"` to skip the rescaling of stored covariances. The
 per-step quasi-MLE is still computed and returned for diagnostics, but the
 posterior covariances are reported uncalibrated. Useful for testing.
 

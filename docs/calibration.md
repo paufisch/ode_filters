@@ -79,7 +79,7 @@ traj = ekf1_sqr_adaptive_loop(
 # traj.sigma_sqr_seq holds the per-step estimates.
 ```
 
-Pass `calibrate=False` to record the estimates without scaling the stored
+Pass `calibration="none"` to record the estimates without scaling the stored
 covariances (diagnostics only).
 
 ### Manual per-step estimation

@@ -25,7 +25,12 @@ import jax.numpy as np
 from jax import Array
 
 from ..measurement.measurement_models import BaseODEInformation, ObsModel
-from ..priors.gmp_priors import BasePrior, PrecondIWP, PrecondMaternPrior
+from ..priors.gmp_priors import (
+    BasePrior,
+    PrecondIWP,
+    PrecondJointPrior,
+    PrecondMaternPrior,
+)
 from .correction import Correction
 from .ode_filter_adaptive import ekf1_sqr_adaptive_solve
 from .ode_filter_loop import (
@@ -84,7 +89,9 @@ class FilterResult(NamedTuple):
 
 
 def _is_preconditioned(prior: BasePrior) -> bool:
-    return isinstance(prior, (PrecondIWP, PrecondMaternPrior))
+    # All preconditioned priors (incl. the joint one, which is not a BasePrior
+    # subclass) carry a preconditioner and use the bar-space recursion.
+    return isinstance(prior, (PrecondIWP, PrecondMaternPrior, PrecondJointPrior))
 
 
 def gaussian_filter(

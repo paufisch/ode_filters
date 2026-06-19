@@ -50,9 +50,8 @@ mean lags real changes in problem stiffness; in regimes where the local
 diffusion changes abruptly (entering a stiff transition), ``"per_step"``
 is more responsive.
 
-The accepted-step outputs are stored in lists matching the shape conventions of
-:func:`ekf1_sqr_loop`, so the result can be passed directly to
-:func:`rts_sqr_smoother_loop`.
+The accepted-step outputs are stored in lists; the result can be passed
+directly to :func:`rts_sqr_smoother_loop`.
 
 The returned ``log_likelihood`` is the *post-calibration* marginal
 likelihood: each step's contribution uses the calibrated ``Pz_sqr`` (which
@@ -64,7 +63,6 @@ settings define different generative models.
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Callable
 from typing import Literal, NamedTuple
 
@@ -276,7 +274,6 @@ def ekf1_sqr_adaptive_loop(
     calibration: CalibrationMode = "dynamic",
     sigma_in_error: SigmaInError = "running_mean",
     min_sigma_sqr: float = 0.0,
-    calibrate: bool | None = None,
     max_steps: int = 100_000,
 ) -> AdaptiveLoopResult:
     """Adaptive-step square-root EKF with per-step diffusion calibration.
@@ -361,9 +358,6 @@ def ekf1_sqr_adaptive_loop(
             (e.g. ``1e-30``) on problems where the trivial zero-residual
             fixed point would otherwise collapse the state-block diffusion
             to zero and propagate NaN.
-        calibrate: Deprecated. ``True`` maps to ``calibration="dynamic"``,
-            ``False`` maps to ``calibration="none"``. Pass ``calibration``
-            directly instead.
         max_steps: Hard cap on iterations (rejected + accepted) as a safety
             valve against infinite loops.
 
@@ -376,14 +370,6 @@ def ekf1_sqr_adaptive_loop(
         ValueError: If ``tspan`` is non-increasing or ``calibration`` /
             ``sigma_in_error`` is unknown.
     """
-    if calibrate is not None:
-        warnings.warn(
-            '`calibrate` is deprecated; use `calibration="dynamic"` '
-            '(or "none" for the old `calibrate=False` behaviour).',
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        calibration = "dynamic" if calibrate else "none"
     if calibration not in _VALID_CALIBRATIONS:
         raise ValueError(
             f"calibration must be one of {_VALID_CALIBRATIONS}; got {calibration!r}."

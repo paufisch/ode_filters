@@ -10,7 +10,7 @@ Targets behaviours that the original ``test_adaptive.py`` does not exercise:
 - calibration quality: post-hoc rescaled trajectory must have whitened
   residuals with unit variance (chi-squared sanity);
 - the adaptive driver, locked to a single h, must reproduce
-  :func:`ekf1_sqr_loop_dynamic`;
+  the fixed-step :func:`gaussian_filter`;
 - log-likelihood semantics across calibration modes;
 - invariance under preconditioning: the preconditioned diagonal-mode
   loop's trajectory agrees with the non-preconditioned variant for both
@@ -24,6 +24,7 @@ import jax.numpy as np
 import numpy as onp
 import pytest
 
+from ode_filters import gaussian_filter
 from ode_filters.calibration.rescale import rescale_sqr_seq
 from ode_filters.calibration.sigma import (
     posthoc_mle_sigma_sqr,
@@ -31,11 +32,6 @@ from ode_filters.calibration.sigma import (
 )
 from ode_filters.filters import PController
 from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
-from ode_filters.filters.ode_filter_loop import (
-    ekf1_sqr_loop,
-    ekf1_sqr_loop_dynamic,
-    ekf1_sqr_loop_preconditioned_dynamic,
-)
 from ode_filters.measurement.measurement_models import ODEInformation
 from ode_filters.priors.gmp_priors import (
     IWP,
@@ -89,8 +85,8 @@ class TestConvergenceOrderFixedStep:
         Ns = [16, 32, 64, 128]
         errs = []
         for N in Ns:
-            r = ekf1_sqr_loop_dynamic(mu_0, S0, prior, measure, tspan, N)
-            x_pred = float((prior.E0 @ r[0][-1])[0])
+            r = gaussian_filter(mu_0, S0, prior, measure, tspan, N)
+            x_pred = float((prior.E0 @ r.m[-1])[0])
             errs.append(abs(x_pred - x_true))
 
         # log-log slope of error vs h: expect ~ -q.
@@ -259,7 +255,7 @@ class TestBlockDiagonalEquivalence:
         joint_prior = IWP(q=q, d=2)
         mu0_joint, S0_joint = taylor_mode_initialization(self._decoupled_vf, x0, q=q)
         joint_meas = ODEInformation(self._decoupled_vf, joint_prior.E0, joint_prior.E1)
-        r_joint = ekf1_sqr_loop_dynamic(
+        r_joint = gaussian_filter(
             mu0_joint,
             S0_joint,
             joint_prior,
@@ -279,7 +275,7 @@ class TestBlockDiagonalEquivalence:
             scalar_prior = IWP(q=q, d=1)
             mu0_s, S0_s = taylor_mode_initialization(vf_scalar, x0_i[None], q=q)
             scalar_meas = ODEInformation(vf_scalar, scalar_prior.E0, scalar_prior.E1)
-            r_s = ekf1_sqr_loop_dynamic(
+            r_s = gaussian_filter(
                 mu0_s,
                 S0_s,
                 scalar_prior,
@@ -288,16 +284,16 @@ class TestBlockDiagonalEquivalence:
                 N,
                 calibration="dynamic",
             )
-            x_final_indep.append(float((scalar_prior.E0 @ r_s[0][-1])[0]))
-            sigma_indep.append(onp.asarray(r_s[9]))
+            x_final_indep.append(float((scalar_prior.E0 @ r_s.m[-1])[0]))
+            sigma_indep.append(onp.asarray(r_s.sigma_sqr))
 
-        x_final_joint = onp.asarray(joint_prior.E0 @ r_joint[0][-1])
+        x_final_joint = onp.asarray(joint_prior.E0 @ r_joint.m[-1])
         # Per-component endpoints agree.
         assert onp.allclose(x_final_joint, onp.asarray(x_final_indep), atol=1e-10)
 
         # Per-step per-component sigma matches the per-step sigma of each
         # independent scalar EKF -- exactly, by the algebra above.
-        sigma_joint = onp.asarray(r_joint[9])  # shape (N, 2)
+        sigma_joint = onp.asarray(r_joint.sigma_sqr)  # shape (N, 2)
         assert onp.allclose(sigma_joint[:, 0], sigma_indep[0], atol=1e-10)
         assert onp.allclose(sigma_joint[:, 1], sigma_indep[1], atol=1e-10)
 
@@ -321,9 +317,9 @@ class TestCalibrationQuality:
         N = 100
 
         # sigma=1 (no calibration) run; collect (mz, Pz_sqr) trace.
-        r = ekf1_sqr_loop(mu_0, S0, prior, measure, tspan, N)
-        mz_seq = np.stack(list(r[-3]), axis=0)
-        Pz_seq_sqr = np.stack(list(r[-2]), axis=0)
+        r = gaussian_filter(mu_0, S0, prior, measure, tspan, N, calibration="none")
+        mz_seq = np.asarray(r.mz)
+        Pz_seq_sqr = np.asarray(r.Pz_sqr)
 
         # Post-hoc MLE sigma^2 (closed-form mean of per-step quasi-MLEs).
         sigma_sqr = float(posthoc_mle_sigma_sqr(mz_seq, Pz_seq_sqr))
@@ -347,8 +343,8 @@ class TestCalibrationQuality:
 class TestAdaptiveEqualsFixedStep:
     """If the controller is locked (``min_factor=max_factor=1`` and
     ``safety=1``) the adaptive loop must run on a uniform grid identical
-    to :func:`ekf1_sqr_loop_dynamic`. The two trajectories should agree to
-    floating-point precision."""
+    to the fixed-step :func:`gaussian_filter`. The two trajectories should
+    agree to floating-point precision."""
 
     def test_locked_controller_reproduces_fixed_step(self):
         prior = IWP(q=2, d=1)
@@ -378,13 +374,13 @@ class TestAdaptiveEqualsFixedStep:
             controller=controller,
             sigma_in_error="per_step",
         )
-        r_fixed = ekf1_sqr_loop_dynamic(mu_0, S0, prior, measure, tspan, N)
+        r_fixed = gaussian_filter(mu_0, S0, prior, measure, tspan, N)
 
         assert len(r_adapt.h_seq) == N
-        assert np.allclose(r_adapt.m_seq[-1], r_fixed[0][-1], atol=1e-10)
-        assert np.allclose(r_adapt.P_seq_sqr[-1], r_fixed[1][-1], atol=1e-10)
+        assert np.allclose(r_adapt.m_seq[-1], r_fixed.m[-1], atol=1e-10)
+        assert np.allclose(r_adapt.P_seq_sqr[-1], r_fixed.P_sqr[-1], atol=1e-10)
         sigma_adapt = onp.asarray(r_adapt.sigma_sqr_seq)
-        sigma_fixed = onp.asarray(r_fixed[9])
+        sigma_fixed = onp.asarray(r_fixed.sigma_sqr)
         assert onp.allclose(sigma_adapt, sigma_fixed, atol=1e-10)
 
 
@@ -405,24 +401,13 @@ class TestLogLikelihoodSemantics:
         measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
         return prior, mu_0, S0, measure
 
-    def test_none_matches_uncalibrated_loop_log_likelihood(self):
-        prior, mu_0, S0, measure = self._setup()
-        tspan, N = (0.0, 5.0), 50
-        r_none = ekf1_sqr_loop_dynamic(
-            mu_0, S0, prior, measure, tspan, N, calibration="none"
-        )
-        r_plain = ekf1_sqr_loop(mu_0, S0, prior, measure, tspan, N)
-        # Last entry of both is the scalar log-likelihood.
-        assert float(r_none[10]) == pytest.approx(float(r_plain[-1]), rel=1e-12)
-
     def test_dynamic_log_likelihood_is_sum_of_per_step_calibrated(self):
         """Re-derive log_likelihood independently from the stored
         (mz, Pz_sqr) sequence and verify it matches the loop's report."""
         prior, mu_0, S0, measure = self._setup()
         tspan, N = (0.0, 5.0), 40
-        r = ekf1_sqr_loop_dynamic(mu_0, S0, prior, measure, tspan, N)
-        # Return is (m, P, m_pred, P_pred, G, d, P_back, mz, Pz_sqr, sigma, ll).
-        mz_seq, Pz_seq_sqr, ll = r[-4], r[-3], r[-1]
+        r = gaussian_filter(mu_0, S0, prior, measure, tspan, N)
+        mz_seq, Pz_seq_sqr, ll = r.mz, r.Pz_sqr, r.log_likelihood
 
         ll_recomputed = 0.0
         for mz, Pz_sqr in zip(mz_seq, Pz_seq_sqr, strict=True):
@@ -524,11 +509,11 @@ class TestPreconditionedDiagonalMatchesNonPreconditioned:
         m_p = ODEInformation(logistic_vf, prior_p.E0, prior_p.E1)
         m_n = ODEInformation(logistic_vf, prior_n.E0, prior_n.E1)
 
-        r_p = ekf1_sqr_loop_preconditioned_dynamic(
+        r_p = gaussian_filter(
             mu_0, S0, prior_p, m_p, (0.0, 1.0), 10, calibration="diagonal_ekf0"
         )
-        r_n = ekf1_sqr_loop_dynamic(
+        r_n = gaussian_filter(
             mu_0, S0, prior_n, m_n, (0.0, 1.0), 10, calibration="diagonal_ekf0"
         )
         # Final filtered mean agrees up to fp64.
-        assert np.allclose(r_p[0][-1], r_n[0][-1], atol=1e-10)
+        assert np.allclose(r_p.m[-1], r_n.m[-1], atol=1e-10)
