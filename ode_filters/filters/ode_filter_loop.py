@@ -128,11 +128,7 @@ def ekf1_sqr_loop(
             t=float(ts[i + 1]),
         )
 
-        log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
-        v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
-        maha = v @ v
-        obs_dim = mz.shape[0]
-        log_likelihood += -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
+        log_likelihood += _log_likelihood_contrib(mz, Pz_sqr)
 
         m_pred_seq.append(m_pred)
         P_pred_seq_sqr.append(P_pred_sqr)
@@ -299,22 +295,14 @@ def ekf1_sqr_loop_dynamic(
         H_ode = H_t[:d_ode]
         mz_ode = mz_pred[:d_ode]
 
-        if calibration in ("diagonal", "diagonal_ekf0"):
-            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_ode
-            denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_h, H_for_calib)
-            sigma_vec = mz_ode**2 / denom
-            sigma_vec = np.maximum(sigma_vec, min_sigma_sqr)
-            Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_vec)
-            sigma_to_store: float | Array = onp.asarray(sigma_vec)
-        else:
-            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode, Q_h_sqr)
-            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
-            Q_step_sqr = (
-                prior.apply_state_sigma_sqr(Q_h_sqr, sigma_scalar)
-                if calibration == "dynamic"
-                else Q_h_sqr
-            )
-            sigma_to_store = float(sigma_scalar)
+        sigma_sqr, Q_step_sqr = _calibrate_diffusion(
+            calibration, mz_ode, H_ode, E1, Q_h, Q_h_sqr, prior, min_sigma_sqr
+        )
+        sigma_to_store: float | Array = (
+            onp.asarray(sigma_sqr)
+            if calibration in ("diagonal", "diagonal_ekf0")
+            else float(sigma_sqr)
+        )
 
         (
             (m_pred, P_pred_sqr),
@@ -323,11 +311,7 @@ def ekf1_sqr_loop_dynamic(
             (m, P_sqr),
         ) = ekf1_sqr_filter_step(A_h, b_h, Q_step_sqr, m_prev, P_prev_sqr, measure, t=t)
 
-        log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
-        v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
-        maha = v @ v
-        obs_dim = mz.shape[0]
-        log_likelihood += -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
+        log_likelihood += _log_likelihood_contrib(mz, Pz_sqr)
 
         m_pred_seq.append(m_pred)
         P_pred_seq_sqr.append(P_pred_sqr)
@@ -476,11 +460,7 @@ def ekf1_sqr_loop_preconditioned(
             t=float(ts[i + 1]),
         )
 
-        log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_seq_sqr_i))))
-        v = jax.scipy.linalg.solve_triangular(Pz_seq_sqr_i.T, mz_seq_i, lower=True)
-        maha = v @ v
-        obs_dim = mz_seq_i.shape[0]
-        log_likelihood += -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
+        log_likelihood += _log_likelihood_contrib(mz_seq_i, Pz_seq_sqr_i)
 
         m_pred_seq_bar.append(m_pred_seq_bar_i)
         P_pred_seq_sqr_bar.append(P_pred_seq_sqr_bar_i)
@@ -640,25 +620,27 @@ def ekf1_sqr_loop_preconditioned_dynamic(
         H_ode_bar = H_t_bar[:d_ode]
         mz_ode = mz_pred[:d_ode]
 
-        if calibration in ("diagonal", "diagonal_ekf0"):
-            # Note: E1 in original space; E1_bar = E1 @ T.
-            E1_bar = E1 @ T_h
-            H_for_calib = E1_bar if calibration == "diagonal_ekf0" else H_ode_bar
-            Q_bar_full = Q_sqr_bar.T @ Q_sqr_bar
-            denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_bar_full, H_for_calib)
-            sigma_vec = mz_ode**2 / denom
-            sigma_vec = np.maximum(sigma_vec, min_sigma_sqr)
-            Q_step_sqr_bar = prior.apply_state_sigma_sqr(Q_sqr_bar, sigma_vec)
-            sigma_to_store: float | Array = onp.asarray(sigma_vec)
-        else:
-            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode_bar, Q_sqr_bar)
-            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
-            Q_step_sqr_bar = (
-                prior.apply_state_sigma_sqr(Q_sqr_bar, sigma_scalar)
-                if calibration == "dynamic"
-                else Q_sqr_bar
-            )
-            sigma_to_store = float(sigma_scalar)
+        # E1 is in original space; E1_bar = E1 @ T. Q_bar_full / E1_bar are only
+        # consumed by the diagonal modes, but computing them unconditionally keeps
+        # the shared calibration call simple (the extra matmul is negligible in the
+        # Python for-loop path).
+        E1_bar = E1 @ T_h
+        Q_bar_full = Q_sqr_bar.T @ Q_sqr_bar
+        sigma_sqr, Q_step_sqr_bar = _calibrate_diffusion(
+            calibration,
+            mz_ode,
+            H_ode_bar,
+            E1_bar,
+            Q_bar_full,
+            Q_sqr_bar,
+            prior,
+            min_sigma_sqr,
+        )
+        sigma_to_store: float | Array = (
+            onp.asarray(sigma_sqr)
+            if calibration in ("diagonal", "diagonal_ekf0")
+            else float(sigma_sqr)
+        )
 
         (
             (m_pred_bar, P_pred_sqr_bar),
@@ -677,11 +659,7 @@ def ekf1_sqr_loop_preconditioned_dynamic(
             t=t,
         )
 
-        log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
-        v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
-        maha = v @ v
-        obs_dim = mz.shape[0]
-        log_likelihood += -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
+        log_likelihood += _log_likelihood_contrib(mz, Pz_sqr)
 
         m_pred_seq_bar.append(m_pred_bar)
         P_pred_seq_sqr_bar.append(P_pred_sqr_bar)
@@ -778,6 +756,55 @@ def _log_likelihood_contrib(mz: Array, Pz_sqr: Array) -> float:
     maha = v @ v
     obs_dim = mz.shape[0]
     return -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
+
+
+def _calibrate_diffusion(
+    calibration: str,
+    mz_ode: Array,
+    H_ode: Array,
+    E1: Array,
+    Q_full: Array,
+    Q_sqr: Array,
+    prior: BasePrior,
+    min_sigma_sqr: float,
+) -> tuple[Array, Array]:
+    """Per-step diffusion calibration for the ``dynamic`` / ``diagonal`` /
+    ``diagonal_ekf0`` / ``none`` modes.
+
+    Shared by every fixed-grid loop variant (plain and preconditioned; the
+    preconditioned callers pass the bar-space ``E1`` / ``H_ode`` / ``Q``). The
+    ``cumulative`` mode of the adaptive loop is *not* handled here -- it
+    post-multiplies the carried covariance and lives in its own step body.
+
+    Args:
+        calibration: One of ``"dynamic"``, ``"diagonal"``, ``"diagonal_ekf0"``,
+            ``"none"``.
+        mz_ode: ODE-defect innovation mean (``mz[:d_ode]``).
+        H_ode: ODE-defect rows of the (effective) observation Jacobian.
+        E1: First-derivative selection matrix (used by ``"diagonal_ekf0"``).
+        Q_full: Process-noise covariance ``Q(h)`` (dense; for the diagonal
+            denominator).
+        Q_sqr: Square-root process noise ``Q(h)_sqr`` (scaled by the diffusion).
+        prior: Prior, for ``apply_state_sigma_sqr``.
+        min_sigma_sqr: Lower bound on the estimate.
+
+    Returns:
+        ``(sigma_sqr, Q_step_sqr)``: ``sigma_sqr`` is a length-``d_ode`` vector in
+        the diagonal modes and a scalar otherwise; ``Q_step_sqr`` is the (possibly
+        scaled) square-root process noise to propagate.
+    """
+    if calibration in ("diagonal", "diagonal_ekf0"):
+        H_for_calib = E1 if calibration == "diagonal_ekf0" else H_ode
+        denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_full, H_for_calib)
+        sigma_sqr = np.maximum(mz_ode**2 / denom, min_sigma_sqr)
+        return sigma_sqr, prior.apply_state_sigma_sqr(Q_sqr, sigma_sqr)
+
+    sigma_scalar = np.maximum(
+        quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode, Q_sqr), min_sigma_sqr
+    )
+    if calibration == "dynamic":
+        return sigma_scalar, prior.apply_state_sigma_sqr(Q_sqr, sigma_scalar)
+    return sigma_scalar, Q_sqr  # "none"
 
 
 SeqLoopResult = tuple[
@@ -1428,7 +1455,6 @@ def _ekf1_sqr_loop_dynamic_obs_scan(
     Q_h_sqr = np.linalg.cholesky(Q_h).T
     E1 = prior.E1
     d_ode = measure.ode_dim
-    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
 
     H_obs = obs_model.H
     R_obs_sqr = obs_model.R_sqr
@@ -1450,20 +1476,9 @@ def _ekf1_sqr_loop_dynamic_obs_scan(
         H_ode = H_t[:d_ode]
         mz_ode_prov = mz_pred[:d_ode]
 
-        if is_diagonal:
-            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_ode
-            denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_h, H_for_calib)
-            sigma_sqr = mz_ode_prov**2 / denom  # shape (d_ode,)
-            sigma_sqr = np.maximum(sigma_sqr, min_sigma_sqr)
-            Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_sqr)
-        else:
-            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode_prov, H_ode, Q_h_sqr)
-            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
-            sigma_sqr = sigma_scalar  # scalar
-            if calibration == "dynamic":
-                Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_scalar)
-            else:  # "none"
-                Q_step_sqr = Q_h_sqr
+        sigma_sqr, Q_step_sqr = _calibrate_diffusion(
+            calibration, mz_ode_prov, H_ode, E1, Q_h, Q_h_sqr, prior, min_sigma_sqr
+        )
 
         (
             (m_pred, P_pred_sqr),
@@ -1665,20 +1680,9 @@ def ekf1_sqr_loop_dynamic_scan(
         H_ode = H_t[:d_ode]
         mz_ode = mz_pred[:d_ode]
 
-        if is_diagonal:
-            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_ode
-            denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_h, H_for_calib)
-            sigma_sqr = mz_ode**2 / denom  # shape (d_ode,)
-            sigma_sqr = np.maximum(sigma_sqr, min_sigma_sqr)
-            Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_sqr)
-        else:
-            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode, Q_h_sqr)
-            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
-            sigma_sqr = sigma_scalar  # scalar
-            if calibration == "dynamic":
-                Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_scalar)
-            else:  # "none"
-                Q_step_sqr = Q_h_sqr
+        sigma_sqr, Q_step_sqr = _calibrate_diffusion(
+            calibration, mz_ode, H_ode, E1, Q_h, Q_h_sqr, prior, min_sigma_sqr
+        )
 
         (
             (m_pred, P_pred_sqr),
@@ -1845,21 +1849,17 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
         H_ode_bar = H_t_bar[:d_ode]
         mz_ode = mz_pred[:d_ode]
 
-        if is_diagonal:
-            E1_bar = E1 @ T_h
-            H_for_calib = E1_bar if calibration == "diagonal_ekf0" else H_ode_bar
-            denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_bar_full, H_for_calib)
-            sigma_sqr = mz_ode**2 / denom
-            sigma_sqr = np.maximum(sigma_sqr, min_sigma_sqr)
-            Q_step_sqr_bar = prior.apply_state_sigma_sqr(Q_sqr_bar, sigma_sqr)
-        else:
-            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode_bar, Q_sqr_bar)
-            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
-            sigma_sqr = sigma_scalar
-            if calibration == "dynamic":
-                Q_step_sqr_bar = prior.apply_state_sigma_sqr(Q_sqr_bar, sigma_scalar)
-            else:  # "none"
-                Q_step_sqr_bar = Q_sqr_bar
+        E1_bar = E1 @ T_h
+        sigma_sqr, Q_step_sqr_bar = _calibrate_diffusion(
+            calibration,
+            mz_ode,
+            H_ode_bar,
+            E1_bar,
+            Q_bar_full,
+            Q_sqr_bar,
+            prior,
+            min_sigma_sqr,
+        )
 
         (
             (m_pred_bar, P_pred_sqr_bar),

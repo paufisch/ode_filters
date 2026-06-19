@@ -96,7 +96,7 @@ from ..measurement.measurement_models import (
 )
 from ..priors.gmp_priors import BasePrior
 from .adaptive_controller import PIController, StepSizeController
-from .ode_filter_loop import _check_state_xi_diagonal
+from .ode_filter_loop import _check_state_xi_diagonal, _log_likelihood_contrib
 from .ode_filter_step import ekf1_sqr_filter_step
 
 CalibrationMode = Literal["dynamic", "cumulative", "diagonal", "diagonal_ekf0", "none"]
@@ -285,11 +285,7 @@ def _make_step_body(
         err = _local_error_norm(D, m_value, atol, rtol)
 
         # Per-step log-likelihood (reflects whatever scaling was applied).
-        log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
-        v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
-        maha = v @ v
-        obs_dim = mz.shape[0]
-        loglik_step = -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
+        loglik_step = _log_likelihood_contrib(mz, Pz_sqr)
 
         return (
             m_pred,
@@ -670,13 +666,6 @@ def _controller_coeffs(
     )
 
 
-def _gaussian_loglik(mz: Array, Pz_sqr: Array) -> Array:
-    """Gaussian log-density of observing 0 under ``N(mz, Pz_sqr.T @ Pz_sqr)``."""
-    log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
-    v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
-    return -0.5 * (mz.shape[0] * np.log(2.0 * np.pi) + log_det + v @ v)
-
-
 def ekf1_sqr_adaptive_solve(
     mu_0: Array,
     Sigma_0_sqr: Array,
@@ -845,7 +834,9 @@ def ekf1_sqr_adaptive_solve(
             )
             m = np.where(obs_active, m_obs, m)
             P_sqr = np.where(obs_active, P_obs_sqr, P_sqr)
-            ll = ll + np.where(obs_active, _gaussian_loglik(mz_obs, Pz_obs_sqr), 0.0)
+            ll = ll + np.where(
+                obs_active, _log_likelihood_contrib(mz_obs, Pz_obs_sqr), 0.0
+            )
             return (t, m, P_sqr, h, ll, err_prev), (m, P_sqr)
 
         final, (m_seq, P_seq_sqr) = jax.lax.scan(
