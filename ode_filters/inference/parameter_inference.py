@@ -81,9 +81,9 @@ def marginal_loglik(theta: Any, data: ObsModel, *, model: InferenceProblem) -> A
     Raises:
         ValueError: If ``data`` is ``None`` (observations are required).
     """
-    # Imported lazily to avoid an import cycle: the filter loop depends on the
+    # Imported lazily to avoid an import cycle: the filter depends on the
     # low-level inference primitives in this package.
-    from ..filters.ode_filter_loop import ekf1_sqr_loop_dynamic_scan
+    from ..filters.gaussian_filter import gaussian_filter
 
     if data is None:
         raise ValueError(
@@ -94,7 +94,7 @@ def marginal_loglik(theta: Any, data: ObsModel, *, model: InferenceProblem) -> A
     # Resolve any unconstrained-parameter wrappers (identity on plain arrays).
     theta = unwrap(theta)
     mu_0, Sigma_0_sqr, measure = model.build(theta)
-    result = ekf1_sqr_loop_dynamic_scan(
+    result = gaussian_filter(
         mu_0,
         Sigma_0_sqr,
         model.prior,
@@ -106,6 +106,4 @@ def marginal_loglik(theta: Any, data: ObsModel, *, model: InferenceProblem) -> A
         obs_model=data,
         correction=model.correction,
     )
-    # obs branch returns (..., log_likelihood_ode, log_likelihood_obs).
-    *_, _ll_ode, ll_obs = result
-    return ll_obs
+    return result.log_likelihood_obs

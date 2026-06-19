@@ -7,6 +7,12 @@ from .correction import (
     IteratedTaylorCorrection,
     TaylorCorrection,
 )
+from .gaussian_filter import (
+    FilterResult,
+    gaussian_filter,
+    gaussian_filter_adaptive,
+    rts_smoother,
+)
 from .ode_filter_adaptive import (
     AdaptiveLoopResult,
     AdaptiveSolveResult,
@@ -43,6 +49,7 @@ __all__ = [
     "AdaptiveSolveResult",
     "Correction",
     "CorrectionResult",
+    "FilterResult",
     "IteratedTaylorCorrection",
     "PController",
     "PIController",
@@ -66,6 +73,9 @@ __all__ = [
     "ekf1_sqr_loop_preconditioned_sequential_scan",
     "ekf1_sqr_loop_sequential",
     "ekf1_sqr_loop_sequential_scan",
+    "gaussian_filter",
+    "gaussian_filter_adaptive",
+    "rts_smoother",
     "rts_sqr_smoother_loop",
     "rts_sqr_smoother_loop_preconditioned",
     "rts_sqr_smoother_step",
