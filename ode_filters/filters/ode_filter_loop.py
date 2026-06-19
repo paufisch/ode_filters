@@ -376,24 +376,26 @@ def rts_sqr_smoother_loop(
     Returns:
         Tuple of smoothed state means and covariances (square-root form).
     """
+    del N  # the number of steps is inferred from the backward sequences
+    # Accept either stacked arrays or the Python lists the non-scan loops return.
+    G_back_seq = np.asarray(G_back_seq)
+    d_back_seq = np.asarray(d_back_seq)
+    P_back_seq_sqr = np.asarray(P_back_seq_sqr)
 
-    state_dim = m_N.shape[0]
-    m_smooth = np.zeros((N + 1, state_dim))
-    P_smooth_sqr = np.zeros((N + 1, state_dim, state_dim))
-    m_smooth = m_smooth.at[-1].set(m_N)
-    P_smooth_sqr = P_smooth_sqr.at[-1].set(P_N_sqr)
+    def step(carry, inputs):
+        m_next, P_next_sqr = carry
+        G_back, d_back, P_back_sqr = inputs
+        m_j, P_j = rts_sqr_smoother_step(G_back, d_back, P_back_sqr, m_next, P_next_sqr)
+        return (m_j, P_j), (m_j, P_j)
 
-    for j in range(N - 1, -1, -1):
-        m_j, P_j = rts_sqr_smoother_step(
-            G_back_seq[j],
-            d_back_seq[j],
-            P_back_seq_sqr[j],
-            m_smooth[j + 1],
-            P_smooth_sqr[j + 1],
-        )
-        m_smooth = m_smooth.at[j].set(m_j)
-        P_smooth_sqr = P_smooth_sqr.at[j].set(P_j)
-
+    _, (m_rev, P_rev) = jax.lax.scan(
+        step,
+        (m_N, P_N_sqr),
+        (G_back_seq, d_back_seq, P_back_seq_sqr),
+        reverse=True,
+    )
+    m_smooth = np.concatenate([m_rev, m_N[None]], axis=0)
+    P_smooth_sqr = np.concatenate([P_rev, P_N_sqr[None]], axis=0)
     return m_smooth, P_smooth_sqr
 
 
@@ -739,32 +741,28 @@ def rts_sqr_smoother_loop_preconditioned(
     Returns:
         Smoothed state means and covariances (square-root form, original space).
     """
+    del N  # the number of steps is inferred from the backward sequences
+    # Accept either stacked arrays or the Python lists the non-scan loops return.
+    G_back_seq_bar = np.asarray(G_back_seq_bar)
+    d_back_seq_bar = np.asarray(d_back_seq_bar)
+    P_back_seq_sqr_bar = np.asarray(P_back_seq_sqr_bar)
 
-    state_dim = m_N.shape[0]
-
-    m_smooth = np.zeros((N + 1, state_dim))
-    P_smooth_sqr = np.zeros((N + 1, state_dim, state_dim))
-    m_smooth = m_smooth.at[-1].set(m_N)
-    P_smooth_sqr = P_smooth_sqr.at[-1].set(P_N_sqr)
-    m_smooth_bar = np.zeros((N + 1, state_dim))
-    P_smooth_sqr_bar = np.zeros((N + 1, state_dim, state_dim))
-    m_smooth_bar = m_smooth_bar.at[-1].set(m_N_bar)
-    P_smooth_sqr_bar = P_smooth_sqr_bar.at[-1].set(P_N_sqr_bar)
-
-    for j in range(N - 1, -1, -1):
+    def step(carry, inputs):
+        m_bar_next, P_bar_next_sqr = carry  # the smoother recursion is in bar space
+        G_back_bar, d_back_bar, P_back_sqr_bar = inputs
         (m_bar_j, P_bar_j), (m_j, P_j) = rts_sqr_smoother_step_preconditioned(
-            G_back_seq_bar[j],
-            d_back_seq_bar[j],
-            P_back_seq_sqr_bar[j],
-            m_smooth_bar[j + 1],
-            P_smooth_sqr_bar[j + 1],
-            T_h,
+            G_back_bar, d_back_bar, P_back_sqr_bar, m_bar_next, P_bar_next_sqr, T_h
         )
-        m_smooth_bar = m_smooth_bar.at[j].set(m_bar_j)
-        P_smooth_sqr_bar = P_smooth_sqr_bar.at[j].set(P_bar_j)
-        m_smooth = m_smooth.at[j].set(m_j)
-        P_smooth_sqr = P_smooth_sqr.at[j].set(P_j)
+        return (m_bar_j, P_bar_j), (m_j, P_j)
 
+    _, (m_rev, P_rev) = jax.lax.scan(
+        step,
+        (m_N_bar, P_N_sqr_bar),
+        (G_back_seq_bar, d_back_seq_bar, P_back_seq_sqr_bar),
+        reverse=True,
+    )
+    m_smooth = np.concatenate([m_rev, m_N[None]], axis=0)
+    P_smooth_sqr = np.concatenate([P_rev, P_N_sqr[None]], axis=0)
     return m_smooth, P_smooth_sqr
 
 
