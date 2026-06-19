@@ -19,10 +19,6 @@ Shipped schemes:
   nonlinear problems. (The whole-trajectory iterated *smoother*, IEKS, is a separate
   outer-loop construct and is not a Correction.)
 
-Each ``correct`` accepts ``fixed=`` to switch between the full measurement
-linearization (``measure.linearize``; includes time-varying observations, not
-scan-safe) and the fixed ODE+conservation linearization (``measure.linearize_fixed``;
-scan-safe). The sequential/observation loops use ``fixed=True`` for the ODE update.
 All schemes reuse the existing square-root algebra; this module adds no new numerics.
 """
 
@@ -65,18 +61,14 @@ class CorrectionResult(NamedTuple):
 
 
 def _linearize(
-    measure: BaseODEInformation, state: Array, *, t: float, fixed: bool, order: int
+    measure: BaseODEInformation, state: Array, *, t: float, order: int
 ) -> tuple[Array, Array]:
     """Effective affine measurement model ``(H, c)`` with ``H x + c ~= g(x)``.
 
-    ``fixed`` selects the scan-safe ODE+conservation linearization
-    (``linearize_fixed``) vs. the full one (``linearize``). ``order=0`` drops the
-    vector-field Jacobian on the ODE-defect rows (EK0); ``order=1`` keeps it (EK1).
+    ``order=0`` drops the vector-field Jacobian on the ODE-defect rows (EK0);
+    ``order=1`` keeps it (EK1).
     """
-    if fixed:
-        H, c = measure.linearize_fixed(state, t=t)
-    else:
-        H, c = measure.linearize(state, t=t)
+    H, c = measure.linearize(state, t=t)
     if order == 0:
         g = c + H @ state  # reconstruct the residual g(state)
         d = measure.ode_dim
@@ -94,8 +86,8 @@ def _affine_correct(
     return m_new, P_new_sqr, mz, Pz_sqr
 
 
-def _noise(measure: BaseODEInformation, t: float, fixed: bool) -> Array:
-    return measure.get_fixed_noise_sqr() if fixed else measure.get_noise(t=t)
+def _noise(measure: BaseODEInformation, t: float) -> Array:
+    return measure.get_noise(t=t)
 
 
 class Correction(eqx.Module):
@@ -114,7 +106,6 @@ class Correction(eqx.Module):
         P_pred_sqr: Array,
         *,
         t: float = 0.0,
-        fixed: bool = False,
     ) -> CorrectionResult:
         """Update a predicted Gaussian with the measurement model at time ``t``.
 
@@ -123,9 +114,6 @@ class Correction(eqx.Module):
             m_pred: Predicted (prior) state mean.
             P_pred_sqr: Predicted state covariance, square-root form.
             t: Current time.
-            fixed: Use the scan-safe ODE+conservation linearization
-                (``linearize_fixed``) rather than the full ``linearize`` (which
-                includes time-varying observations). Set by the sequential/obs loops.
         """
         raise NotImplementedError
 
@@ -148,11 +136,9 @@ class TaylorCorrection(Correction):
                 f"got {self.order!r}."
             )
 
-    def correct(
-        self, measure, m_pred, P_pred_sqr, *, t=0.0, fixed=False
-    ) -> CorrectionResult:
-        H, c = _linearize(measure, m_pred, t=t, fixed=fixed, order=self.order)
-        R_sqr = _noise(measure, t, fixed)
+    def correct(self, measure, m_pred, P_pred_sqr, *, t=0.0) -> CorrectionResult:
+        H, c = _linearize(measure, m_pred, t=t, order=self.order)
+        R_sqr = _noise(measure, t)
         m, P_sqr, mz, Pz_sqr = _affine_correct(H, c, R_sqr, m_pred, P_pred_sqr)
         d = measure.ode_dim
         return CorrectionResult(m, P_sqr, mz, Pz_sqr, mz[:d], H[:d])
@@ -177,13 +163,11 @@ class IteratedTaylorCorrection(Correction):
         if self.max_iters < 1:
             raise ValueError(f"max_iters must be >= 1, got {self.max_iters!r}.")
 
-    def correct(
-        self, measure, m_pred, P_pred_sqr, *, t=0.0, fixed=False
-    ) -> CorrectionResult:
-        R_sqr = _noise(measure, t, fixed)
+    def correct(self, measure, m_pred, P_pred_sqr, *, t=0.0) -> CorrectionResult:
+        R_sqr = _noise(measure, t)
 
         def update_from(m_lin):
-            H, c = _linearize(measure, m_lin, t=t, fixed=fixed, order=1)
+            H, c = _linearize(measure, m_lin, t=t, order=1)
             m, P_sqr, mz, Pz_sqr = _affine_correct(H, c, R_sqr, m_pred, P_pred_sqr)
             return m, P_sqr, mz, Pz_sqr, H
 

@@ -265,7 +265,7 @@ def ekf1_sqr_filter_step_sequential_scan(
     )
 
     # ODE + Conservation update (linearized by the chosen correction)
-    res_ode = correction.correct(measure, m_pred, P_pred_sqr, t=t, fixed=True)
+    res_ode = correction.correct(measure, m_pred, P_pred_sqr, t=t)
     mz_ode, Pz_ode_sqr = res_ode.mz, res_ode.Pz_sqr
     m_ode, P_ode_sqr = res_ode.m, res_ode.P_sqr
 

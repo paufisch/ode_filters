@@ -422,20 +422,6 @@ def test_iekf_is_jittable():
     assert np.all(np.isfinite(res.m))
 
 
-def test_fixed_path_matches_raw_linearize_fixed():
-    prior, measure, m0, P0_sqr = _decay_ode()
-    m_pred, P_pred_sqr = _predict(prior, m0, P0_sqr)
-    res = TaylorCorrection(order=1).correct(
-        measure, m_pred, P_pred_sqr, t=T_EVAL, fixed=True
-    )
-    H, c = measure.linearize_fixed(m_pred, t=T_EVAL)
-    R_sqr = measure.get_fixed_noise_sqr()
-    mz, Pz_sqr = sqr_marginalization(H, c, R_sqr, m_pred, P_pred_sqr)
-    _, m_t, P_t_sqr = sqr_inversion(H, m_pred, P_pred_sqr, mz, Pz_sqr, R_sqr)
-    assert np.allclose(res.m, m_t, atol=1e-12)
-    assert np.allclose(_cov(res.P_sqr), _cov(P_t_sqr), atol=1e-12)
-
-
 def test_loop_correction_with_obs_model_works():
     """correction= now composes with obs_model (Slice 4): EK1 == default, and
     EK0 / IEKF run and stay finite through the observation loop."""

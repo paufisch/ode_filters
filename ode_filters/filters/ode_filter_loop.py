@@ -283,7 +283,7 @@ def _ekf1_sqr_loop_dynamic_obs_scan(
         obs_active = mask_i.any()
 
         m_pred_prov = A_h @ m_prev + b_h
-        H_t, c_t = measure.linearize_fixed(m_pred_prov, t=t_i)
+        H_t, c_t = measure.linearize(m_pred_prov, t=t_i)
         mz_pred = H_t @ m_pred_prov + c_t
 
         # Calibration uses only the ODE-defect rows of the residual
@@ -406,9 +406,7 @@ def ekf1_sqr_loop_dynamic_scan(
         mu_0: Initial state mean.
         Sigma_0_sqr: Initial state covariance (square-root form).
         prior: Prior (e.g. ``IWP``).
-        measure: Measurement model (ODE + Conservation only when
-            *obs_model* is given; bundle no :class:`Measurement`
-            constraints -- their time matching is not scan-compatible).
+        measure: Measurement model (ODE + Conservation only).
         tspan: Time interval ``(t_start, t_end)``.
         N: Number of filter steps.
         calibration: ``"dynamic"`` (default), ``"diagonal"``,

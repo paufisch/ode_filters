@@ -1,4 +1,4 @@
-"""Tests for ODEmeasurement and ODE information classes."""
+"""Tests for ODE information classes and constraint dataclasses."""
 
 import jax.numpy as np
 import pytest
@@ -8,7 +8,6 @@ from ode_filters.measurement.measurement_models import (
     Measurement,
     ODEInformation,
     ODEInformationWithHidden,
-    ODEmeasurement,
     SecondOrderODEInformationWithHidden,
 )
 
@@ -20,170 +19,6 @@ def make_projection_matrices(d: int, q: int):
     E0 = np.kron(basis[0:1], eye_d)
     E1 = np.kron(basis[1:2], eye_d)
     return E0, E1
-
-
-class TestODEmeasurementConstruction:
-    """Tests for ODEmeasurement constructor."""
-
-    def test_basic_construction(self):
-        """Test basic construction of ODEmeasurement."""
-
-        def vf(x, *, t):
-            return x
-
-        E0, E1 = make_projection_matrices(d=1, q=1)
-        A = np.array([[1.0]])
-        z = np.array([[0.5], [0.8]])
-        z_t = np.array([0.5, 1.0])
-
-        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
-        # Model now uses constraints internally
-        assert len(model._constraints) == 1
-        assert isinstance(model._constraints[0], Measurement)
-
-    def test_rejects_invalid_A_shape(self):
-        """Test that invalid A shape raises error."""
-
-        def vf(x, *, t):
-            return x
-
-        E0, E1 = make_projection_matrices(d=1, q=1)
-        A = np.array([1.0])  # 1D instead of 2D
-        z = np.array([[0.5]])
-        z_t = np.array([0.5])
-
-        with pytest.raises(ValueError, match="must be 2D"):
-            ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
-
-    def test_rejects_mismatched_z_shape(self):
-        """Test that mismatched z shape raises error."""
-
-        def vf(x, *, t):
-            return x
-
-        E0, E1 = make_projection_matrices(d=1, q=1)
-        A = np.array([[1.0]])  # k=1
-        z = np.array([[0.5, 0.3]])  # Shape (1, 2) but should be (n, k)=(n, 1)
-        z_t = np.array([0.5])
-
-        with pytest.raises(ValueError, match="must be 2D"):
-            ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
-
-    def test_rejects_mismatched_z_t_length(self):
-        """Test that mismatched z_t length raises error."""
-
-        def vf(x, *, t):
-            return x
-
-        E0, E1 = make_projection_matrices(d=1, q=1)
-        A = np.array([[1.0]])
-        z = np.array([[0.5], [0.8]])  # 2 measurements
-        z_t = np.array([0.5])  # Only 1 time
-
-        with pytest.raises(ValueError, match="must match"):
-            ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
-
-    def test_accepts_2d_z_t(self):
-        """Test that 2D z_t with shape (n, 1) is accepted."""
-
-        def vf(x, *, t):
-            return x
-
-        E0, E1 = make_projection_matrices(d=1, q=1)
-        A = np.array([[1.0]])
-        z = np.array([[0.5]])
-        z_t = np.array([[0.5]])  # Shape (1, 1)
-
-        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
-        # Should work without raising an error
-        assert len(model._constraints) == 1
-
-    def test_rejects_invalid_2d_z_t(self):
-        """Test that 2D z_t with shape (n, k) where k > 1 raises error."""
-
-        def vf(x, *, t):
-            return x
-
-        E0, E1 = make_projection_matrices(d=1, q=1)
-        A = np.array([[1.0]])
-        z = np.array([[0.5]])
-        z_t = np.array([[0.5, 0.6]])  # Shape (1, 2) - invalid
-
-        with pytest.raises(ValueError, match="must be 1D shape"):
-            ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
-
-
-class TestODEmeasurementMethods:
-    """Tests for ODEmeasurement methods."""
-
-    @pytest.fixture
-    def measurement_model(self):
-        """Create a standard ODEmeasurement for testing."""
-
-        def vf(x, *, t):
-            return -x  # Simple decay
-
-        E0, E1 = make_projection_matrices(d=1, q=1)
-        A = np.array([[1.0]])  # Direct observation
-        z = np.array([[0.5], [0.8], [0.3]])  # 3 measurements
-        z_t = np.array([0.5, 1.0, 1.5])  # Measurement times
-
-        return ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
-
-    def test_g_without_measurement(self, measurement_model):
-        """Test g at time without measurement."""
-        state = np.array([1.0, 0.5])
-        result = measurement_model.g(state, t=0.0)  # No measurement at t=0
-
-        # Should only have ODE info (dimension d=1)
-        assert result.shape == (1,)
-
-    def test_g_with_measurement(self, measurement_model):
-        """Test g at time with measurement."""
-        state = np.array([1.0, 0.5])
-        result = measurement_model.g(state, t=0.5)  # Measurement at t=0.5
-
-        # Should have ODE + measurement info (d + k = 1 + 1 = 2)
-        assert result.shape == (2,)
-
-    def test_g_measurement_residual_correct(self, measurement_model):
-        """Test that measurement residual is computed correctly."""
-        state = np.array([0.5, -0.5])  # x=0.5, x'=-0.5 (consistent with vf)
-        result = measurement_model.g(state, t=0.5)
-
-        # ODE residual: x' - (-x) = -0.5 + 0.5 = 0
-        # Measurement residual: A @ E0 @ state - z = 0.5 - 0.5 = 0
-        assert np.allclose(result, np.zeros(2), atol=1e-6)
-
-    def test_jacobian_g_without_measurement(self, measurement_model):
-        """Test jacobian_g at time without measurement."""
-        state = np.array([1.0, 0.5])
-        jacobian = measurement_model.jacobian_g(state, t=0.0)
-
-        # Shape: (d, (q+1)*d) = (1, 2)
-        assert jacobian.shape == (1, 2)
-
-    def test_jacobian_g_with_measurement(self, measurement_model):
-        """Test jacobian_g at time with measurement."""
-        state = np.array([1.0, 0.5])
-        jacobian = measurement_model.jacobian_g(state, t=0.5)
-
-        # Shape: (d + k, (q+1)*d) = (2, 2)
-        assert jacobian.shape == (2, 2)
-
-    def test_get_noise_without_measurement(self, measurement_model):
-        """Test get_noise at time without measurement."""
-        R = measurement_model.get_noise(t=0.0)
-
-        # Shape: (d, d) = (1, 1)
-        assert R.shape == (1, 1)
-
-    def test_get_noise_with_measurement(self, measurement_model):
-        """Test get_noise at time with measurement."""
-        R = measurement_model.get_noise(t=0.5)
-
-        # Shape: (d + k, d + k) = (2, 2)
-        assert R.shape == (2, 2)
 
 
 class TestODEInformationLinearize:
@@ -366,48 +201,6 @@ class TestNoisePropertyAndSetters:
             model.R = np.array([[[0.1]]])
 
 
-class TestMeasurementNoiseDefaults:
-    """Tests for default measurement noise in ODEmeasurement."""
-
-    def test_default_measurement_noise_is_nonzero(self):
-        """Test that default measurement noise is non-zero."""
-
-        def vf(x, *, t):
-            return x
-
-        E0, E1 = make_projection_matrices(d=1, q=1)
-        A = np.array([[1.0]])
-        z = np.array([[0.5]])
-        z_t = np.array([0.5])
-
-        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
-
-        R_sqr = model.get_noise(t=0.5)
-        R_meas = R_sqr.T @ R_sqr
-        # ODE part (1x1) should be ~zero, measurement part should be non-zero
-        assert R_meas[0, 0] == pytest.approx(0.0, abs=1e-20)  # ODE noise
-        assert R_meas[1, 1] == pytest.approx(1e-6)  # Default measurement noise
-
-    def test_custom_measurement_noise_at_construction(self):
-        """Test custom measurement noise at construction."""
-
-        def vf(x, *, t):
-            return x
-
-        E0, E1 = make_projection_matrices(d=1, q=1)
-        A = np.array([[1.0]])
-        z = np.array([[0.5]])
-        z_t = np.array([0.5])
-
-        model = ODEmeasurement(
-            vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t, measurement_noise=0.01
-        )
-
-        R_sqr = model.get_noise(t=0.5)
-        R_meas = R_sqr.T @ R_sqr
-        assert R_meas[1, 1] == pytest.approx(0.01)
-
-
 class TestMeasurementDataclass:
     """Tests for the Measurement dataclass."""
 
@@ -481,8 +274,8 @@ class TestConservationDataclass:
 class TestComposableConstraints:
     """Tests for composing constraints directly."""
 
-    def test_ode_with_multiple_constraints(self):
-        """Test ODEInformation with both conservation and measurement."""
+    def test_ode_with_conservation_constraint(self):
+        """Test ODEInformation with a conservation constraint."""
 
         def vf(x, *, t):
             return -x
@@ -492,65 +285,16 @@ class TestComposableConstraints:
             A=np.array([[1.0, 1.0]]),  # x1 + x2 = const
             p=np.array([2.0]),
         )
-        measurement = Measurement(
-            A=np.array([[1.0, 0.0]]),  # observe x1
-            z=np.array([[0.5]]),
-            z_t=np.array([0.5]),
-            noise=0.01,
-        )
 
-        model = ODEInformation(vf, E0, E1, constraints=[conservation, measurement])
+        model = ODEInformation(vf, E0, E1, constraints=[conservation])
 
-        # At t=0 (no measurement): ODE (2) + conservation (1) = 3
+        # ODE (2) + conservation (1) = 3, independent of time
         state = np.array([1.0, 1.0, -1.0, -1.0])
         g_t0 = model.g(state, t=0.0)
         assert g_t0.shape == (3,)
 
-        # At t=0.5 (with measurement): ODE (2) + conservation (1) + measurement (1) = 4
         g_t05 = model.g(state, t=0.5)
-        assert g_t05.shape == (4,)
-
-
-class TestMultiDimensionalMeasurement:
-    """Tests for multi-dimensional measurement scenarios."""
-
-    def test_2d_state_with_measurements(self):
-        """Test ODEmeasurement with 2D state."""
-
-        def vf(x, *, t):
-            return -x
-
-        E0, E1 = make_projection_matrices(d=2, q=1)
-        A = np.array([[1.0, 0.0], [0.0, 1.0]])  # Full state observation
-        z = np.array([[0.5, 0.3]])
-        z_t = np.array([1.0])
-
-        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
-
-        state = np.array([1.0, 0.5, 0.8, 0.2])
-        result = model.g(state, t=1.0)
-
-        # d + k = 2 + 2 = 4
-        assert result.shape == (4,)
-
-    def test_partial_observation(self):
-        """Test ODEmeasurement with partial observation."""
-
-        def vf(x, *, t):
-            return -x
-
-        E0, E1 = make_projection_matrices(d=2, q=1)
-        A = np.array([[1.0, 0.0]])  # Observe only first component
-        z = np.array([[0.5]])
-        z_t = np.array([1.0])
-
-        model = ODEmeasurement(vf=vf, E0=E0, E1=E1, A=A, z=z, z_t=z_t)
-
-        state = np.array([1.0, 0.5, 0.8, 0.2])
-        result = model.g(state, t=1.0)
-
-        # d + k = 2 + 1 = 3
-        assert result.shape == (3,)
+        assert g_t05.shape == (3,)
 
 
 class TestHiddenStates:
@@ -663,44 +407,6 @@ class TestHiddenStates:
         g_val = model.g(state, t=0.0)
         assert g_val.shape == (1,)
         assert np.allclose(g_val, np.zeros(1), atol=1e-6)
-
-    def test_hidden_with_measurement_constraint(self):
-        """Test hidden states combined with measurement constraints."""
-
-        def vf(x, u, *, t):
-            return -u * x
-
-        d_x, d_u, q = 1, 1, 1
-        D = (q + 1) * (d_x + d_u)
-
-        E0 = np.zeros((d_x, D))
-        E0 = E0.at[0, 0].set(1.0)
-        E1 = np.zeros((d_x, D))
-        E1 = E1.at[0, 1].set(1.0)
-        E0_hidden = np.zeros((d_u, D))
-        E0_hidden = E0_hidden.at[0, 2].set(1.0)
-
-        # Measurement constraint on x
-        measurement = Measurement(
-            A=np.array([[1.0]]),
-            z=np.array([[0.5]]),
-            z_t=np.array([0.5]),
-            noise=0.01,
-        )
-
-        model = ODEInformationWithHidden(
-            vf, E0, E1, E0_hidden, constraints=[measurement]
-        )
-
-        state = np.array([1.0, -0.5, 0.5, 0.0])
-
-        # At t=0: only ODE constraint (d_x=1)
-        g_t0 = model.g(state, t=0.0)
-        assert g_t0.shape == (1,)
-
-        # At t=0.5: ODE (1) + measurement (1) = 2
-        g_t05 = model.g(state, t=0.5)
-        assert g_t05.shape == (2,)
 
     def test_second_order_hidden_jacobian(self):
         """Test Jacobian computation for second-order with hidden state."""

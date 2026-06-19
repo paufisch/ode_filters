@@ -342,13 +342,19 @@ class BaseODEInformation(ABC):
     _d: int
     _state_dim: int
     _base_R: Array
-    _constraints: list[Conservation | Measurement]
+    _constraints: list[Conservation]
 
     def _init_constraints(
         self,
-        constraints: list[Conservation | Measurement] | None,
+        constraints: list[Conservation] | None,
     ) -> None:
-        """Initialize constraint list and validate."""
+        """Initialize constraint list and validate.
+
+        Only :class:`Conservation` constraints (noiseless, always-on model
+        structure) are accepted. Data observations are *not* part of the
+        measurement model -- pass them as an ``obs_model`` built with
+        :func:`prepare_observations`.
+        """
         self._constraints = constraints or []
         for c in self._constraints:
             if isinstance(c, Conservation):
@@ -359,45 +365,29 @@ class BaseODEInformation(ABC):
                         f"Conservation A.shape[1] ({c.A.shape[1]}) must match "
                         f"{label} dimension ({expected})."
                     )
-            if isinstance(c, Measurement):
-                expected = self._state_dim if c.full_state else self._d
-                label = "full state" if c.full_state else "state"
-                if c.A.shape[1] != expected:
-                    raise ValueError(
-                        f"Measurement A.shape[1] ({c.A.shape[1]}) must match "
-                        f"{label} dimension ({expected})."
-                    )
+            elif isinstance(c, Measurement):
+                raise TypeError(
+                    "Measurement is no longer accepted as a measure constraint. "
+                    "Data observations go through obs_model: build it with "
+                    "prepare_observations([Measurement(...)], E0, ts) and pass "
+                    "obs_model= to the solver. `measure` carries only the ODE "
+                    "information and Conservation constraints."
+                )
 
-    def _get_active_constraints(
-        self, t: float
-    ) -> tuple[list[Conservation], list[Measurement]]:
-        """Get constraints active at time t."""
-        conservations = [c for c in self._constraints if isinstance(c, Conservation)]
-        measurements = [
-            c
-            for c in self._constraints
-            if isinstance(c, Measurement) and c.find_index(t) is not None
-        ]
-        return conservations, measurements
+    def _conservations(self) -> list[Conservation]:
+        """Conservation constraints registered on this measure (always active)."""
+        return [c for c in self._constraints if isinstance(c, Conservation)]
 
     def _build_noise_matrix(self, t: float) -> Array:
         """Build combined noise matrix for all active constraints at time t."""
-        conservations, measurements = self._get_active_constraints(t)
+        conservations = self._conservations()
         cons_dim = sum(c.dim for c in conservations)
-        meas_dim = sum(m.dim for m in measurements)
-        total_dim = self._d + cons_dim + meas_dim
+        total_dim = self._d + cons_dim
 
         R = np.zeros((total_dim, total_dim))
         # Base ODE noise (usually zero)
         R = R.at[: self._d, : self._d].set(self._base_R)
         # Conservation noise (zero)
-        # Measurement noise
-        offset = self._d + cons_dim
-        for m in measurements:
-            R = R.at[offset : offset + m.dim, offset : offset + m.dim].set(
-                m.get_noise_matrix()
-            )
-            offset += m.dim
         return R
 
     @property
@@ -426,39 +416,6 @@ class BaseODEInformation(ABC):
         :meth:`_ode_jacobian`). Shape ``[ode_dim, state_dim]``.
         """
         return self._E_constraint
-
-    def measurement_times(self) -> Array:
-        """Sorted, deduplicated list of fixed times where Measurements fire.
-
-        Returned as a 1D numpy array (consumed by the Python adaptive
-        driver, not by the jitted step body). Conservation constraints and
-        nonlinear black-box measurements have no fixed times and contribute
-        nothing here. Returns an empty array if no ``Measurement``
-        constraints are registered, in which case adaptive callers can
-        treat clamping as a no-op.
-
-        Deduplication uses the same tolerances as :meth:`Measurement.find_index`
-        so that two ``Measurement`` constraints scheduled at the "same"
-        time (modulo float drift between numpy/jax linspace) collapse to a
-        single landing point.
-        """
-        meas_arrays = [
-            onp.asarray(c.z_t) for c in self._constraints if isinstance(c, Measurement)
-        ]
-        if not meas_arrays:
-            return onp.empty((0,), dtype=float)
-        all_times = onp.sort(onp.concatenate(meas_arrays))
-        # Collapse near-duplicates within the find_index tolerance.
-        keep = onp.ones(all_times.shape, dtype=bool)
-        for i in range(1, len(all_times)):
-            if onp.isclose(
-                all_times[i],
-                all_times[i - 1],
-                rtol=MEASUREMENT_TIME_RTOL,
-                atol=MEASUREMENT_TIME_ATOL,
-            ):
-                keep[i] = False
-        return all_times[keep]
 
     @property
     def R(self) -> Array:
@@ -522,13 +479,8 @@ class BaseODEInformation(ABC):
         residuals = [self._ode_residual(state_arr, t=t)]
 
         # Constraint residuals
-        conservations, measurements = self._get_active_constraints(t)
-        for c in conservations:
+        for c in self._conservations():
             residuals.append(c.residual(state_arr if c.full_state else x))
-        for m in measurements:
-            res = m.residual(state_arr if m.full_state else x, t)
-            if res is not None:
-                residuals.append(res)
 
         return np.concatenate(residuals) if len(residuals) > 1 else residuals[0]
 
@@ -548,13 +500,8 @@ class BaseODEInformation(ABC):
         jacobians = [self._ode_jacobian(state_arr, t=t)]
 
         # Constraint Jacobians (compose with E0 unless full_state)
-        conservations, measurements = self._get_active_constraints(t)
-        for c in conservations:
+        for c in self._conservations():
             jacobians.append(c.jacobian() if c.full_state else c.jacobian() @ self._E0)
-        for m in measurements:
-            jac = m.jacobian(t)
-            if jac is not None:
-                jacobians.append(jac if m.full_state else jac @ self._E0)
 
         return np.concatenate(jacobians) if len(jacobians) > 1 else jacobians[0]
 
@@ -595,17 +542,9 @@ class BaseODEInformation(ABC):
         residuals = [g_ode]
 
         # Constraints (single iteration)
-        conservations, measurements = self._get_active_constraints(t)
-        for c in conservations:
+        for c in self._conservations():
             jacobians.append(c.jacobian() if c.full_state else c.jacobian() @ self._E0)
             residuals.append(c.residual(state_arr if c.full_state else x))
-        for m in measurements:
-            jac = m.jacobian(t)
-            if jac is not None:
-                jacobians.append(jac if m.full_state else jac @ self._E0)
-                res = m.residual(state_arr if m.full_state else x, t)
-                if res is not None:
-                    residuals.append(res)
 
         H_t = np.concatenate(jacobians) if len(jacobians) > 1 else jacobians[0]
         g_val = np.concatenate(residuals) if len(residuals) > 1 else residuals[0]
@@ -622,70 +561,6 @@ class BaseODEInformation(ABC):
                 f"'state' must have length {self._state_dim}, got {state_arr.shape[0]}."
             )
         return state_arr
-
-    def linearize_fixed(
-        self, state: Array, *, t: float, H_cons: Array | None = None
-    ) -> tuple[Array, Array]:
-        """Linearize ODE + Conservation parts only (fixed shape, no find_index).
-
-        This method computes the Jacobian and residual for the ODE constraint
-        and any Conservation constraints, which have fixed dimensions regardless
-        of time. It does not include Measurement constraints.
-
-        Args:
-            state: State vector to linearize around.
-            t: Current time.
-            H_cons: Pre-computed conservation Jacobian (stacked c.A @ E0).
-                If provided, avoids recomputing the constant conservation
-                Jacobians. Shape [cons_dim, state_dim].
-
-        Returns:
-            Tuple of (H_fixed, c_fixed) where:
-            - H_fixed has shape [fixed_dim, state_dim]
-            - c_fixed has shape [fixed_dim]
-        """
-        state_arr = self._validate_state(state)
-        x = self._E0 @ state_arr
-
-        # ODE Jacobian and residual
-        H_ode = self._ode_jacobian(state_arr, t=t)
-        g_ode = self._ode_residual(state_arr, t=t)
-
-        # Conservation constraints (always active)
-        conservations = [c for c in self._constraints if isinstance(c, Conservation)]
-        if conservations:
-            # Use pre-computed Jacobian if available, otherwise compute
-            if H_cons is None:
-                H_cons = np.concatenate(
-                    [
-                        c.jacobian() if c.full_state else c.jacobian() @ self._E0
-                        for c in conservations
-                    ],
-                    axis=0,
-                )
-            g_cons = np.concatenate(
-                [c.residual(state_arr if c.full_state else x) for c in conservations]
-            )
-            H_fixed = np.concatenate([H_ode, H_cons], axis=0)
-            g_fixed = np.concatenate([g_ode, g_cons])
-        else:
-            H_fixed = H_ode
-            g_fixed = g_ode
-
-        c_fixed = g_fixed - H_fixed @ state_arr
-        return H_fixed, c_fixed
-
-    def get_fixed_noise_sqr(self) -> Array:
-        """Get the square root of noise for fixed observations (ODE + Conservation).
-
-        Returns upper-triangular Cholesky factor L such that L.T @ L approx R_fixed.
-        """
-        conservations = [c for c in self._constraints if isinstance(c, Conservation)]
-        cons_dim = sum(c.dim for c in conservations)
-        fixed_dim = self._d + cons_dim
-        R_fixed = np.zeros((fixed_dim, fixed_dim))
-        R_fixed = R_fixed.at[: self._d, : self._d].set(self._base_R)
-        return _safe_cholesky_sqr(R_fixed, fixed_dim)
 
 
 # =============================================================================
@@ -1021,10 +896,6 @@ class BlackBoxMeasurement:
         """
         return _safe_cholesky_sqr(self._R, self._obs_dim)
 
-    def measurement_times(self) -> Array:
-        """No fixed measurement times (the model is always active)."""
-        return onp.empty((0,), dtype=float)
-
     def linearize(self, state: Array, *, t: float) -> tuple[Array, Array]:
         """Linearize the measurement model around the given state.
 
@@ -1163,13 +1034,6 @@ class TransformedMeasurement:
         """
         return self._base.get_noise(t=t)
 
-    def measurement_times(self) -> Array:
-        """Forward the base model's fixed measurement times, if any."""
-        base_fn = getattr(self._base, "measurement_times", None)
-        if base_fn is None:
-            return onp.empty((0,), dtype=float)
-        return onp.asarray(base_fn())
-
     def linearize(self, state: Array, *, t: float) -> tuple[Array, Array]:
         """Linearize the transformed measurement model.
 
@@ -1240,134 +1104,3 @@ def SecondOrderODEconservation(
         SecondOrderODEInformation with conservation constraint.
     """
     return SecondOrderODEInformation(vf, E0, E1, E2, constraints=[Conservation(A, p)])
-
-
-def ODEmeasurement(
-    vf: Callable,
-    E0: ArrayLike,
-    E1: ArrayLike,
-    A: Array,
-    z: Array,
-    z_t: Array,
-    measurement_noise: float = DEFAULT_MEASUREMENT_NOISE,
-) -> ODEInformation:
-    """Create first-order ODE model with linear measurements.
-
-    Args:
-        vf: Vector field function vf(x, *, t) -> dx/dt.
-        E0: State extraction matrix.
-        E1: Derivative extraction matrix.
-        A: Measurement matrix (shape [k, d]).
-        z: Measurement values (shape [n, k]).
-        z_t: Measurement times (shape [n]).
-        measurement_noise: Measurement noise variance.
-
-    Returns:
-        ODEInformation with measurement constraint.
-    """
-    return ODEInformation(
-        vf, E0, E1, constraints=[Measurement(A, z, z_t, measurement_noise)]
-    )
-
-
-def SecondOrderODEmeasurement(
-    vf: Callable,
-    E0: ArrayLike,
-    E1: ArrayLike,
-    E2: ArrayLike,
-    A: Array,
-    z: Array,
-    z_t: Array,
-    measurement_noise: float = DEFAULT_MEASUREMENT_NOISE,
-) -> SecondOrderODEInformation:
-    """Create second-order ODE model with linear measurements.
-
-    Args:
-        vf: Vector field function vf(x, v, *, t) -> d^2x/dt^2.
-        E0: State extraction matrix.
-        E1: First derivative extraction matrix.
-        E2: Second derivative extraction matrix.
-        A: Measurement matrix (shape [k, d]).
-        z: Measurement values (shape [n, k]).
-        z_t: Measurement times (shape [n]).
-        measurement_noise: Measurement noise variance.
-
-    Returns:
-        SecondOrderODEInformation with measurement constraint.
-    """
-    return SecondOrderODEInformation(
-        vf, E0, E1, E2, constraints=[Measurement(A, z, z_t, measurement_noise)]
-    )
-
-
-def ODEconservationmeasurement(
-    vf: Callable,
-    E0: ArrayLike,
-    E1: ArrayLike,
-    C: Array,
-    p: Array,
-    A: Array,
-    z: Array,
-    z_t: Array,
-    measurement_noise: float = DEFAULT_MEASUREMENT_NOISE,
-) -> ODEInformation:
-    """Create first-order ODE model with conservation and measurements.
-
-    Args:
-        vf: Vector field function vf(x, *, t) -> dx/dt.
-        E0: State extraction matrix.
-        E1: Derivative extraction matrix.
-        C: Conservation constraint matrix (shape [m, d]).
-        p: Conservation target values (shape [m]).
-        A: Measurement matrix (shape [k, d]).
-        z: Measurement values (shape [n, k]).
-        z_t: Measurement times (shape [n]).
-        measurement_noise: Measurement noise variance.
-
-    Returns:
-        ODEInformation with conservation and measurement constraints.
-    """
-    return ODEInformation(
-        vf,
-        E0,
-        E1,
-        constraints=[Conservation(C, p), Measurement(A, z, z_t, measurement_noise)],
-    )
-
-
-def SecondOrderODEconservationmeasurement(
-    vf: Callable,
-    E0: ArrayLike,
-    E1: ArrayLike,
-    E2: ArrayLike,
-    C: Array,
-    p: Array,
-    A: Array,
-    z: Array,
-    z_t: Array,
-    measurement_noise: float = DEFAULT_MEASUREMENT_NOISE,
-) -> SecondOrderODEInformation:
-    """Create second-order ODE model with conservation and measurements.
-
-    Args:
-        vf: Vector field function vf(x, v, *, t) -> d^2x/dt^2.
-        E0: State extraction matrix.
-        E1: First derivative extraction matrix.
-        E2: Second derivative extraction matrix.
-        C: Conservation constraint matrix (shape [m, d]).
-        p: Conservation target values (shape [m]).
-        A: Measurement matrix (shape [k, d]).
-        z: Measurement values (shape [n, k]).
-        z_t: Measurement times (shape [n]).
-        measurement_noise: Measurement noise variance.
-
-    Returns:
-        SecondOrderODEInformation with conservation and measurement constraints.
-    """
-    return SecondOrderODEInformation(
-        vf,
-        E0,
-        E1,
-        E2,
-        constraints=[Conservation(C, p), Measurement(A, z, z_t, measurement_noise)],
-    )

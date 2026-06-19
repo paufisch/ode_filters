@@ -204,17 +204,3 @@ def test_obs_model_wrong_length_raises():
         ekf1_sqr_adaptive_solve(
             mu_0, S0_sqr, prior, measure, save_at, obs_model=obs_wrong
         )
-
-
-def test_time_gated_measurement_raises():
-    class _MeasureWithObs:
-        ode_dim = 1
-        _constraints = (
-            Measurement(np.eye(1), np.zeros((2, 1)), np.array([0.5, 1.0]), noise=1e-2),
-        )
-
-    prior = IWP(q=2, d=1)
-    with pytest.raises(NotImplementedError, match="Conservation"):
-        ekf1_sqr_adaptive_solve(
-            np.zeros(3), np.eye(3), prior, _MeasureWithObs(), SAVE_AT
-        )

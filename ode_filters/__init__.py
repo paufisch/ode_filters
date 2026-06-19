@@ -49,9 +49,7 @@ from .inference import (
 from .measurement import (
     ObsModel,
     ODEconservation,
-    ODEconservationmeasurement,
     ODEInformation,
-    ODEmeasurement,
     build_obs_at_time,
     prepare_observations,
 )
@@ -77,8 +75,6 @@ __all__ = [
     "ODEFilter",
     "ODEInformation",
     "ODEconservation",
-    "ODEconservationmeasurement",
-    "ODEmeasurement",
     "ObsModel",
     "PController",
     "PIController",
