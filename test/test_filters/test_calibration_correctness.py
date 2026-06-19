@@ -29,9 +29,9 @@ from ode_filters.calibration.sigma import (
     posthoc_mle_sigma_sqr,
     quasi_mle_sigma_sqr,
 )
-from ode_filters.filters import (
-    PController,
-    ekf1_sqr_adaptive_loop,
+from ode_filters.filters import PController
+from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_loop import (
     ekf1_sqr_loop,
     ekf1_sqr_loop_dynamic,
     ekf1_sqr_loop_preconditioned_dynamic,

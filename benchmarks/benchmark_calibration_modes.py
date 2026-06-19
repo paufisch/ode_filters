@@ -41,9 +41,9 @@ import numpy as np
 from scipy.integrate import solve_ivp
 
 from ode_filters.calibration import posthoc_mle_sigma_sqr, rescale_sqr_seq
-from ode_filters.filters import (
-    PIController,
-    ekf1_sqr_adaptive_loop,
+from ode_filters.filters import PIController
+from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_loop import (
     ekf1_sqr_loop,
     ekf1_sqr_loop_dynamic,
 )

@@ -29,9 +29,9 @@ from ode_filters.filters import (
     CorrectionResult,
     IteratedTaylorCorrection,
     TaylorCorrection,
-    ekf1_sqr_filter_step,
-    ekf1_sqr_loop_dynamic_scan,
 )
+from ode_filters.filters.ode_filter_loop import ekf1_sqr_loop_dynamic_scan
+from ode_filters.filters.ode_filter_step import ekf1_sqr_filter_step
 from ode_filters.inference import sqr_inversion, sqr_marginalization
 from ode_filters.measurement import (
     Measurement,

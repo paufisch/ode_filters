@@ -19,8 +19,8 @@ import jax.numpy as np
 import numpy as onp
 import pytest
 
-from ode_filters.filters import (
-    ekf1_sqr_adaptive_loop,
+from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_loop import (
     ekf1_sqr_loop_dynamic,
     ekf1_sqr_loop_dynamic_scan,
 )

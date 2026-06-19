@@ -14,7 +14,7 @@ import jax.random as jrandom
 import numpy as onp
 import pytest
 
-from ode_filters.filters import (
+from ode_filters.filters.ode_filter_loop import (
     ekf1_sqr_loop_dynamic_scan,
     ekf1_sqr_loop_sequential_scan,
 )

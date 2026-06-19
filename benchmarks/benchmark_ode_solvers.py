@@ -31,7 +31,7 @@ import numpy as np
 from probdiffeq import ivpsolve, ivpsolvers, taylor
 from scipy.integrate import solve_ivp
 
-from ode_filters.filters import ekf1_sqr_loop
+from ode_filters.filters.ode_filter_loop import ekf1_sqr_loop
 from ode_filters.measurement import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
 

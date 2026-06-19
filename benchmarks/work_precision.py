@@ -32,7 +32,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from probdiffeq import ivpsolve, ivpsolvers, taylor
 
-from ode_filters.filters import TaylorCorrection, ekf1_sqr_loop_dynamic_scan
+from ode_filters.filters import TaylorCorrection
+from ode_filters.filters.ode_filter_loop import ekf1_sqr_loop_dynamic_scan
 from ode_filters.measurement import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
 

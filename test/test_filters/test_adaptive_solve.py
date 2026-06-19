@@ -7,11 +7,11 @@ import pytest
 from ode_filters import (
     IWP,
     ODEInformation,
-    ekf1_sqr_adaptive_solve,
-    ekf1_sqr_loop_dynamic_scan,
     prepare_observations,
     taylor_mode_initialization,
 )
+from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_solve
+from ode_filters.filters.ode_filter_loop import ekf1_sqr_loop_dynamic_scan
 from ode_filters.measurement.measurement_models import Measurement
 
 SAVE_AT = np.linspace(0.0, 2.0, 5)

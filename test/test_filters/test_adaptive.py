@@ -13,7 +13,9 @@ from ode_filters.filters import (
     PController,
     PIController,
     StepSizeController,
-    ekf1_sqr_adaptive_loop,
+)
+from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_loop import (
     ekf1_sqr_loop,
     ekf1_sqr_loop_dynamic,
     ekf1_sqr_loop_dynamic_scan,

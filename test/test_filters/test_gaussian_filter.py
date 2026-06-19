@@ -14,16 +14,18 @@ from ode_filters import (
     ODEInformation,
     PrecondIWP,
     TaylorCorrection,
-    ekf1_sqr_adaptive_solve,
-    ekf1_sqr_loop_dynamic_scan,
-    ekf1_sqr_loop_preconditioned_dynamic_scan,
     gaussian_filter,
     gaussian_filter_adaptive,
     prepare_observations,
     rts_smoother,
+    taylor_mode_initialization,
+)
+from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_solve
+from ode_filters.filters.ode_filter_loop import (
+    ekf1_sqr_loop_dynamic_scan,
+    ekf1_sqr_loop_preconditioned_dynamic_scan,
     rts_sqr_smoother_loop,
     rts_sqr_smoother_loop_preconditioned,
-    taylor_mode_initialization,
 )
 from ode_filters.measurement.measurement_models import Measurement
 
