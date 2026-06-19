@@ -47,6 +47,9 @@ class InferenceProblem(NamedTuple):
         calibration: Diffusion calibration mode. Defaults to ``"none"`` (fixed
             diffusion) -- recommended for parameter inference.
         min_sigma_sqr: Lower bound passed through to the loop.
+        correction: Linearization strategy (a :class:`~ode_filters.Correction`);
+            ``None`` defaults to EK1. Use e.g. ``TaylorCorrection(order=0)`` or
+            ``IteratedTaylorCorrection()`` to fit with EK0 / IEKF.
     """
 
     build: Callable[[Any], tuple[Array, Array, BaseODEInformation]]
@@ -55,6 +58,7 @@ class InferenceProblem(NamedTuple):
     N: int
     calibration: str = "none"
     min_sigma_sqr: float = 0.0
+    correction: Any = None
 
 
 def marginal_loglik(theta: Any, data: ObsModel, *, model: InferenceProblem) -> Array:
@@ -100,6 +104,7 @@ def marginal_loglik(theta: Any, data: ObsModel, *, model: InferenceProblem) -> A
         calibration=model.calibration,
         min_sigma_sqr=model.min_sigma_sqr,
         obs_model=data,
+        correction=model.correction,
     )
     # obs branch returns (..., log_likelihood_ode, log_likelihood_obs).
     *_, _ll_ode, ll_obs = result

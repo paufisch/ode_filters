@@ -10,7 +10,7 @@ import jax.numpy as np
 import jax.random as jrandom
 import pytest
 
-from ode_filters import ODEFilter, fit
+from ode_filters import IteratedTaylorCorrection, ODEFilter, TaylorCorrection, fit
 from ode_filters.measurement import Measurement, prepare_observations
 from ode_filters.priors import IWP
 
@@ -23,7 +23,7 @@ N = 200
 NOISE_STD = 0.02
 
 
-def _model_and_data(lam_init):
+def _model_and_data(lam_init, correction=None):
     ts = np.linspace(TSPAN[0], TSPAN[1], N + 1)
     x_true = X0 * np.exp(-LAM_TRUE * ts[1:])
     z = (x_true + NOISE_STD * jrandom.normal(jrandom.PRNGKey(0), (N,))).reshape(-1, 1)
@@ -46,8 +46,21 @@ def _model_and_data(lam_init):
         tspan=TSPAN,
         N=N,
         ode_params=np.array([lam_init]),
+        correction=correction,
     )
     return model, obs_model
+
+
+@pytest.mark.parametrize(
+    "correction",
+    [TaylorCorrection(order=0), IteratedTaylorCorrection(max_iters=3)],
+)
+def test_fit_recovers_parameter_with_correction(correction):
+    """The inference layer fits with a non-default linearization (EK0 / IEKF)."""
+    model, data = _model_and_data(lam_init=0.4, correction=correction)
+    fitted, losses = fit(model, data, optax.adam(0.05), steps=300)
+    assert abs(float(fitted.ode_params[0]) - LAM_TRUE) < 0.1
+    assert float(losses[-1]) < float(losses[0])
 
 
 def test_loglik_method_finite():

@@ -1,7 +1,12 @@
 """Filtering routines for ODE models."""
 
 from .adaptive_controller import PController, PIController, StepSizeController
-from .correction import Correction, CorrectionResult, TaylorCorrection
+from .correction import (
+    Correction,
+    CorrectionResult,
+    IteratedTaylorCorrection,
+    TaylorCorrection,
+)
 from .ode_filter_adaptive import AdaptiveLoopResult, ekf1_sqr_adaptive_loop
 from .ode_filter_loop import (
     ekf1_sqr_loop,
@@ -32,6 +37,7 @@ __all__ = [
     "AdaptiveLoopResult",
     "Correction",
     "CorrectionResult",
+    "IteratedTaylorCorrection",
     "PController",
     "PIController",
     "StepSizeController",

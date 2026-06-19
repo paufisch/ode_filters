@@ -396,6 +396,8 @@ def ekf1_sqr_filter_step_sequential_scan(
     c_obs: Array,
     R_obs_sqr: Array,
     obs_active: Array,
+    *,
+    correction: Correction | None = None,
 ) -> tuple[
     tuple[Array, Array],
     tuple[Array, Array, Array],
@@ -421,26 +423,27 @@ def ekf1_sqr_filter_step_sequential_scan(
         c_obs: Observation offset, shape ``[obs_dim]``.
         R_obs_sqr: Square-root observation noise, shape ``[obs_dim, obs_dim]``.
         obs_active: Scalar boolean — whether observations are active.
+        correction: Linearization strategy for the ODE update (defaults to
+            ``TaylorCorrection(order=1)``, i.e. EK1). Uses the fixed
+            (ODE + Conservation) linearization; the observation update is linear.
 
     Returns:
         Tuple of 5 tuples: prediction, backward pass, ODE observation
         marginal, observation marginal, and final updated state.
     """
+    if correction is None:
+        correction = TaylorCorrection(order=1)
+
     # Prediction
     m_pred, P_pred_sqr = sqr_marginalization(A_t, b_t, Q_t_sqr, m_prev, P_prev_sqr)
     G_back, d_back, P_back_sqr = sqr_inversion(
         A_t, m_prev, P_prev_sqr, m_pred, P_pred_sqr, Q_t_sqr
     )
 
-    # ODE + Conservation update
-    H_ode, c_ode = measure.linearize_fixed(m_pred, t=t)
-    R_ode_sqr = measure.get_fixed_noise_sqr()
-    mz_ode, Pz_ode_sqr = sqr_marginalization(
-        H_ode, c_ode, R_ode_sqr, m_pred, P_pred_sqr
-    )
-    _, m_ode, P_ode_sqr = sqr_inversion(
-        H_ode, m_pred, P_pred_sqr, mz_ode, Pz_ode_sqr, R_ode_sqr
-    )
+    # ODE + Conservation update (linearized by the chosen correction)
+    res_ode = correction.correct(measure, m_pred, P_pred_sqr, t=t, fixed=True)
+    mz_ode, Pz_ode_sqr = res_ode.mz, res_ode.Pz_sqr
+    m_ode, P_ode_sqr = res_ode.m, res_ode.P_sqr
 
     # Observation update (always executed for fixed shapes)
     mz_obs, Pz_obs_sqr = sqr_marginalization(H_obs, c_obs, R_obs_sqr, m_ode, P_ode_sqr)

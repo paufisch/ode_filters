@@ -18,6 +18,14 @@ field is treated as locally constant, so the ODE-defect rows of the Jacobian
 reduce to the selection matrix `E1` (no vector-field Jacobian). EK0 is cheaper --
 no Jacobian -- and is the classic `EK0` / `ts0` solver.
 
+`IteratedTaylorCorrection(max_iters=k)` -- the iterated EKF (IEKF): a single
+forward pass in which *each step's update* relinearizes at the updated mean for
+`k` fixed Gauss-Newton passes (`max_iters=1` reproduces EK1). This reduces local
+linearization error on nonlinear problems. The fixed iteration count keeps it
+reverse-mode differentiable, so it works inside [parameter estimation](parameter-estimation.md).
+(The whole-trajectory iterated *smoother*, IEKS, is a separate construct and is
+not yet implemented.)
+
 ## Choosing a correction
 
 Pass `correction=` to a filter step or the dynamic-scan loop; it defaults to EK1:
@@ -66,10 +74,11 @@ schemes will use.
 
 ## Status
 
-EK0 and EK1 ship today, selectable on `ekf1_sqr_filter_step` and
-`ekf1_sqr_loop_dynamic_scan`. Iterated (IEKF) and sigma-point (UKF/SLR)
-corrections, and `correction=` on the preconditioned / sequential / observation
-loops, are planned.
+EK0, EK1, and IEKF ship today, selectable on `ekf1_sqr_filter_step`, the
+dynamic-scan loop, the sequential / observation scan loops, and the inference API
+(`ODEFilter` / `marginal_loglik`). Sigma-point (UKF/SLR) corrections, the
+whole-trajectory IEKS, and `correction=` on the *preconditioned* loops are
+planned.
 
 ## See also
 

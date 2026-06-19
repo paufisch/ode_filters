@@ -27,6 +27,7 @@ import pytest
 from ode_filters.filters import (
     Correction,
     CorrectionResult,
+    IteratedTaylorCorrection,
     TaylorCorrection,
     ekf1_sqr_filter_step,
     ekf1_sqr_loop_dynamic_scan,
@@ -369,8 +370,75 @@ def test_loop_ek0_solves_linear_decay():
     assert np.isclose(x_final, np.exp(-2.0), atol=1e-2)
 
 
-def test_loop_correction_with_obs_model_raises():
-    """correction= is not yet supported alongside obs_model (clear error)."""
+def test_iekf_one_iteration_equals_ek1():
+    prior, measure, m0, P0_sqr = _decay_ode()
+    m_pred, P_pred_sqr = _predict(prior, m0, P0_sqr)
+    ek1 = TaylorCorrection(order=1).correct(measure, m_pred, P_pred_sqr, t=T_EVAL)
+    iekf1 = IteratedTaylorCorrection(max_iters=1).correct(
+        measure, m_pred, P_pred_sqr, t=T_EVAL
+    )
+    assert np.allclose(iekf1.m, ek1.m, atol=1e-12)
+    assert np.allclose(_cov(iekf1.P_sqr), _cov(ek1.P_sqr), atol=1e-12)
+
+
+def test_iekf_converges_to_fixed_point():
+    prior, measure, m0, P0_sqr = _decay_ode()
+    m_pred, P_pred_sqr = _predict(prior, m0, P0_sqr)
+    a = IteratedTaylorCorrection(max_iters=10).correct(
+        measure, m_pred, P_pred_sqr, t=T_EVAL
+    )
+    b = IteratedTaylorCorrection(max_iters=20).correct(
+        measure, m_pred, P_pred_sqr, t=T_EVAL
+    )
+    assert np.all(np.isfinite(a.m))
+    assert np.allclose(a.m, b.m, atol=1e-10)  # converged (more iters -> same point)
+
+
+def test_iekf_differs_from_ek1_for_nonlinear_vf():
+    # Larger step amplifies the nonlinearity so relinearization visibly moves.
+    def vf(x, *, t):
+        return -(x**2) + 0.5
+
+    prior = IWP(q=2, d=1, Xi=0.5 * np.eye(1))
+    m0, P0_sqr = taylor_mode_initialization(vf, np.array([2.0]), q=2)
+    measure = ODEInformation(vf, prior.E0, prior.E1)
+    a, b, q_sqr = prior.A(1.0), prior.b(1.0), np.linalg.cholesky(prior.Q(1.0)).T
+    m_pred, P_pred_sqr = sqr_marginalization(a, b, q_sqr, m0, P0_sqr)
+
+    ek1 = TaylorCorrection(order=1).correct(measure, m_pred, P_pred_sqr, t=0.0)
+    iekf = IteratedTaylorCorrection(max_iters=20).correct(
+        measure, m_pred, P_pred_sqr, t=0.0
+    )
+    assert not np.allclose(iekf.m, ek1.m, atol=1e-7)
+
+
+def test_iekf_is_jittable():
+    prior, measure, m0, P0_sqr = _decay_ode()
+    m_pred, P_pred_sqr = _predict(prior, m0, P0_sqr)
+    corr = IteratedTaylorCorrection(max_iters=5)
+    res = jax.jit(lambda m, p: corr.correct(measure, m, p, t=T_EVAL))(
+        m_pred, P_pred_sqr
+    )
+    assert np.all(np.isfinite(res.m))
+
+
+def test_fixed_path_matches_raw_linearize_fixed():
+    prior, measure, m0, P0_sqr = _decay_ode()
+    m_pred, P_pred_sqr = _predict(prior, m0, P0_sqr)
+    res = TaylorCorrection(order=1).correct(
+        measure, m_pred, P_pred_sqr, t=T_EVAL, fixed=True
+    )
+    H, c = measure.linearize_fixed(m_pred, t=T_EVAL)
+    R_sqr = measure.get_fixed_noise_sqr()
+    mz, Pz_sqr = sqr_marginalization(H, c, R_sqr, m_pred, P_pred_sqr)
+    _, m_t, P_t_sqr = sqr_inversion(H, m_pred, P_pred_sqr, mz, Pz_sqr, R_sqr)
+    assert np.allclose(res.m, m_t, atol=1e-12)
+    assert np.allclose(_cov(res.P_sqr), _cov(P_t_sqr), atol=1e-12)
+
+
+def test_loop_correction_with_obs_model_works():
+    """correction= now composes with obs_model (Slice 4): EK1 == default, and
+    EK0 / IEKF run and stay finite through the observation loop."""
 
     def vf(x, u, *, t):
         return -u * x
@@ -381,7 +449,7 @@ def test_loop_correction_with_obs_model_raises():
     measure = ODEInformationWithHidden(
         vf=vf, E0=joint.E0_x, E1=joint.E1, E0_hidden=joint.E0_hidden
     )
-    n = 20
+    n = 40
     ts = np.linspace(0.0, 1.0, n + 1)
     measurement = Measurement(np.eye(1), np.ones((n, 1)), ts[1:], noise=1e-2)
     obs_model = prepare_observations([measurement], joint.E0_x, ts)
@@ -389,15 +457,19 @@ def test_loop_correction_with_obs_model_raises():
     state_dim = joint.E1.shape[1]
     m0 = np.zeros(state_dim)
     P0_sqr = 0.3 * np.eye(state_dim)
+    args = (m0, P0_sqr, joint, measure, (0.0, 1.0), n)
 
-    with pytest.raises(NotImplementedError, match="obs_model"):
-        ekf1_sqr_loop_dynamic_scan(
-            m0,
-            P0_sqr,
-            joint,
-            measure,
-            (0.0, 1.0),
-            n,
-            obs_model=obs_model,
-            correction=TaylorCorrection(order=1),
-        )
+    default = ekf1_sqr_loop_dynamic_scan(*args, obs_model=obs_model)
+    ek1 = ekf1_sqr_loop_dynamic_scan(
+        *args, obs_model=obs_model, correction=TaylorCorrection(order=1)
+    )
+    ek0 = ekf1_sqr_loop_dynamic_scan(
+        *args, obs_model=obs_model, correction=TaylorCorrection(order=0)
+    )
+    iekf = ekf1_sqr_loop_dynamic_scan(
+        *args, obs_model=obs_model, correction=IteratedTaylorCorrection(max_iters=5)
+    )
+
+    assert np.allclose(default[0], ek1[0], atol=1e-12)  # EK1 == default
+    for res in (ek0, iekf):
+        assert np.all(np.isfinite(res[0]))

@@ -1061,6 +1061,8 @@ def ekf1_sqr_loop_sequential_scan(
     tspan: tuple[float, float],
     N: int,
     obs_model: ObsModel | None = None,
+    *,
+    correction: Correction | None = None,
 ) -> SeqScanLoopResult:
     """Run a sequential square-root EKF using ``jax.lax.scan``.
 
@@ -1130,6 +1132,7 @@ def ekf1_sqr_loop_sequential_scan(
             c_obs_i,
             R_obs_sqr,
             obs_active,
+            correction=correction,
         )
 
         ll_ode = ll_ode + _log_likelihood_contrib(mz_ode, Pz_ode_sqr)
@@ -1410,6 +1413,7 @@ def _ekf1_sqr_loop_dynamic_obs_scan(
     obs_model: ObsModel,
     calibration: str,
     min_sigma_sqr: float,
+    correction: Correction | None = None,
 ) -> DynamicObsScanLoopResult:
     """Observation-update branch of :func:`ekf1_sqr_loop_dynamic_scan`.
 
@@ -1481,6 +1485,7 @@ def _ekf1_sqr_loop_dynamic_obs_scan(
             c_obs_i,
             R_obs_sqr,
             obs_active,
+            correction=correction,
         )
 
         ll_ode = ll_ode + _log_likelihood_contrib(mz_ode, Pz_ode_sqr)
@@ -1596,7 +1601,8 @@ def ekf1_sqr_loop_dynamic_scan(
             this controls only the *update*; the diffusion calibration uses its
             own linearization selected by ``calibration`` (the
             ``"diagonal_ekf0"`` mode pairs an ``E1``-based sigma estimate with
-            an EK0 update). Not yet supported together with ``obs_model``.
+            an EK0 update). Works with ``obs_model`` (the ODE update is corrected;
+            the observation update is linear).
 
     Returns:
         With ``obs_model=None``: :class:`DynamicScanLoopResult` -- 10 arrays
@@ -1623,12 +1629,6 @@ def ekf1_sqr_loop_dynamic_scan(
         _check_state_xi_diagonal(prior, calibration)
 
     if obs_model is not None:
-        if correction is not None:
-            raise NotImplementedError(
-                "correction= is not yet supported together with obs_model; the "
-                "observation branch uses a sequential step that is not "
-                "correction-aware yet."
-            )
         return _ekf1_sqr_loop_dynamic_obs_scan(
             mu_0,
             Sigma_0_sqr,
@@ -1639,6 +1639,7 @@ def ekf1_sqr_loop_dynamic_scan(
             obs_model,
             calibration,
             min_sigma_sqr,
+            correction,
         )
 
     if correction is None:

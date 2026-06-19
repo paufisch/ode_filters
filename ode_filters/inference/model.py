@@ -14,9 +14,9 @@ differentiates exactly the parameters.
 
 For anything beyond a plain first-order ODE (hidden-state / joint priors, custom
 measurement models, fitting the initial condition), use :func:`marginal_loglik`
-with a custom :class:`InferenceProblem` directly. Selectable linearization schemes
-(EK0/EK1) in the inference path await the observation loop becoming
-correction-aware (ROADMAP P0.5).
+with a custom :class:`InferenceProblem` directly. Pass ``correction=`` to fit with
+a different linearization scheme (e.g. ``TaylorCorrection(order=0)`` for EK0 or
+``IteratedTaylorCorrection()`` for IEKF); it defaults to EK1.
 """
 
 from __future__ import annotations
@@ -55,6 +55,7 @@ class ODEFilter(eqx.Module):
     N: int = eqx.field(static=True)
     ode_params: Array
     calibration: str = eqx.field(static=True, default="none")
+    correction: Any = eqx.field(static=True, default=None)
 
     def loglik(self, data: ObsModel) -> Array:
         """Data marginal log-likelihood at the current parameters."""
@@ -73,6 +74,7 @@ class ODEFilter(eqx.Module):
             tspan=self.tspan,
             N=self.N,
             calibration=self.calibration,
+            correction=self.correction,
         )
         return marginal_loglik(self.ode_params, data, model=problem)
 
