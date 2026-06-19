@@ -37,12 +37,11 @@ The prior, measurement model, integer `N`, and `tspan` are static configuration 
 construct them in Python and mark them static (the loops already do this for you via
 `static_argnums`). Only arrays (`mu_0`, `Sigma_0_sqr`, parameters) are traced.
 
-### Gradient-based inference runs on the fixed-grid scan path only
+### Gradient-based inference is differentiable on both stepping modes
 
-`marginal_loglik` / `fit` and any `jax.grad` over a solve must use the **fixed-grid
-`*_scan`** loops. The Python-`for` loops build lists and the adaptive driver uses a
-Python `while` loop — neither is reverse-differentiable. (See the *Fixed-grid only*
-note in [Parameter estimation](parameter-estimation.md).)
+Both `gaussian_filter` (fixed grid) and `gaussian_filter_adaptive` (save-at-grid)
+are `jit`/`grad`/`vmap`-compatible, so `marginal_loglik` / `fit` and any `jax.grad`
+over a solve work either way. (See [Parameter estimation](parameter-estimation.md).)
 
 ### Calibration is opt-in, and should be off during parameter inference
 
@@ -75,13 +74,13 @@ posterior + likelihood). `ode_filters` focuses on a transparent square-root
 EKF/RTS substrate with first-class custom measurement models and a parameter-/
 latent-force-inference layer. See [What is a probabilistic ODE solver?](probabilistic-ode-solvers.md).
 
-### Which loop do I call?
+### Which function do I call?
 
-See [How to choose](how-to-choose.md). Short version: `ekf1_sqr_loop` for a simple
-fixed-step solve, the `*_scan` variants for jit/grad/vmap, and
-`ekf1_sqr_adaptive_loop` for tolerance-based stepping.
+See [How to choose](how-to-choose.md). Short version: `gaussian_filter` for a
+fixed-step solve and `gaussian_filter_adaptive` for tolerance-based stepping; both
+support jit/grad/vmap.
 
-### What do the ten values returned by the filter mean?
+### What do the fields of the filter result mean?
 
 See the filter [API reference](api/filters/index.md) and the annotated
 [Quickstart](examples/quickstart.ipynb) step 4.

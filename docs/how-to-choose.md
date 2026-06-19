@@ -9,11 +9,11 @@ table. When in doubt, the defaults are good.
 ```python
 from ode_filters.priors import IWP, taylor_mode_initialization
 from ode_filters.measurement import ODEInformation
-from ode_filters.filters import ekf1_sqr_loop, TaylorCorrection
+from ode_filters import gaussian_filter, TaylorCorrection
 
 prior   = IWP(q=2, d=d)                       # smoothness order 2
 measure = ODEInformation(vf, prior.E0, prior.E1)
-# EK1 correction, fixed grid, dynamic calibration are the defaults of the loop.
+# EK1 correction and dynamic calibration are the defaults of gaussian_filter.
 ```
 
 ## Prior family
@@ -56,14 +56,13 @@ How the nonlinear vector field is linearized in the update — a pluggable
 
 ## Stepping
 
-| Mode | Loop | Use when |
+| Mode | Function | Use when |
 | --- | --- | --- |
-| **Fixed grid** | `ekf1_sqr_loop`, `ekf1_sqr_loop_*_scan` | you know a good step count; **required for gradient-based inference** |
-| **Adaptive** | `ekf1_sqr_adaptive_loop` | you want tolerance-based efficiency and do *not* need to differentiate the solve |
+| **Fixed grid** | `gaussian_filter` | you know a good step count |
+| **Adaptive** | `gaussian_filter_adaptive` (jit/vmap/grad-able) | you want tolerance-based efficiency |
 
-Use the `*_scan` fixed-grid variants whenever you need `jit`/`grad`/`vmap` (see
-[Sharp bits](sharp-bits.md)). See [Adaptive step-size control](adaptive-steps.md)
-for the controller.
+Both paths are `jit`/`grad`/`vmap`-compatible (see [Sharp bits](sharp-bits.md)).
+See [Adaptive step-size control](adaptive-steps.md) for the controller.
 
 ## Calibration
 

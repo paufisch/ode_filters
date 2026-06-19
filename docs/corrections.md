@@ -28,11 +28,11 @@ not yet implemented.)
 
 ## Choosing a correction
 
-Pass `correction=` to a filter step or the dynamic-scan loop; it defaults to EK1:
+Pass `correction=` to `gaussian_filter`; it defaults to EK1:
 
 ```python
 import jax.numpy as np
-from ode_filters.filters import ekf1_sqr_loop_dynamic_scan, TaylorCorrection
+from ode_filters import gaussian_filter, TaylorCorrection
 from ode_filters.measurement import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
 
@@ -46,7 +46,7 @@ mu_0, S0 = taylor_mode_initialization(vf, np.array([0.1]), q=2)
 measure = ODEInformation(vf, prior.E0, prior.E1)
 
 # Zeroth-order (EK0) solve:
-result = ekf1_sqr_loop_dynamic_scan(
+result = gaussian_filter(
     mu_0, S0, prior, measure, (0.0, 5.0), N=50,
     correction=TaylorCorrection(order=0),
 )
@@ -74,10 +74,9 @@ schemes will use.
 
 ## Status
 
-EK0, EK1, and IEKF ship today, selectable on `ekf1_sqr_filter_step`, the
-dynamic-scan loop, the sequential / observation scan loops, and the inference API
-(`ODEFilter` / `marginal_loglik`). Sigma-point (UKF/SLR) corrections, the
-whole-trajectory IEKS, and `correction=` on the *preconditioned* loops are
+EK0, EK1, and IEKF ship today, selectable on `gaussian_filter` and the inference
+API (`ODEFilter` / `marginal_loglik`). Sigma-point (UKF/SLR) corrections, the
+whole-trajectory IEKS, and `correction=` on the *preconditioned* path are
 planned.
 
 ## See also

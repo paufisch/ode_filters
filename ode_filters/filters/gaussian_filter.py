@@ -51,6 +51,9 @@ class FilterResult(NamedTuple):
         G_back: Backward-pass gains per step (smoother input).
         d_back: Backward-pass offsets per step.
         P_back_sqr: Backward-pass square-root covariances per step.
+        mz: Predicted-observation (ODE-defect) innovation means per step; the input
+            to post-hoc diffusion calibration. ``None`` for the adaptive solver.
+        Pz_sqr: Predicted-observation innovation square-root covariances per step.
         sigma_sqr: Per-step calibrated diffusion ``sigma_hat^2``.
         log_likelihood_obs: Marginal log-likelihood of the external observations
             (``None`` when no ``obs_model`` was given) -- the quantity to maximize
@@ -71,6 +74,8 @@ class FilterResult(NamedTuple):
     G_back: Array | None
     d_back: Array | None
     P_back_sqr: Array | None
+    mz: Array | None
+    Pz_sqr: Array | None
     sigma_sqr: Array | None
     log_likelihood_obs: Array | None
     m_bar: Array | None
@@ -146,8 +151,8 @@ def gaussian_filter(
             G_back_bar,
             d_back_bar,
             P_back_bar,
-            _mz,
-            _Pz,
+            mz,
+            Pz_sqr,
             sigma_sqr,
             T_h,
             ll,
@@ -162,6 +167,8 @@ def gaussian_filter(
             G_back=G_back_bar,
             d_back=d_back_bar,
             P_back_sqr=P_back_bar,
+            mz=mz,
+            Pz_sqr=Pz_sqr,
             sigma_sqr=sigma_sqr,
             log_likelihood_obs=None,
             m_bar=m_bar,
@@ -190,8 +197,8 @@ def gaussian_filter(
             G_back,
             d_back,
             P_back,
-            _mz,
-            _Pz,
+            mz,
+            Pz_sqr,
             sigma_sqr,
             ll,
         ) = out
@@ -205,8 +212,8 @@ def gaussian_filter(
             G_back,
             d_back,
             P_back,
-            _mz_ode,
-            _Pz_ode,
+            mz,
+            Pz_sqr,
             _mz_obs,
             _Pz_obs,
             sigma_sqr,
@@ -223,6 +230,8 @@ def gaussian_filter(
         G_back=G_back,
         d_back=d_back,
         P_back_sqr=P_back,
+        mz=mz,
+        Pz_sqr=Pz_sqr,
         sigma_sqr=sigma_sqr,
         log_likelihood_obs=ll_obs,
         m_bar=None,
@@ -278,6 +287,8 @@ def gaussian_filter_adaptive(
         G_back=None,
         d_back=None,
         P_back_sqr=None,
+        mz=None,
+        Pz_sqr=None,
         sigma_sqr=None,
         log_likelihood_obs=None,
         m_bar=None,

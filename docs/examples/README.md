@@ -64,7 +64,7 @@ This comprehensive tutorial covers all advanced features:
 
 ### Basic ODE Solving
 ```python
-from ode_filters.filters import ekf1_sqr_loop, rts_sqr_smoother_loop
+from ode_filters import gaussian_filter, rts_smoother
 from ode_filters.measurement import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
 ```

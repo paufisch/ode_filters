@@ -98,8 +98,8 @@ or the *likelihood*.
 | Initialize the state from `x0` and its derivatives | `taylor_mode_initialization(vf, x0, q)` |
 | "Derivative must equal `f`" (the information operator) | `ODEInformation(vf, prior.E0, prior.E1)` |
 | How to linearize `f` (EK0 / EK1) | `TaylorCorrection(order=0 | 1)` |
-| Forward filtering pass | `ekf1_sqr_loop(...)` (and `*_scan` variants) |
-| Backward smoothing pass | `rts_sqr_smoother_loop(...)` |
+| Forward filtering pass | `gaussian_filter(...)` (or `gaussian_filter_adaptive(...)`) |
+| Backward smoothing pass | `rts_smoother(prior, result)` |
 | Size the error bars | `calibration=` / `ode_filters.calibration` |
 | Fit parameters to data | `marginal_loglik` / `ODEFilter` + `fit` |
 

@@ -1,6 +1,6 @@
 # Adaptive Step-Size Control
 
-`ekf1_sqr_adaptive_loop` chooses its own step size during integration. Every
+An adaptive solver chooses its own step size during integration. Every
 proposed step is evaluated against a tolerance on the local error; rejected
 steps are retried at a smaller `h`, accepted steps update a Gustafsson-style
 PI controller. The local error estimate is computed from quantities the EKF
@@ -9,9 +9,14 @@ the controller arithmetic.
 
 ## Basic usage
 
+`gaussian_filter_adaptive` is the recommended public adaptive solver. You give
+it the times you want the solution at (`save_at`) and it adapts internally; the
+result is a `FilterResult`, the same type `gaussian_filter` returns, and it is
+`jit`/`vmap`/`grad`-able.
+
 ```python
 import jax.numpy as np
-from ode_filters.filters import ekf1_sqr_adaptive_loop, rts_sqr_smoother_loop
+from ode_filters import gaussian_filter_adaptive
 from ode_filters.measurement import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
 
@@ -24,23 +29,46 @@ prior = IWP(q=2, d=1)
 mu_0, S0 = taylor_mode_initialization(vf, np.array([0.1]), q=2)
 measure = ODEInformation(vf, prior.E0, prior.E1)
 
-result = ekf1_sqr_adaptive_loop(
+save_at = np.linspace(0.0, 5.0, 50)
+result = gaussian_filter_adaptive(
+    mu_0, S0, prior, measure, save_at,
+    atol=1e-5, rtol=1e-3,
+)
+
+m_seq = result.m            # mean at each save_at time
+P_seq_sqr = result.P_sqr    # square-root covariance at each save_at time
+```
+
+## Inspecting the step-size trajectory
+
+`gaussian_filter_adaptive` reports the solution on `save_at` only; it does not
+expose the accepted step sizes, the reject count, or the full accepted-step
+trajectory. For those diagnostics, drop down to the lower-level trajectory
+driver `ekf1_sqr_adaptive_loop` from the submodule. (This is the lower-level
+tool; prefer `gaussian_filter_adaptive` for ordinary use.)
+
+```python
+from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+
+traj = ekf1_sqr_adaptive_loop(
     mu_0, S0, prior, measure, (0.0, 5.0),
     atol=1e-5, rtol=1e-3,
 )
 
-print(f"{len(result.h_seq)} accepted, {result.n_rejected} rejected")
-print(f"step range: {min(result.h_seq):.3g} ... {max(result.h_seq):.3g}")
+print(f"{len(traj.h_seq)} accepted, {traj.n_rejected} rejected")
+print(f"step range: {min(traj.h_seq):.3g} ... {max(traj.h_seq):.3g}")
 ```
 
-`result` is an `AdaptiveLoopResult` named tuple whose accepted-step sequences
+`traj` is an `AdaptiveLoopResult` named tuple whose accepted-step sequences
 are laid out so the smoother can consume them directly:
 
 ```python
+from ode_filters.filters.ode_filter_loop import rts_sqr_smoother_loop
+
 m_smooth, P_smooth_sqr = rts_sqr_smoother_loop(
-    result.m_seq[-1], result.P_seq_sqr[-1],
-    result.G_back_seq, result.d_back_seq, result.P_back_seq_sqr,
-    N=len(result.h_seq),
+    traj.m_seq[-1], traj.P_seq_sqr[-1],
+    traj.G_back_seq, traj.d_back_seq, traj.P_back_seq_sqr,
+    N=len(traj.h_seq),
 )
 ```
 
@@ -81,10 +109,10 @@ of the per-step log-step adjustment. It is the controller that scipy's
 `solve_ivp` uses for the elementary Runge-Kutta methods.
 
 ```python
-from ode_filters.filters import PController
+from ode_filters import PController
 
-result = ekf1_sqr_adaptive_loop(
-    mu_0, S0, prior, measure, (0.0, 5.0),
+result = gaussian_filter_adaptive(
+    mu_0, S0, prior, measure, save_at,
     atol=1e-5, rtol=1e-3,
     controller=PController(order=2),
 )
@@ -107,10 +135,10 @@ Gustafsson (1991): `alpha = 0.7 / order`, `beta = 0.4 / order`,
 dropped, and the controller falls back to the proportional form.
 
 ```python
-from ode_filters.filters import PIController
+from ode_filters import PIController
 
-result = ekf1_sqr_adaptive_loop(
-    mu_0, S0, prior, measure, (0.0, 5.0),
+result = gaussian_filter_adaptive(
+    mu_0, S0, prior, measure, save_at,
     atol=1e-5, rtol=1e-3,
     controller=PIController(order=2, alpha=0.4, beta=0.1, safety=0.8),
 )
@@ -137,13 +165,16 @@ terms.
 
 ## Diagnostics
 
-Every accepted step records its per-step quasi-MLE in `result.sigma_sqr_seq`.
+The per-step diagnostics live on the trajectory driver's `AdaptiveLoopResult`
+(`traj` above), not on the `FilterResult` from `gaussian_filter_adaptive`.
+
+Every accepted step records its per-step quasi-MLE in `traj.sigma_sqr_seq`.
 A well-specified problem produces $\widehat{\sigma}^2_n$ values that stay
 within an order of magnitude; large spikes indicate the prior is too smooth
 for that regime (often during a stiff transient -- this is fine; the
 controller responds by shrinking `h`).
 
-`result.h_seq` plotted against `result.t_seq[:-1]` shows how the controller
+`traj.h_seq` plotted against `traj.t_seq[:-1]` shows how the controller
 adapted -- big steps on smooth stretches, small steps near features.
 
 ## Calibration off

@@ -14,7 +14,7 @@ differentiable likelihood you can use to fit ODE parameters to data.
 
 ```python
 import jax.numpy as np
-from ode_filters.filters import ekf1_sqr_loop
+from ode_filters import gaussian_filter
 from ode_filters.measurement import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
 
@@ -28,8 +28,9 @@ mu_0, S0 = taylor_mode_initialization(vf, np.array([1.0]), q=2)
 measure = ODEInformation(vf, prior.E0, prior.E1)   # 2. the ODE as data
 
 # 3. forward filter -> mean + square-root covariance at each grid point
-m_seq, P_seq_sqr, *_ = ekf1_sqr_loop(mu_0, S0, prior, measure, (0.0, 5.0), N=50)
+result = gaussian_filter(mu_0, S0, prior, measure, (0.0, 5.0), N=50)
 
+P_seq_sqr = result.P_sqr
 std = np.sqrt((P_seq_sqr.transpose(0, 2, 1) @ P_seq_sqr)[:, 0, 0])  # uncertainty
 ```
 

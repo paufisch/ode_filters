@@ -9,9 +9,8 @@ up, and assumes the [notation](../notation.md).
 
 | Task | Reach for |
 | --- | --- |
-| solve an ODE (fixed step) | [`ekf1_sqr_loop`](filters/index.md) + `rts_sqr_smoother_loop` |
-| solve, `jit`/`grad`/`vmap`-friendly | the `*_scan` loops in [Filters](filters/index.md) |
-| solve with tolerance-based stepping | [`ekf1_sqr_adaptive_loop`](filters/index.md) |
+| solve an ODE (fixed step) | [`gaussian_filter`](filters/index.md) + `rts_smoother` |
+| solve with tolerance-based stepping | [`gaussian_filter_adaptive`](filters/index.md) (jit/vmap/grad-able) |
 | pick the linearization (EK0 / EK1) | [`TaylorCorrection`](filters/index.md) |
 | define the ODE / observations | [Measurement](measurement/index.md) models |
 | choose a prior | [`IWP` / `MaternPrior` / `JointPrior`](priors/index.md) |
