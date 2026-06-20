@@ -317,3 +317,24 @@ def test_python_while_driver_is_not_traceable():
         (jax.errors.ConcretizationTypeError, jax.errors.TracerBoolConversionError)
     ):
         jitted(mu_0, S0_sqr, prior, measure, TSPAN)
+
+
+# --------------------------------------------------------------------------- #
+# Adaptive fixed-point smoother (smoother=True) -- backward pass through the
+# composed conditionals + reverse-scan smoother must stay reverse-AD safe.
+# --------------------------------------------------------------------------- #
+
+
+def test_grad_adaptive_smoother():
+    prior = IWP(q=2, d=1)
+    save = np.linspace(0.0, 2.0, 5)
+
+    def f(theta):
+        mu_0, S0_sqr, measure = _logistic_inputs(prior, theta)
+        res = gaussian_filter_adaptive(
+            mu_0, S0_sqr, prior, measure, save, smoother=True, atol=1e-7, rtol=1e-7
+        )
+        m_s, _ = rts_smoother(prior, res)
+        return np.sum(m_s[:, 0])
+
+    _assert_grad_matches_fd(f)

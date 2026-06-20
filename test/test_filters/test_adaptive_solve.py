@@ -262,3 +262,127 @@ def test_gaussian_filter_adaptive_surfaces_success():
     res = gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, SAVE_AT)
     assert res.success is not None
     assert bool(res.success)
+
+
+# --------------------------------------------------------------------------- #
+# Fixed-point smoother (smoother=True): adaptive + smoothing in the public API.
+# --------------------------------------------------------------------------- #
+
+
+def test_smoother_matches_fixed_grid_rts_one_step_per_interval():
+    """Forced to one sub-step per save interval, the adaptive fixed-point smoother
+    must reproduce the fixed-grid RTS smoother exactly (same steps, same math)."""
+    from ode_filters import gaussian_filter, gaussian_filter_adaptive, rts_smoother
+
+    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    save = np.linspace(0.0, 2.0, 9)  # 8 intervals of 0.25 == fixed grid N=8
+
+    res_fixed = gaussian_filter(
+        mu_0, S0_sqr, prior, measure, (0.0, 2.0), 8, calibration="none"
+    )
+    ms_fixed, Ps_fixed = rts_smoother(prior, res_fixed)
+
+    # h_init == interval width + loose tolerances => exactly one accepted step
+    # per interval, so the adaptive grid coincides with the fixed grid.
+    res_ad = gaussian_filter_adaptive(
+        mu_0,
+        S0_sqr,
+        prior,
+        measure,
+        save,
+        smoother=True,
+        calibration="none",
+        h_init=0.25,
+        atol=1e2,
+        rtol=1e2,
+    )
+    assert bool(res_ad.success)
+    ms_ad, Ps_ad = rts_smoother(prior, res_ad)
+
+    def cov(P):
+        return np.einsum("kij,kil->kjl", P, P)
+
+    assert np.allclose(ms_ad, ms_fixed, atol=1e-8)
+    assert np.allclose(cov(Ps_ad), cov(Ps_fixed), atol=1e-8)
+
+
+def test_smoother_matches_analytic_when_substepping():
+    """With genuine adaptive sub-stepping and tight tolerances, the smoothed mean
+    matches the analytic logistic solution at the save grid."""
+    from ode_filters import gaussian_filter_adaptive, rts_smoother
+
+    prior, measure, mu_0, S0_sqr = _logistic_problem()  # x0=0.5
+    save = np.linspace(0.0, 2.0, 6)
+    res = gaussian_filter_adaptive(
+        mu_0, S0_sqr, prior, measure, save, smoother=True, atol=1e-9, rtol=1e-9
+    )
+    assert bool(res.success)
+    ms, _ = rts_smoother(prior, res)
+    x_true = 1.0 / (1.0 + np.exp(-save))
+    assert np.max(np.abs(ms[:, 0] - x_true)) < 1e-5
+
+
+def test_smoother_last_equals_filtered_last():
+    """RTS property: the last smoothed state equals the last filtered state."""
+    from ode_filters import gaussian_filter_adaptive, rts_smoother
+
+    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    res = gaussian_filter_adaptive(
+        mu_0, S0_sqr, prior, measure, SAVE_AT, smoother=True, atol=1e-7, rtol=1e-7
+    )
+    ms, Ps = rts_smoother(prior, res)
+    assert np.allclose(ms[-1], res.m[-1], atol=1e-8)
+    assert np.allclose(Ps[-1].T @ Ps[-1], res.P_sqr[-1].T @ res.P_sqr[-1], atol=1e-8)
+
+
+def test_smoother_reduces_uncertainty():
+    """Smoothing must not increase the marginal variance at interior save points."""
+    from ode_filters import gaussian_filter_adaptive, rts_smoother
+
+    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    res = gaussian_filter_adaptive(
+        mu_0,
+        S0_sqr,
+        prior,
+        measure,
+        SAVE_AT,
+        smoother=True,
+        calibration="none",
+        atol=1e-7,
+        rtol=1e-7,
+    )
+    _, Ps = rts_smoother(prior, res)
+    k = SAVE_AT.shape[0] // 2
+    var_filt = float(np.sum(res.P_sqr[k] ** 2))
+    var_smooth = float(np.sum(Ps[k] ** 2))
+    assert var_smooth <= var_filt + 1e-12
+
+
+def test_smoother_filtered_means_match_filtering_only_run():
+    """smoother=True must not change the filtered solution (only add a backward pass)."""
+    from ode_filters import gaussian_filter_adaptive
+
+    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    filt = gaussian_filter_adaptive(
+        mu_0, S0_sqr, prior, measure, SAVE_AT, atol=1e-7, rtol=1e-7
+    )
+    smoo = gaussian_filter_adaptive(
+        mu_0, S0_sqr, prior, measure, SAVE_AT, smoother=True, atol=1e-7, rtol=1e-7
+    )
+    assert np.allclose(filt.m, smoo.m, atol=1e-10)
+    assert np.allclose(filt.P_sqr, smoo.P_sqr, atol=1e-10)
+    assert filt.G_back is None and smoo.G_back is not None
+
+
+def test_smoother_with_obs_raises():
+    from ode_filters import gaussian_filter_adaptive
+
+    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    meas = Measurement(
+        np.eye(1), np.array([[0.55]]), np.array([SAVE_AT[2]]), noise=1e-3
+    )
+    obs = prepare_observations([meas], prior.E0, SAVE_AT)
+    with pytest.raises(NotImplementedError, match="smoother"):
+        gaussian_filter_adaptive(
+            mu_0, S0_sqr, prior, measure, SAVE_AT, obs_model=obs, smoother=True
+        )

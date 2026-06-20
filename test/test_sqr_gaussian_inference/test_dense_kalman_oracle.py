@@ -15,6 +15,7 @@ import pytest
 
 from ode_filters import IWP
 from ode_filters.inference.sqr_gaussian_inference import (
+    compose_backward_conditionals,
     sqr_inversion,
     sqr_marginalization,
 )
@@ -137,3 +138,44 @@ def test_diag_hqht_row_norms_match_dense_for_real_prior():
     dense = np.einsum("ij,jk,ik->i", H, Q, H)
     row_norms = np.sum((H @ Q_sqr.T) ** 2, axis=1)
     assert np.allclose(row_norms, dense, rtol=1e-9, atol=1e-12)
+
+
+# --------------------------------------------------------------------------- #
+# Composition of two affine Gaussian (backward) conditionals -- the fixed-point
+# smoothing "merge" used by the adaptive smoother.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("n", [2, 3, 5])
+@pytest.mark.parametrize("seed", _SEEDS)
+def test_compose_backward_conditionals_matches_dense(n, seed):
+    keys = jax.random.split(jax.random.PRNGKey(seed + 300), 6)
+    G1 = jax.random.normal(keys[0], (n, n))
+    d1 = jax.random.normal(keys[1], (n,))
+    _, P1_sqr = _random_spd_sqr(keys[2], n)
+    G2 = jax.random.normal(keys[3], (n, n))
+    d2 = jax.random.normal(keys[4], (n,))
+    _, P2_sqr = _random_spd_sqr(keys[5], n)
+
+    G, d, P_sqr = compose_backward_conditionals((G1, d1, P1_sqr), (G2, d2, P2_sqr))
+
+    P1 = P1_sqr.T @ P1_sqr
+    P2 = P2_sqr.T @ P2_sqr
+    assert np.allclose(G, G1 @ G2, atol=1e-10)
+    assert np.allclose(d, G1 @ d2 + d1, atol=1e-10)
+    assert np.allclose(P_sqr.T @ P_sqr, G1 @ P2 @ G1.T + P1, atol=1e-9)
+
+
+def test_compose_with_identity_is_noop():
+    """Composing with the identity conditional (the per-interval reset) is a no-op."""
+    n = 4
+    keys = jax.random.split(jax.random.PRNGKey(99), 2)
+    G2 = jax.random.normal(keys[0], (n, n))
+    d2 = jax.random.normal(keys[1], (n,))
+    _, P2_sqr = _random_spd_sqr(jax.random.PRNGKey(100), n)
+    ident = (np.eye(n), np.zeros(n), np.zeros((n, n)))
+
+    G, d, P_sqr = compose_backward_conditionals(ident, (G2, d2, P2_sqr))
+    assert np.allclose(G, G2, atol=1e-12)
+    assert np.allclose(d, d2, atol=1e-12)
+    assert np.allclose(P_sqr.T @ P_sqr, P2_sqr.T @ P2_sqr, atol=1e-12)

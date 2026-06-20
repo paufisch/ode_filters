@@ -73,7 +73,11 @@ import numpy as onp
 from jax import Array
 from jax.typing import ArrayLike
 
-from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
+from ..inference.sqr_gaussian_inference import (
+    compose_backward_conditionals,
+    sqr_inversion,
+    sqr_marginalization,
+)
 from ..measurement.measurement_models import (
     BaseODEInformation,
     ObsModel,
@@ -549,6 +553,15 @@ class AdaptiveSolveResult(NamedTuple):
             save(s) at or after the stall hold the last accepted state at the
             stalled time rather than the requested time. Because the solver is
             jittable it cannot raise -- check this flag instead.
+        G_back: Per-save-interval composite backward-conditional gains, shape
+            ``[M, state_dim, state_dim]`` (``None`` unless ``smoother=True``).
+            Together with ``d_back`` / ``P_back_sqr`` these parametrise the
+            fixed-point-smoothing conditionals ``p(u(s_k) | u(s_{k+1}))`` and feed
+            the RTS smoother directly -- O(M) memory, independent of the number of
+            adaptive sub-steps.
+        d_back: Per-interval backward-conditional offsets, shape ``[M, state_dim]``.
+        P_back_sqr: Per-interval backward-conditional noise square roots, shape
+            ``[M, state_dim, state_dim]``.
     """
 
     t: Array
@@ -556,6 +569,9 @@ class AdaptiveSolveResult(NamedTuple):
     P_sqr: Array
     log_likelihood: Array
     success: Array
+    G_back: Array | None = None
+    d_back: Array | None = None
+    P_back_sqr: Array | None = None
 
 
 def _controller_coeffs(
@@ -596,6 +612,7 @@ def ekf1_sqr_adaptive_solve(
     min_sigma_sqr: float = 0.0,
     max_steps: int = 4096,
     correction: Correction | None = None,
+    smoother: bool = False,
 ) -> AdaptiveSolveResult:
     """``jit`` / ``vmap`` / ``grad``-able adaptive EKF1, saved on a fixed grid.
 
@@ -611,8 +628,17 @@ def ekf1_sqr_adaptive_solve(
     Adaptive accept/reject sub-stepping happens *between* consecutive save times;
     the final sub-step of each interval is clamped to land exactly on the next save
     time, so no interpolation is needed (adaptivity within an interval is preserved
-    -- only that last sub-step is shortened). Filtering only: the RTS smoother stays
-    on the fixed-grid path.
+    -- only that last sub-step is shortened).
+
+    **Smoothing (fixed-point).** With ``smoother=True`` the result additionally
+    carries a backward pass (``G_back`` / ``d_back`` / ``P_back_sqr``) and can be
+    fed to :func:`rts_smoother`. Rather than storing every (data-dependent)
+    sub-step, each accepted sub-step's predict backward conditional is *composed*
+    into a running composite per save interval (Kraemer 2025, "Adaptive
+    Probabilistic ODE Solvers Without Adaptive Memory Requirements"): the result
+    holds exactly one conditional per save interval, so memory is O(#save points),
+    independent of the number of sub-steps, and the whole solve stays jit/vmap/grad
+    -safe. ``smoother=True`` is not yet supported together with ``obs_model``.
 
     **Observations at fixed locations.** Pass ``obs_model`` to assimilate linear
     observations: the adaptive solver integrates to each save time and then applies
@@ -659,6 +685,12 @@ def ekf1_sqr_adaptive_solve(
     Returns:
         An :class:`AdaptiveSolveResult` with the solution sampled at ``save_at``.
     """
+    if smoother and obs_model is not None:
+        raise NotImplementedError(
+            "smoother=True is not yet supported together with obs_model; run the "
+            "adaptive smoother without observations, or use the fixed-grid "
+            "gaussian_filter + rts_smoother for observation smoothing."
+        )
     save_at = np.asarray(save_at, dtype=float)
     safety, alpha, beta, min_factor, max_factor = _controller_coeffs(
         controller, prior.q
@@ -693,6 +725,11 @@ def ekf1_sqr_adaptive_solve(
         factor = np.clip(safety * proportional * integral, min_factor, max_factor)
         return h * factor
 
+    # Identity backward conditional p(u | u) = N(I u + 0, 0); the running composite
+    # for the fixed-point smoother is reset to this at the start of each interval.
+    state_dim = mu_0.shape[0]
+    id_cond = (np.eye(state_dim), np.zeros(state_dim), np.zeros((state_dim, state_dim)))
+
     def integrate_to(target, carry):
         rel_tol = 1e-10 * np.abs(target) + 1e-12
 
@@ -701,7 +738,11 @@ def ekf1_sqr_adaptive_solve(
             return t < target - rel_tol
 
         def body(c):
-            t, m, P_sqr, h, ll, err_prev = c
+            c = cast("tuple[Array, ...]", c)  # arity is static via `smoother`
+            if smoother:
+                t, m, P_sqr, h, ll, err_prev, Gc, dc, Pc = c
+            else:
+                t, m, P_sqr, h, ll, err_prev = c
             h_try = np.minimum(h, target - t)  # clamp so we land on `target`
             t_next = t + h_try
             out = step_body(h_try, t_next, m, P_sqr)
@@ -717,13 +758,24 @@ def ekf1_sqr_adaptive_solve(
             ll2 = np.where(accept, ll + loglik_step, ll)
             h2 = propose(h_try, err, np.where(accept, err_prev, -1.0))
             err_prev2 = np.where(accept, err, err_prev)
-            return (t2, m2, P2, h2, ll2, err_prev2)
+            if not smoother:
+                return (t2, m2, P2, h2, ll2, err_prev2)
+            # Fixed-point smoothing: compose this accepted sub-step's predict
+            # backward conditional p(u(t) | u(t_next)) into the running composite
+            # p(u(s_k) | u(t)) -> p(u(s_k) | u(t_next)). out[2:5] is the step's
+            # (G_back, d_back, P_back_sqr).
+            comp = compose_backward_conditionals((Gc, dc, Pc), (out[2], out[3], out[4]))
+            Gc2 = np.where(accept, comp[0], Gc)
+            dc2 = np.where(accept, comp[1], dc)
+            Pc2 = np.where(accept, comp[2], Pc)
+            return (t2, m2, P2, h2, ll2, err_prev2, Gc2, dc2, Pc2)
 
         return eqxi.while_loop(
             cond, body, carry, max_steps=max_steps, kind="checkpointed"
         )
 
-    init = (save_at[0], mu_0, Sigma_0_sqr, h0, np.array(0.0), np.array(-1.0))
+    base_init = (save_at[0], mu_0, Sigma_0_sqr, h0, np.array(0.0), np.array(-1.0))
+    init = (*base_init, *id_cond) if smoother else base_init
 
     def _reached(t, target):
         # Did the sub-stepping actually land on this save time (vs. stalling at
@@ -733,12 +785,17 @@ def ekf1_sqr_adaptive_solve(
     if obs_model is None:
 
         def scan_body_plain(carry, target):
-            carry = integrate_to(target, carry)
-            return carry, (carry[1], carry[2], _reached(carry[0], target))
+            carry = cast("tuple[Array, ...]", integrate_to(target, carry))
+            reached = _reached(carry[0], target)
+            if not smoother:
+                return carry, (carry[1], carry[2], reached)
+            # Emit this interval's composite conditional p(u(s_prev) | u(target)),
+            # then reset the composite to identity for the next interval.
+            t, m, P_sqr, h, ll, err_prev, Gc, dc, Pc = carry
+            carry_reset = (t, m, P_sqr, h, ll, err_prev, *id_cond)
+            return carry_reset, (m, P_sqr, reached, Gc, dc, Pc)
 
-        final, (m_seq, P_seq_sqr, reached_seq) = jax.lax.scan(
-            scan_body_plain, init, save_at[1:]
-        )
+        final, ys = jax.lax.scan(scan_body_plain, init, save_at[1:])
     else:
         n_obs_steps = obs_model.c_seq.shape[0]
         if n_obs_steps != save_at.shape[0] - 1:
@@ -753,7 +810,9 @@ def ekf1_sqr_adaptive_solve(
 
         def scan_body_obs(carry, step_data):
             target, c_obs, mask = step_data
-            t, m, P_sqr, h, ll, err_prev = integrate_to(target, carry)
+            t, m, P_sqr, h, ll, err_prev = cast(
+                "tuple[Array, ...]", integrate_to(target, carry)
+            )
             reached = _reached(t, target)
             # Exact (linear) observation update at the save time, masked off when
             # no observation is active there (same all-or-nothing convention as the
@@ -770,9 +829,18 @@ def ekf1_sqr_adaptive_solve(
             )
             return (t, m, P_sqr, h, ll, err_prev), (m, P_sqr, reached)
 
-        final, (m_seq, P_seq_sqr, reached_seq) = jax.lax.scan(
+        final, ys = jax.lax.scan(
             scan_body_obs, init, (save_at[1:], obs_model.c_seq, obs_model.mask)
         )
+
+    # ``smoother`` is a static Python bool, so only one of these unpackings is
+    # ever traced; the cast lets the type checker accept both arities.
+    ys = cast("tuple[Array, ...]", ys)
+    if smoother:
+        m_seq, P_seq_sqr, reached_seq, G_back, d_back, P_back_sqr = ys
+    else:
+        m_seq, P_seq_sqr, reached_seq = ys
+        G_back = d_back = P_back_sqr = None
 
     m_seq = cast(Array, m_seq)
     P_seq_sqr = cast(Array, P_seq_sqr)
@@ -785,7 +853,14 @@ def ekf1_sqr_adaptive_solve(
     # interval, so ``np.all`` covers every intermediate save as well.
     success = np.all(reached_seq) & np.isfinite(final[4])
     return AdaptiveSolveResult(
-        t=save_at, m=m_out, P_sqr=P_out, log_likelihood=final[4], success=success
+        t=save_at,
+        m=m_out,
+        P_sqr=P_out,
+        log_likelihood=final[4],
+        success=success,
+        G_back=G_back,
+        d_back=d_back,
+        P_back_sqr=P_back_sqr,
     )
 
 

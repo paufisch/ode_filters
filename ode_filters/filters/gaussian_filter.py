@@ -271,16 +271,22 @@ def gaussian_filter_adaptive(
     controller=None,
     min_sigma_sqr: float = 0.0,
     max_steps: int = 4096,
+    smoother: bool = False,
 ) -> FilterResult:
     """Adaptive-step Gaussian filter, returning the solution at ``save_at``.
 
     ``jit`` / ``vmap`` / reverse-``grad``-able (checkpointed adaptive loop).
-    Filtering only -- the result carries no backward pass, so :func:`rts_smoother`
-    does not apply. See :func:`ekf1_sqr_adaptive_solve` for the full argument docs.
+    See :func:`ekf1_sqr_adaptive_solve` for the full argument docs.
 
     ``correction`` selects the linearization (EK0/EK1/IEKF), matching
     :func:`gaussian_filter`; ``result.success`` reports whether the adaptive
-    sub-stepping reached the final save time.
+    sub-stepping reached every save time.
+
+    With ``smoother=True`` the result carries a fixed-point-smoothing backward
+    pass (one composite conditional per save interval, O(#save points) memory),
+    so :func:`rts_smoother` applies directly. Default ``False`` keeps the
+    filtering-only path (no backward pass, lower cost); ``smoother=True`` is not
+    supported together with ``obs_model``.
     """
     res = ekf1_sqr_adaptive_solve(
         mu_0,
@@ -297,6 +303,7 @@ def gaussian_filter_adaptive(
         min_sigma_sqr=min_sigma_sqr,
         max_steps=max_steps,
         correction=correction,
+        smoother=smoother,
     )
     return FilterResult(
         t=res.t,
@@ -305,9 +312,9 @@ def gaussian_filter_adaptive(
         log_likelihood=res.log_likelihood,
         m_pred=None,
         P_pred_sqr=None,
-        G_back=None,
-        d_back=None,
-        P_back_sqr=None,
+        G_back=res.G_back,
+        d_back=res.d_back,
+        P_back_sqr=res.P_back_sqr,
         mz=None,
         Pz_sqr=None,
         sigma_sqr=None,
@@ -320,13 +327,18 @@ def gaussian_filter_adaptive(
 
 
 def rts_smoother(prior: BasePrior, result: FilterResult) -> tuple[Array, Array]:
-    """Rauch-Tung-Striebel smoothing of a fixed-grid :func:`gaussian_filter` result.
+    """Rauch-Tung-Striebel smoothing of a Gaussian-filter result.
+
+    Works on a :func:`gaussian_filter` result (backward pass over the fixed grid)
+    or a :func:`gaussian_filter_adaptive` result run with ``smoother=True`` (the
+    fixed-point backward pass over the save grid); both carry the required
+    ``G_back`` / ``d_back`` / ``P_back_sqr``. A filtering-only adaptive result
+    (``smoother=False``, the default) does not, and raises.
 
     Args:
         prior: The prior used for the forward filter (selects the preconditioned
             smoother when preconditioned).
-        result: A :class:`FilterResult` from :func:`gaussian_filter` (must carry a
-            backward pass -- adaptive results do not).
+        result: A :class:`FilterResult` carrying a backward pass.
 
     Returns:
         Tuple ``(m_smooth, P_smooth_sqr)`` of smoothed means and square-root
@@ -335,8 +347,8 @@ def rts_smoother(prior: BasePrior, result: FilterResult) -> tuple[Array, Array]:
     if result.G_back is None or result.d_back is None or result.P_back_sqr is None:
         raise ValueError(
             "FilterResult carries no backward pass (e.g. from "
-            "gaussian_filter_adaptive); smoothing requires a fixed-grid "
-            "gaussian_filter result."
+            "gaussian_filter_adaptive without smoother=True); smoothing requires a "
+            "gaussian_filter result or gaussian_filter_adaptive(..., smoother=True)."
         )
     N = result.m.shape[0] - 1
     if result.T is not None:
