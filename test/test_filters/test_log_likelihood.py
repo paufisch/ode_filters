@@ -1,13 +1,10 @@
-"""Tests for log marginal likelihood returned by filter loops."""
+"""Tests for log marginal likelihood returned by the Gaussian filter."""
 
 import jax
 import jax.numpy as np
 import pytest
 
-from ode_filters.filters.ode_filter_loop import (
-    ekf1_sqr_loop,
-    ekf1_sqr_loop_preconditioned,
-)
+from ode_filters import gaussian_filter
 from ode_filters.measurement.measurement_models import ODEInformation
 from ode_filters.priors.gmp_priors import IWP, PrecondIWP, taylor_mode_initialization
 
@@ -48,11 +45,13 @@ class TestLogLikelihoodMatchesManual:
         mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf, self.x0, self.q)
         measure = ODEInformation(_vf, prior.E0, prior.E1)
 
-        result = ekf1_sqr_loop(mu_0, Sigma_0_sqr, prior, measure, self.tspan, self.N)
+        result = gaussian_filter(
+            mu_0, Sigma_0_sqr, prior, measure, self.tspan, self.N, calibration="none"
+        )
 
-        mz_seq = result[-3]
-        Pz_seq_sqr = result[-2]
-        log_likelihood = result[-1]
+        mz_seq = result.mz
+        Pz_seq_sqr = result.Pz_sqr
+        log_likelihood = result.log_likelihood
 
         expected = _manual_log_likelihood(mz_seq, Pz_seq_sqr)
         assert float(log_likelihood) == pytest.approx(float(expected), rel=1e-10)
@@ -62,14 +61,13 @@ class TestLogLikelihoodMatchesManual:
         mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf, self.x0, self.q)
         measure = ODEInformation(_vf, prior.E0, prior.E1)
 
-        result = ekf1_sqr_loop_preconditioned(
-            mu_0, Sigma_0_sqr, prior, measure, self.tspan, self.N
+        result = gaussian_filter(
+            mu_0, Sigma_0_sqr, prior, measure, self.tspan, self.N, calibration="none"
         )
 
-        # Preconditioned return: ..., mz_seq, Pz_seq_sqr, T_h, log_likelihood
-        mz_seq = result[9]
-        Pz_seq_sqr = result[10]
-        log_likelihood = result[-1]
+        mz_seq = result.mz
+        Pz_seq_sqr = result.Pz_sqr
+        log_likelihood = result.log_likelihood
 
         expected = _manual_log_likelihood(mz_seq, Pz_seq_sqr)
         assert float(log_likelihood) == pytest.approx(float(expected), rel=1e-10)
@@ -95,10 +93,16 @@ class TestLogLikelihoodDifferentiable:
         measure = ODEInformation(_vf, prior.E0, prior.E1)
 
         def lml_fn(Sigma_0_sqr_):
-            result = ekf1_sqr_loop(
-                mu_0, Sigma_0_sqr_, prior, measure, self.tspan, self.N
+            result = gaussian_filter(
+                mu_0,
+                Sigma_0_sqr_,
+                prior,
+                measure,
+                self.tspan,
+                self.N,
+                calibration="none",
             )
-            return result[-1]
+            return result.log_likelihood
 
         grad_val = jax.grad(lml_fn)(Sigma_0_sqr)
         assert np.all(np.isfinite(grad_val))
@@ -109,10 +113,16 @@ class TestLogLikelihoodDifferentiable:
         measure = ODEInformation(_vf, prior.E0, prior.E1)
 
         def lml_fn(Sigma_0_sqr_):
-            result = ekf1_sqr_loop_preconditioned(
-                mu_0, Sigma_0_sqr_, prior, measure, self.tspan, self.N
+            result = gaussian_filter(
+                mu_0,
+                Sigma_0_sqr_,
+                prior,
+                measure,
+                self.tspan,
+                self.N,
+                calibration="none",
             )
-            return result[-1]
+            return result.log_likelihood
 
         grad_val = jax.grad(lml_fn)(Sigma_0_sqr)
         assert np.all(np.isfinite(grad_val))

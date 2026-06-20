@@ -27,9 +27,7 @@ build/
 
 # Keep dependency management files
 !pyproject.toml
-
-# remove uv.lock
-uv.lock
+# uv.lock is tracked for reproducible installs in CI (see CONTRIBUTING.md)
 
 # ignore python version
 .python-version
@@ -63,3 +61,7 @@ CLAUDE.md
 .claude/*
 
 benchmarks/*.png
+
+vault-notes/*
+
+vault-notes

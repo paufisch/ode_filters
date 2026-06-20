@@ -13,17 +13,41 @@ on:
       - main
       - development
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  checks:
+    name: Checks (lint, format, types)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.13"
+      # pre-commit runs ruff (lint + format), the standard hygiene hooks, and
+      # pyright -- the single source of truth for static checks (mirrored by the
+      # local `uv run pre-commit run --all-files`).
+      - name: Run pre-commit
+        run: uv run --group dev pre-commit run --all-files --show-diff-on-failure
+
+  test:
+    name: Tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
       - name: Sync dependencies
         run: uv sync --group dev
       - name: Run tests
@@ -35,3 +59,16 @@ jobs:
           flags: unit
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: paufisch/ode_filters
+
+  docs:
+    name: Build docs (strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.13"
+      - name: Build MkDocs site
+        run: uv run --group docs mkdocs build --strict

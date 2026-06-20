@@ -1,9 +1,8 @@
 # Inference
 
+The **square-root Gaussian algebra** (`sqr_marginalization`, `sqr_inversion`) is the
+QR-based numerical core every filter step is built on: it propagates covariances as
+upper-triangular factors `A_sqr` (with `A = A_sqr.T @ A_sqr`), never forming a dense
+covariance and keeping it positive-definite (see [notation](../../notation.md)).
+
 ::: ode_filters.inference
-    handler: python
-    options:
-        show_object_full_path: true
-        show_source: false
-        members_order: source
-        show_signature_annotations: true

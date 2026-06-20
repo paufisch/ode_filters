@@ -27,10 +27,8 @@ import jax.numpy as np
 import numpy as onp
 import pytest
 
-from ode_filters.filters import (
-    ekf1_sqr_adaptive_loop,
-    ekf1_sqr_loop_dynamic,
-)
+from ode_filters import gaussian_filter
+from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
 from ode_filters.measurement.measurement_models import (
     Conservation,
     ODEInformation,
@@ -73,7 +71,7 @@ def _vf_hidden_linear(x, u, *, t):
 
 def _run_dynamic_fixed(prior, measure, x0, tspan, N):
     mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_sir, x0, prior.q)
-    return ekf1_sqr_loop_dynamic(
+    return gaussian_filter(
         mu_0, Sigma_0_sqr, prior, measure, tspan, N, calibration="dynamic"
     )
 
@@ -115,8 +113,8 @@ class TestConservationInvariance:
         res_a = _run_dynamic_fixed(prior, m_a, x0, tspan, N)
         res_b = _run_dynamic_fixed(prior, m_b, x0, tspan, N)
 
-        sigma_a = onp.asarray(res_a[-2], dtype=float)
-        sigma_b = onp.asarray(res_b[-2], dtype=float)
+        sigma_a = onp.asarray(res_a.sigma_sqr, dtype=float)
+        sigma_b = onp.asarray(res_b.sigma_sqr, dtype=float)
         # Step 0 sees identical (m_prev, P_prev), so sigma must match exactly.
         assert sigma_a[0] == pytest.approx(sigma_b[0], rel=1e-12, abs=1e-14)
 
@@ -295,10 +293,10 @@ class TestJointPriorStateOnlyScaling:
         N = 10
         # The pre-fix code accessed prior.xi unconditionally; JointPrior has
         # no xi, so this would have failed at line 248 before the fix.
-        result = ekf1_sqr_loop_dynamic(
+        result = gaussian_filter(
             mu_0, Sigma_0_sqr, joint, measure, tspan, N, calibration="dynamic"
         )
-        sigmas = onp.asarray(result[-2], dtype=float)
+        sigmas = onp.asarray(result.sigma_sqr, dtype=float)
         assert sigmas.shape == (N,)
         assert onp.all(onp.isfinite(sigmas))
 
@@ -316,7 +314,7 @@ class TestJointPriorDiagonalCalibration:
     def test_fixed_step_runs_and_shapes_correct(self, mode):
         joint, measure, mu_0, Sigma_0_sqr = _joint_setup()
         N = 5
-        result = ekf1_sqr_loop_dynamic(
+        result = gaussian_filter(
             mu_0,
             Sigma_0_sqr,
             joint,
@@ -325,12 +323,12 @@ class TestJointPriorDiagonalCalibration:
             N=N,
             calibration=mode,
         )
-        sigmas = onp.asarray(result[-2], dtype=float)
+        sigmas = onp.asarray(result.sigma_sqr, dtype=float)
         # Per-component sigma on the state block: shape (N, d_x).
         d_x = joint._prior_x._dim
         assert sigmas.shape == (N, d_x)
         assert onp.all(onp.isfinite(sigmas))
-        assert onp.all(np.isfinite(result[0][-1]))
+        assert onp.all(np.isfinite(result.m[-1]))
 
     @pytest.mark.parametrize("mode", ["diagonal", "diagonal_ekf0"])
     def test_adaptive_runs_and_shapes_correct(self, mode):
@@ -431,10 +429,10 @@ class TestPureODEBitIdentity:
         tspan = (0.0, 5.0)
         N = 30
 
-        result = ekf1_sqr_loop_dynamic(
+        result = gaussian_filter(
             mu_0, Sigma_0_sqr, prior, measure, tspan, N, calibration="dynamic"
         )
-        sigmas = onp.asarray(result[-2], dtype=float)
+        sigmas = onp.asarray(result.sigma_sqr, dtype=float)
         assert sigmas.shape == (N,)
         assert onp.all(onp.isfinite(sigmas))
         assert onp.all(sigmas > 0)

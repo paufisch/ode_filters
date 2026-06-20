@@ -94,6 +94,20 @@ class TestMaternPrior:
         b = prior.b(0.5)
         assert np.allclose(b, np.zeros(prior.n))
 
+    @pytest.mark.parametrize(("q", "d"), [(2, 2), (1, 3), (3, 2)])
+    def test_b_shape_matches_lifted_state(self, q, d):
+        """b(h) must have the Kron-lifted length (q+1)*d, not (q+1).
+
+        Regression for the d>1 drift-dimension bug: b previously returned
+        ``np.zeros(q + 1)``, mismatching the ``(q+1)*d`` state for d>1.
+        """
+        prior = MaternPrior(q=q, d=d, length_scale=1.0)
+        b = prior.b(0.5)
+        assert b.shape == ((q + 1) * d,)
+        assert np.allclose(b, 0.0)
+        # b must be conformable with A(h) @ state + b.
+        assert b.shape[0] == prior.A(0.5).shape[0]
+
     def test_A_and_Q_combined(self):
         """Test that A_and_Q returns both matrices."""
         prior = MaternPrior(q=2, d=1, length_scale=1.0)

@@ -34,16 +34,6 @@ Four calibration schemes are exposed via the ``calibration`` parameter:
   Use only when you understand the trade-off; prefer ``"diagonal_ekf0"``
   by default. Requires diagonal ``xi``.
 
-- ``"cumulative"`` (legacy multiplicative scheme): scalar ``sigma_hat^2_n``
-  from the *full* noise-free predicted-obs covariance ``H P_pred H.T``;
-  post-multiplies the whole step's covariance, so past contributions
-  inherit every subsequent ``sigma_hat^2``. Non-Markovian by design; an
-  online empirical-Bayes update of a single global unknown ``sigma``. *Not*
-  per-step honest, but stays robust on multi-scale problems (the inflated
-  carried ``P`` accidentally compensates). ``"diagonal_ekf0"`` is strictly
-  better when applicable; keep ``"cumulative"`` for non-diagonal Xi or for
-  backward compatibility with earlier runs.
-
 - ``"none"``: propagate uncalibrated, still report ``sigma_hat^2`` for
   diagnostics / post-hoc rescaling.
 
@@ -60,14 +50,12 @@ mean lags real changes in problem stiffness; in regimes where the local
 diffusion changes abruptly (entering a stiff transition), ``"per_step"``
 is more responsive.
 
-The accepted-step outputs are stored in lists matching the shape conventions of
-:func:`ekf1_sqr_loop`, so the result can be passed directly to
-:func:`rts_sqr_smoother_loop`.
+The accepted-step outputs are stored in lists; the result can be passed
+directly to :func:`rts_sqr_smoother_loop`.
 
 The returned ``log_likelihood`` is the *post-calibration* marginal
 likelihood: each step's contribution uses the calibrated ``Pz_sqr`` (which
-includes ``sigma_hat^2`` in the dynamic/diagonal modes and the
-post-multiplied scale in cumulative mode). It is therefore the right
+includes ``sigma_hat^2`` in the dynamic/diagonal modes). It is therefore the right
 quantity for inference *given* the chosen calibration model, but is **not**
 directly comparable across calibration modes -- different ``calibration``
 settings define different generative models.
@@ -75,31 +63,38 @@ settings define different generative models.
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Callable
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, cast
 
+import equinox.internal as eqxi
 import jax
 import jax.numpy as np
 import numpy as onp
 from jax import Array
+from jax.typing import ArrayLike
 
-from ..calibration.sigma import quasi_mle_sigma_sqr, quasi_mle_sigma_sqr_from_Q
-from ..inference.sqr_gaussian_inference import sqr_marginalization
+from ..inference.sqr_gaussian_inference import (
+    compose_backward_conditionals,
+    sqr_inversion,
+    sqr_marginalization,
+)
 from ..measurement.measurement_models import (
-    MEASUREMENT_TIME_ATOL,
-    MEASUREMENT_TIME_RTOL,
     BaseODEInformation,
-    Measurement,
+    ObsModel,
 )
 from ..priors.gmp_priors import BasePrior
 from .adaptive_controller import PIController, StepSizeController
-from .ode_filter_loop import _check_state_xi_diagonal
+from .correction import Correction
+from .ode_filter_loop import (
+    _calibrate_diffusion,
+    _check_state_xi_diagonal,
+    _log_likelihood_contrib,
+)
 from .ode_filter_step import ekf1_sqr_filter_step
 
-CalibrationMode = Literal["dynamic", "cumulative", "diagonal", "diagonal_ekf0", "none"]
+CalibrationMode = Literal["dynamic", "diagonal", "diagonal_ekf0", "none"]
 SigmaInError = Literal["per_step", "running_mean"]
-_VALID_CALIBRATIONS = ("dynamic", "cumulative", "diagonal", "diagonal_ekf0", "none")
+_VALID_CALIBRATIONS = ("dynamic", "diagonal", "diagonal_ekf0", "none")
 
 
 class AdaptiveLoopResult(NamedTuple):
@@ -152,7 +147,8 @@ def _make_step_body(
     *,
     calibration: CalibrationMode = "dynamic",
     min_sigma_sqr: float = 0.0,
-) -> Callable[[float, float, Array, Array], tuple]:
+    correction: Correction | None = None,
+) -> Callable[[ArrayLike, ArrayLike, Array, Array], tuple]:
     """Construct and jit the per-step body of the adaptive loop.
 
     Args:
@@ -160,9 +156,12 @@ def _make_step_body(
         measure: Measurement model.
         atol: Absolute tolerance for the normalised local-error estimate.
         rtol: Relative tolerance for the normalised local-error estimate.
-        calibration: ``"dynamic"`` (default), ``"cumulative"``, ``"diagonal"``,
+        calibration: ``"dynamic"`` (default), ``"diagonal"``, ``"diagonal_ekf0"``,
             or ``"none"``. See module docstring for the model each scheme
             corresponds to.
+        correction: Linearization/correction strategy for the measurement update
+            (default ``TaylorCorrection(order=1)``, i.e. EK1). Enables EK0 /
+            IEKF in the adaptive solver.
 
     The returned ``step_body`` produces (in order):
       ``m_pred, P_pred_sqr, G_back, d_back, P_back_sqr, mz, Pz_sqr, m, P_sqr,
@@ -178,25 +177,15 @@ def _make_step_body(
     d = E0_state.shape[0]
     d_ode = measure.ode_dim
 
-    # Measurement.find_index uses Python control flow on ``t`` (float cast +
-    # binary-search loop returning Optional[int]), so it cannot be traced
-    # under jax.jit when ``t_next`` is a tracer. When the model registers
-    # any time-gated Measurement we drop the jit wrapper -- correctness over
-    # speed. Pure-ODE / Conservation-only runs keep the fast path.
-    _has_time_gated_meas = any(
-        isinstance(c, Measurement) for c in getattr(measure, "_constraints", ())
-    )
-
     def step_body(
-        h: float,
-        t_next: float,
+        h: ArrayLike,
+        t_next: ArrayLike,
         m_prev: Array,
         P_prev_sqr: Array,
     ) -> tuple:
         A_h = prior.A(h)
         b_h = prior.b(h)
-        Q_h = prior.Q(h)
-        Q_h_sqr = np.linalg.cholesky(Q_h).T
+        Q_h_sqr = prior.Q_sqr(h)
 
         # Mean is independent of the prior covariance, so it can be used to
         # linearise the measurement model up front.
@@ -211,46 +200,16 @@ def _make_step_body(
         H_ode = H_t[:d_ode]
         mz_ode = mz_pred[:d_ode]
 
-        if calibration == "cumulative":
-            # Cumulative: sigma from the full noise-free predicted-obs
-            # covariance H P_pred H.T (P_pred includes A P_prev A.T plus Q),
-            # restricted to the ODE rows.
-            _m_pred_pre, P_pred_pre_sqr = sqr_marginalization(
-                A_h, b_h, Q_h_sqr, m_prev, P_prev_sqr
-            )
-            zero_R_sqr = np.zeros((d_ode, d_ode))
-            _, Pz_calib_sqr = sqr_marginalization(
-                H_ode, c_t[:d_ode], zero_R_sqr, _m_pred_pre, P_pred_pre_sqr
-            )
-            sigma_scalar = quasi_mle_sigma_sqr(mz_ode, Pz_calib_sqr)
-            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
-            sigma_vec = sigma_scalar * np.ones(d)
-            Q_step_sqr = Q_h_sqr
-        elif calibration in ("diagonal", "diagonal_ekf0"):
-            # Per-component sigma_hat^2_i.
-            #   "diagonal":      denom = (H1 Q H1.T)_ii  (EKF1 H, dense
-            #                    matrix's diagonal; uses info the step
-            #                    already has, marginally better on
-            #                    single-component problems).
-            #   "diagonal_ekf0": denom = (E1  Q  E1.T)_ii (EKF0 H = E1,
-            #                    the matrix is *exactly* diagonal when xi
-            #                    is diagonal -- mathematically clean; can
-            #                    be slightly better on multi-scale at
-            #                    loose tolerance).
-            H_for_calib = E1 if calibration == "diagonal_ekf0" else H_ode
-            denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_h, H_for_calib)
-            sigma_vec = mz_ode**2 / denom
-            sigma_vec = np.maximum(sigma_vec, min_sigma_sqr)
-            Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_vec)
-        else:
-            # Dynamic / none: sigma from H_ode Q(h) H_ode.T only (process noise).
-            sigma_scalar = quasi_mle_sigma_sqr_from_Q(mz_ode, H_ode, Q_h_sqr)
-            sigma_scalar = np.maximum(sigma_scalar, min_sigma_sqr)
-            sigma_vec = sigma_scalar * np.ones(d)
-            if calibration == "dynamic":
-                Q_step_sqr = prior.apply_state_sigma_sqr(Q_h_sqr, sigma_scalar)
-            else:  # "none"
-                Q_step_sqr = Q_h_sqr
+        sigma_sqr, Q_step_sqr = _calibrate_diffusion(
+            calibration, mz_ode, H_ode, E1, Q_h_sqr, prior, min_sigma_sqr
+        )
+        # The adaptive driver stores/uses a per-component vector; broadcast the
+        # scalar (dynamic / none) modes to length d.
+        sigma_vec = (
+            sigma_sqr
+            if calibration in ("diagonal", "diagonal_ekf0")
+            else sigma_sqr * np.ones(d)
+        )
 
         (
             (m_pred, P_pred_sqr),
@@ -258,36 +217,31 @@ def _make_step_body(
             (mz, Pz_sqr),
             (m, P_sqr),
         ) = ekf1_sqr_filter_step(
-            A_h, b_h, Q_step_sqr, m_prev, P_prev_sqr, measure, t=t_next
+            A_h,
+            b_h,
+            Q_step_sqr,
+            m_prev,
+            P_prev_sqr,
+            measure,
+            t=t_next,
+            correction=correction,
         )
-
-        if calibration == "cumulative":
-            # Post-multiply the carried covariance. For joint priors only
-            # the state block is scaled (delegated to the prior). Pz_sqr
-            # lives in measurement-row space, so we column-scale just the
-            # ODE rows there.
-            sigma_scalar = sigma_vec[0]
-            P_pred_sqr = prior.apply_state_sigma_to_cov_sqr(P_pred_sqr, sigma_scalar)
-            P_back_sqr = prior.apply_state_sigma_to_cov_sqr(P_back_sqr, sigma_scalar)
-            P_sqr = prior.apply_state_sigma_to_cov_sqr(P_sqr, sigma_scalar)
-            Pz_sqr = Pz_sqr.at[:, :d_ode].multiply(np.sqrt(sigma_scalar))
 
         # Local error estimate (Bosch et al. 2021 Eq. 49; Bosch et al. 2022
         # sec. 3: error vector has the dimension of the ODE solution).
         # diag(E0_state Q E0_state.T) is the per-component, uncalibrated
         # state-value variance; the driver multiplies it by whatever
-        # sigma_for_err it chooses.
-        D_unscaled_sqr_diag = np.diag(E0_state @ Q_h @ E0_state.T)
+        # sigma_for_err it chooses. Computed from the square-root Q_h_sqr
+        # (Q = Q_sqr.T @ Q_sqr) as the row-norms of E0_state @ Q_h_sqr.T, so the
+        # dense Q is never formed.
+        E0Q_sqr = E0_state @ Q_h_sqr.T
+        D_unscaled_sqr_diag = np.sum(E0Q_sqr * E0Q_sqr, axis=1)
         D = np.sqrt(np.maximum(sigma_vec * D_unscaled_sqr_diag, 0.0))
         m_value = E0_state @ m_pred
         err = _local_error_norm(D, m_value, atol, rtol)
 
         # Per-step log-likelihood (reflects whatever scaling was applied).
-        log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
-        v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
-        maha = v @ v
-        obs_dim = mz.shape[0]
-        loglik_step = -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
+        loglik_step = _log_likelihood_contrib(mz, Pz_sqr)
 
         return (
             m_pred,
@@ -306,9 +260,7 @@ def _make_step_body(
             m_value,
         )
 
-    if not _has_time_gated_meas:
-        step_body = jax.jit(step_body)
-    return step_body
+    return jax.jit(step_body)
 
 
 def ekf1_sqr_adaptive_loop(
@@ -327,10 +279,21 @@ def ekf1_sqr_adaptive_loop(
     calibration: CalibrationMode = "dynamic",
     sigma_in_error: SigmaInError = "running_mean",
     min_sigma_sqr: float = 0.0,
-    calibrate: bool | None = None,
     max_steps: int = 100_000,
+    correction: Correction | None = None,
 ) -> AdaptiveLoopResult:
     """Adaptive-step square-root EKF with per-step diffusion calibration.
+
+    .. note::
+        **Internal driver -- not part of the public API.** The supported
+        adaptive entry point is :func:`ekf1_sqr_adaptive_solve` (wrapped by
+        ``gaussian_filter_adaptive``), which is ``jit`` / ``vmap`` / reverse-
+        ``grad``-able and, with ``smoother=True``, also returns a fixed-point
+        smoothing pass. This function is a plain Python ``while`` loop with a
+        data-dependent step count, so it is **not** traceable/differentiable; it
+        is retained only for the two things the jittable solver does not expose:
+        the dense per-accepted-step diffusion trace (``sigma_sqr_seq``) and the
+        ``sigma_in_error="running_mean"`` controller variant.
 
     Python ``while`` driver around a jitted per-step body. Every accepted
     step contributes to the returned sequences and the result carries the
@@ -379,11 +342,6 @@ def ekf1_sqr_adaptive_loop(
               block-diagonal (e.g. fully decoupled RHS); biased in
               proportion to the off-diagonal entries of ``J_f``
               otherwise. Requires ``prior.xi`` diagonal.
-            - ``"cumulative"`` -- legacy multiplicative scheme; scalar sigma
-              from the full ``H P_pred H.T`` post-multiplies the whole step.
-              Non-Markovian; robust on multi-scale by accident (inflated P
-              inherited from earlier transitions). Prefer
-              ``"diagonal_ekf0"``.
             - ``"none"`` -- propagate ``sigma=1``, still report
               ``sigma_hat^2`` for post-hoc rescaling / diagnostics.
 
@@ -417,9 +375,6 @@ def ekf1_sqr_adaptive_loop(
             (e.g. ``1e-30``) on problems where the trivial zero-residual
             fixed point would otherwise collapse the state-block diffusion
             to zero and propagate NaN.
-        calibrate: Deprecated. ``True`` maps to ``calibration="dynamic"``,
-            ``False`` maps to ``calibration="none"``. Pass ``calibration``
-            directly instead.
         max_steps: Hard cap on iterations (rejected + accepted) as a safety
             valve against infinite loops.
 
@@ -432,14 +387,6 @@ def ekf1_sqr_adaptive_loop(
         ValueError: If ``tspan`` is non-increasing or ``calibration`` /
             ``sigma_in_error`` is unknown.
     """
-    if calibrate is not None:
-        warnings.warn(
-            '`calibrate` is deprecated; use `calibration="dynamic"` '
-            '(or "none" for the old `calibrate=False` behaviour).',
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        calibration = "dynamic" if calibrate else "none"
     if calibration not in _VALID_CALIBRATIONS:
         raise ValueError(
             f"calibration must be one of {_VALID_CALIBRATIONS}; got {calibration!r}."
@@ -469,6 +416,7 @@ def ekf1_sqr_adaptive_loop(
         rtol,
         calibration=calibration,
         min_sigma_sqr=min_sigma_sqr,
+        correction=correction,
     )
 
     t = t_start
@@ -506,18 +454,6 @@ def ekf1_sqr_adaptive_loop(
     # divide evenly in fp64.
     endpoint_tol = max(1e-12 * span, 1e-14)
 
-    # Fixed measurement times the adaptive controller must land on. Times at
-    # or outside the open interval (t_start, t_end) are dropped: the endpoints
-    # are already covered by the initial condition and the existing t_end
-    # clamp. When the model has no ``Measurement`` constraints this is empty
-    # and the clamp below is a no-op.
-    meas_times = onp.asarray(measure.measurement_times(), dtype=float).reshape(-1)
-    meas_times = meas_times[
-        (meas_times > t + endpoint_tol) & (meas_times < t_end - endpoint_tol)
-    ]
-    meas_times = onp.sort(meas_times)
-    meas_idx = 0
-
     while t_end - t > endpoint_tol:
         if iters >= max_steps:
             raise RuntimeError(
@@ -527,22 +463,13 @@ def ekf1_sqr_adaptive_loop(
         iters += 1
 
         h_try = min(h, t_end - t)
-        clamped_to_measurement = False
-        if meas_idx < len(meas_times):
-            h_to_meas = float(meas_times[meas_idx] - t)
-            if h_to_meas < h_try:
-                h_try = h_to_meas
-                clamped_to_measurement = True
         if h_try < h_min:
-            origin = "measurement time" if clamped_to_measurement else "t_end"
             raise RuntimeError(
                 f"Proposed step h={h_try:.3g} below h_min={h_min:.3g} "
-                f"at t={t:.6g} (clamped to {origin})."
+                f"at t={t:.6g} (clamped to t_end)."
             )
 
-        # When clamped, snap to the exact measurement time so find_index
-        # inside the step body sees a bit-exact match.
-        t_next = float(meas_times[meas_idx]) if clamped_to_measurement else t + h_try
+        t_next = t + h_try
         (
             m_pred,
             P_pred_sqr,
@@ -572,9 +499,8 @@ def ekf1_sqr_adaptive_loop(
             err_val = float(err_per_step)
 
         if err_val <= 1.0:
-            # Calibration was baked into Q_step_sqr inside the step body (or
-            # post-multiplied for cumulative mode); the returned covariances
-            # are already correct.
+            # Calibration was baked into Q_step_sqr inside the step body;
+            # the returned covariances are already correct.
             sigma_arr = onp.asarray(sigma_vec)
             sigma_running_sum = sigma_running_sum + sigma_arr
             n_accepted_so_far += 1
@@ -596,13 +522,6 @@ def ekf1_sqr_adaptive_loop(
             m_curr = m_new
             P_curr_sqr = P_new_sqr
             t = t_next
-            if meas_idx < len(meas_times) and onp.isclose(
-                t_next,
-                meas_times[meas_idx],
-                rtol=MEASUREMENT_TIME_RTOL,
-                atol=MEASUREMENT_TIME_ATOL,
-            ):
-                meas_idx += 1
             h = min(h_max, controller.propose(h_try, err_val, err_prev))
             err_prev = err_val
         else:
@@ -628,7 +547,334 @@ def ekf1_sqr_adaptive_loop(
     )
 
 
-__all__ = [
-    "AdaptiveLoopResult",
-    "ekf1_sqr_adaptive_loop",
-]
+class AdaptiveSolveResult(NamedTuple):
+    """Output of :func:`ekf1_sqr_adaptive_solve` (fixed-shape, save-at-grid).
+
+    Attributes:
+        t: The save grid (the ``save_at`` times), shape ``[K]``.
+        m: Filtered state means at the save times, shape ``[K, state_dim]``.
+        P_sqr: Square-root covariances at the save times, shape
+            ``[K, state_dim, state_dim]`` (``P = P_sqr.T @ P_sqr``).
+        log_likelihood: Accumulated Gaussian log-marginal-likelihood (scalar),
+            summed over every accepted step.
+        success: Scalar boolean -- ``True`` iff the adaptive sub-stepping landed
+            on *every* save time (not just the last) with a finite
+            log-likelihood. ``False`` signals a failed solve (e.g. a blow-up
+            exhausted ``max_steps`` before some save point), in which case the
+            save(s) at or after the stall hold the last accepted state at the
+            stalled time rather than the requested time. Because the solver is
+            jittable it cannot raise -- check this flag instead.
+        G_back: Per-save-interval composite backward-conditional gains, shape
+            ``[M, state_dim, state_dim]`` (``None`` unless ``smoother=True``).
+            Together with ``d_back`` / ``P_back_sqr`` these parametrise the
+            fixed-point-smoothing conditionals ``p(u(s_k) | u(s_{k+1}))`` and feed
+            the RTS smoother directly -- O(M) memory, independent of the number of
+            adaptive sub-steps.
+        d_back: Per-interval backward-conditional offsets, shape ``[M, state_dim]``.
+        P_back_sqr: Per-interval backward-conditional noise square roots, shape
+            ``[M, state_dim, state_dim]``.
+    """
+
+    t: Array
+    m: Array
+    P_sqr: Array
+    log_likelihood: Array
+    success: Array
+    G_back: Array | None = None
+    d_back: Array | None = None
+    P_back_sqr: Array | None = None
+
+
+def _controller_coeffs(
+    controller: StepSizeController | None, order: int
+) -> tuple[float, float, float, float, float]:
+    """Static ``(safety, alpha, beta, min_factor, max_factor)`` for the jnp PI law.
+
+    The dataclass controllers cast through Python ``float`` / ``min`` / ``max`` and
+    so cannot run under tracing; here we extract their (static) coefficients and
+    re-implement the proposal in ``jax.numpy`` inside the loop. ``beta = 0``
+    recovers the proportional-only :class:`PController`.
+    """
+    if controller is None:
+        controller = PIController(order=order)
+    beta = float(controller._beta) if isinstance(controller, PIController) else 0.0
+    return (
+        float(controller.safety),
+        float(controller._alpha),
+        beta,
+        float(controller.min_factor),
+        float(controller.max_factor),
+    )
+
+
+def ekf1_sqr_adaptive_solve(
+    mu_0: Array,
+    Sigma_0_sqr: Array,
+    prior: BasePrior,
+    measure: BaseODEInformation,
+    save_at: Array,
+    *,
+    obs_model: ObsModel | None = None,
+    atol: float = 1e-4,
+    rtol: float = 1e-2,
+    h_init: float | None = None,
+    calibration: CalibrationMode = "dynamic",
+    controller: StepSizeController | None = None,
+    min_sigma_sqr: float = 0.0,
+    max_steps: int = 4096,
+    correction: Correction | None = None,
+    smoother: bool = False,
+) -> AdaptiveSolveResult:
+    """``jit`` / ``vmap`` / ``grad``-able adaptive EKF1, saved on a fixed grid.
+
+    Unlike :func:`ekf1_sqr_adaptive_loop` (a Python ``while`` driver that returns
+    *every* accepted step and feeds the smoother), this returns the **filtered
+    solution at a fixed array of query times** ``save_at`` -- the shape is known at
+    trace time, so the whole solve is jittable, vmappable, and reverse-mode
+    differentiable. It is built as a ``jax.lax.scan`` over ``save_at`` whose body is
+    a *checkpointed* ``equinox`` while-loop (``eqx.internal.while_loop``); the
+    checkpointing is what makes reverse-mode autodiff work (plain ``lax.while_loop``
+    does not support it).
+
+    Adaptive accept/reject sub-stepping happens *between* consecutive save times;
+    the final sub-step of each interval is clamped to land exactly on the next save
+    time, so no interpolation is needed (adaptivity within an interval is preserved
+    -- only that last sub-step is shortened).
+
+    **Smoothing (fixed-point).** With ``smoother=True`` the result additionally
+    carries a backward pass (``G_back`` / ``d_back`` / ``P_back_sqr``) and can be
+    fed to :func:`rts_smoother`. Rather than storing every (data-dependent)
+    sub-step, each accepted sub-step's predict backward conditional is *composed*
+    into a running composite per save interval (Kraemer 2025, "Adaptive
+    Probabilistic ODE Solvers Without Adaptive Memory Requirements"): the result
+    holds exactly one conditional per save interval, so memory is O(#save points),
+    independent of the number of sub-steps, and the whole solve stays jit/vmap/grad
+    -safe. ``smoother=True`` is not yet supported together with ``obs_model``.
+
+    **Observations at fixed locations.** Pass ``obs_model`` to assimilate linear
+    observations: the adaptive solver integrates to each save time and then applies
+    a masked affine observation update there. Because the save times are already
+    mandatory landing points, observations must be aligned to ``save_at`` -- build
+    the model with ``prepare_observations(measurements, prior.E0, save_at)`` (its
+    per-step offset/mask sequences then index ``save_at[1:]``). The update is exact
+    (observations are linear, so no linearization/correction is needed) and the
+    post-observation state is what propagates onward (proper filtering). Data
+    observations always go through ``obs_model``; ``measure`` carries only the ODE
+    information and Conservation constraints.
+
+    The per-step calibration, local-error estimate and log-likelihood are shared
+    with :func:`ekf1_sqr_adaptive_loop` (same ``_make_step_body``); the controller
+    uses the per-step error (the ``sigma_in_error="running_mean"`` variant of the
+    Python loop is not reproduced here).
+
+    Args:
+        mu_0: Initial state mean.
+        Sigma_0_sqr: Initial state covariance (square-root form).
+        prior: Gauss-Markov prior (e.g. :class:`IWP`); supplies ``A``/``b``/``Q``
+            and the default controller order ``prior.q``.
+        measure: Measurement model (ODE + Conservation only).
+        save_at: Strictly increasing 1-D array of save times; ``save_at[0]`` is the
+            initial time (the initial state is returned there unchanged).
+        obs_model: Optional linear observations to assimilate at the save times,
+            built via ``prepare_observations(measurements, prior.E0, save_at)`` (so
+            its ``c_seq``/``mask`` index ``save_at[1:]``). ``None`` for a pure solve.
+        atol: Absolute tolerance for the normalised local-error estimate.
+        rtol: Relative tolerance.
+        h_init: Initial step. Defaults to ``(save_at[-1] - save_at[0]) / 100``.
+        calibration: Diffusion calibration mode (see :func:`ekf1_sqr_adaptive_loop`).
+        controller: Step-size controller; defaults to ``PIController(order=prior.q)``.
+        min_sigma_sqr: Lower bound on the per-step ``sigma_hat^2``.
+        max_steps: Hard cap on sub-steps per save interval (bounds the checkpointed
+            while-loop). Raise it (or loosen tolerances) if a solve fails to reach a
+            save time.
+        correction: Linearization/correction strategy for the ODE measurement
+            update (default ``TaylorCorrection(order=1)``, i.e. EK1); pass
+            ``TaylorCorrection(order=0)`` for EK0 or ``IteratedTaylorCorrection``
+            for IEKF. The observation update (if ``obs_model`` is given) is linear
+            and unaffected.
+
+    Returns:
+        An :class:`AdaptiveSolveResult` with the solution sampled at ``save_at``.
+    """
+    if smoother and obs_model is not None:
+        raise NotImplementedError(
+            "smoother=True is not yet supported together with obs_model; run the "
+            "adaptive smoother without observations, or use the fixed-grid "
+            "gaussian_filter + rts_smoother for observation smoothing."
+        )
+    save_at = np.asarray(save_at, dtype=float)
+    safety, alpha, beta, min_factor, max_factor = _controller_coeffs(
+        controller, prior.q
+    )
+    step_body = _make_step_body(
+        prior,
+        measure,
+        atol,
+        rtol,
+        calibration=calibration,
+        min_sigma_sqr=min_sigma_sqr,
+        correction=correction,
+    )
+    span = save_at[-1] - save_at[0]
+    h0 = span / 100.0 if h_init is None else np.asarray(h_init, dtype=float)
+
+    def propose(h, err, err_prev):
+        # Gustafsson PI law (jax form of adaptive_controller.PIController.propose);
+        # err_prev < 0 signals "no memory" (first step / right after a reject) and
+        # drops the integral term.
+        # A non-finite error (NaN/inf from a blow-up) is mapped to +inf so the
+        # proposed factor collapses to ``min_factor`` (a shrink) instead of
+        # propagating NaN into ``h`` -- which would otherwise turn ``h_try`` NaN
+        # and spin the checkpointed while-loop to ``max_steps`` with no progress.
+        # (cast: jnp.where's overloads widen to Array | tuple under pyright.)
+        err = cast(Array, np.where(np.isfinite(err), err, np.inf))
+        err = np.maximum(err, 1e-12)
+        proportional = err ** (-alpha)
+        integral = np.where(
+            err_prev > 0.0, (np.maximum(err_prev, 1e-12) / err) ** beta, 1.0
+        )
+        factor = np.clip(safety * proportional * integral, min_factor, max_factor)
+        return h * factor
+
+    # Identity backward conditional p(u | u) = N(I u + 0, 0); the running composite
+    # for the fixed-point smoother is reset to this at the start of each interval.
+    state_dim = mu_0.shape[0]
+    id_cond = (np.eye(state_dim), np.zeros(state_dim), np.zeros((state_dim, state_dim)))
+
+    def integrate_to(target, carry):
+        rel_tol = 1e-10 * np.abs(target) + 1e-12
+
+        def cond(c):
+            t = c[0]
+            return t < target - rel_tol
+
+        def body(c):
+            c = cast("tuple[Array, ...]", c)  # arity is static via `smoother`
+            if smoother:
+                t, m, P_sqr, h, ll, err_prev, Gc, dc, Pc = c
+            else:
+                t, m, P_sqr, h, ll, err_prev = c
+            h_try = np.minimum(h, target - t)  # clamp so we land on `target`
+            t_next = t + h_try
+            out = step_body(h_try, t_next, m, P_sqr)
+            m_new, P_new_sqr = out[7], out[8]
+            err, loglik_step = out[10], out[11]
+            # Reject non-finite errors (NaN/inf): never accept a NaN state, and
+            # ``propose`` shrinks ``h`` so the loop can recover instead of
+            # silently emitting NaN.
+            accept = (err <= 1.0) & np.isfinite(err)
+            t2 = np.where(accept, t_next, t)
+            m2 = np.where(accept, m_new, m)
+            P2 = np.where(accept, P_new_sqr, P_sqr)
+            ll2 = np.where(accept, ll + loglik_step, ll)
+            h2 = propose(h_try, err, np.where(accept, err_prev, -1.0))
+            err_prev2 = np.where(accept, err, err_prev)
+            if not smoother:
+                return (t2, m2, P2, h2, ll2, err_prev2)
+            # Fixed-point smoothing: compose this accepted sub-step's predict
+            # backward conditional p(u(t) | u(t_next)) into the running composite
+            # p(u(s_k) | u(t)) -> p(u(s_k) | u(t_next)). out[2:5] is the step's
+            # (G_back, d_back, P_back_sqr).
+            comp = compose_backward_conditionals((Gc, dc, Pc), (out[2], out[3], out[4]))
+            Gc2 = np.where(accept, comp[0], Gc)
+            dc2 = np.where(accept, comp[1], dc)
+            Pc2 = np.where(accept, comp[2], Pc)
+            return (t2, m2, P2, h2, ll2, err_prev2, Gc2, dc2, Pc2)
+
+        return eqxi.while_loop(
+            cond, body, carry, max_steps=max_steps, kind="checkpointed"
+        )
+
+    base_init = (save_at[0], mu_0, Sigma_0_sqr, h0, np.array(0.0), np.array(-1.0))
+    init = (*base_init, *id_cond) if smoother else base_init
+
+    def _reached(t, target):
+        # Did the sub-stepping actually land on this save time (vs. stalling at
+        # max_steps short of it)? Same tolerance as the while-loop ``cond``.
+        return t >= target - (1e-10 * np.abs(target) + 1e-12)
+
+    if obs_model is None:
+
+        def scan_body_plain(carry, target):
+            carry = cast("tuple[Array, ...]", integrate_to(target, carry))
+            reached = _reached(carry[0], target)
+            if not smoother:
+                return carry, (carry[1], carry[2], reached)
+            # Emit this interval's composite conditional p(u(s_prev) | u(target)),
+            # then reset the composite to identity for the next interval.
+            t, m, P_sqr, h, ll, err_prev, Gc, dc, Pc = carry
+            carry_reset = (t, m, P_sqr, h, ll, err_prev, *id_cond)
+            return carry_reset, (m, P_sqr, reached, Gc, dc, Pc)
+
+        final, ys = jax.lax.scan(scan_body_plain, init, save_at[1:])
+    else:
+        n_obs_steps = obs_model.c_seq.shape[0]
+        if n_obs_steps != save_at.shape[0] - 1:
+            raise ValueError(
+                f"obs_model has {n_obs_steps} steps but save_at has "
+                f"{save_at.shape[0]} points; build it with "
+                f"prepare_observations(measurements, prior.E0, save_at) so its "
+                f"per-step sequences index save_at[1:]."
+            )
+        H_obs = obs_model.H
+        R_obs_sqr = obs_model.R_sqr
+
+        def scan_body_obs(carry, step_data):
+            target, c_obs, mask = step_data
+            t, m, P_sqr, h, ll, err_prev = cast(
+                "tuple[Array, ...]", integrate_to(target, carry)
+            )
+            reached = _reached(t, target)
+            # Exact (linear) observation update at the save time, masked off when
+            # no observation is active there (same all-or-nothing convention as the
+            # dynamic-observation scan loop).
+            obs_active = mask.any()
+            mz_obs, Pz_obs_sqr = sqr_marginalization(H_obs, c_obs, R_obs_sqr, m, P_sqr)
+            _, m_obs, P_obs_sqr = sqr_inversion(
+                H_obs, m, P_sqr, mz_obs, Pz_obs_sqr, R_obs_sqr
+            )
+            m = np.where(obs_active, m_obs, m)
+            P_sqr = np.where(obs_active, P_obs_sqr, P_sqr)
+            ll = ll + np.where(
+                obs_active, _log_likelihood_contrib(mz_obs, Pz_obs_sqr), 0.0
+            )
+            return (t, m, P_sqr, h, ll, err_prev), (m, P_sqr, reached)
+
+        final, ys = jax.lax.scan(
+            scan_body_obs, init, (save_at[1:], obs_model.c_seq, obs_model.mask)
+        )
+
+    # ``smoother`` is a static Python bool, so only one of these unpackings is
+    # ever traced; the cast lets the type checker accept both arities.
+    ys = cast("tuple[Array, ...]", ys)
+    if smoother:
+        m_seq, P_seq_sqr, reached_seq, G_back, d_back, P_back_sqr = ys
+    else:
+        m_seq, P_seq_sqr, reached_seq = ys
+        G_back = d_back = P_back_sqr = None
+
+    m_seq = cast(Array, m_seq)
+    P_seq_sqr = cast(Array, P_seq_sqr)
+    m_out = np.concatenate([mu_0[None], m_seq], axis=0)
+    P_out = np.concatenate([Sigma_0_sqr[None], P_seq_sqr], axis=0)
+    # The solve succeeded iff *every* save interval's sub-stepping landed on its
+    # target time (not just the final one -- a middle interval can exhaust
+    # max_steps and stall while a later, easier interval still reaches the end)
+    # and the log-likelihood is finite. ``reached_seq`` has one flag per save
+    # interval, so ``np.all`` covers every intermediate save as well.
+    success = np.all(reached_seq) & np.isfinite(final[4])
+    return AdaptiveSolveResult(
+        t=save_at,
+        m=m_out,
+        P_sqr=P_out,
+        log_likelihood=final[4],
+        success=success,
+        G_back=G_back,
+        d_back=d_back,
+        P_back_sqr=P_back_sqr,
+    )
+
+
+# No module-level ``__all__``: this is an internal implementation submodule (like
+# its siblings ode_filter_loop / ode_filter_step), not re-exported from the
+# package. The public adaptive entry point is ``gaussian_filter_adaptive``.

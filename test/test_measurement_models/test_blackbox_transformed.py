@@ -10,9 +10,7 @@ from ode_filters.measurement.measurement_models import (
     Measurement,
     ODEInformation,
     SecondOrderODEconservation,
-    SecondOrderODEconservationmeasurement,
     SecondOrderODEInformation,
-    SecondOrderODEmeasurement,
     TransformedMeasurement,
 )
 
@@ -550,63 +548,6 @@ class TestSecondOrderFactoryFunctions:
         # ODE (2) + conservation (1) = 3
         assert result.shape == (3,)
 
-    def test_SecondOrderODEmeasurement(self):
-        """Test SecondOrderODEmeasurement factory."""
-
-        def vf(x, v, *, t):
-            return -x
-
-        E0, E1, E2 = make_projection_matrices(d=1, q=2)
-        A = np.array([[1.0]])
-        z = np.array([[0.5], [0.8]])
-        z_t = np.array([0.5, 1.0])
-
-        model = SecondOrderODEmeasurement(vf, E0, E1, E2, A, z, z_t)
-
-        assert len(model._constraints) == 1
-        assert isinstance(model._constraints[0], Measurement)
-
-        state = np.array([1.0, 0.0, -1.0])
-
-        # At t=0 (no measurement): only ODE (1)
-        result_t0 = model.g(state, t=0.0)
-        assert result_t0.shape == (1,)
-
-        # At t=0.5 (with measurement): ODE (1) + measurement (1) = 2
-        result_t05 = model.g(state, t=0.5)
-        assert result_t05.shape == (2,)
-
-    def test_SecondOrderODEconservationmeasurement(self):
-        """Test SecondOrderODEconservationmeasurement factory."""
-
-        def vf(x, v, *, t):
-            return -x
-
-        E0, E1, E2 = make_projection_matrices(d=2, q=2)
-        C = np.array([[1.0, 1.0]])
-        p = np.array([1.0])
-        A = np.array([[1.0, 0.0]])
-        z = np.array([[0.5]])
-        z_t = np.array([0.5])
-
-        model = SecondOrderODEconservationmeasurement(
-            vf, E0, E1, E2, C, p, A, z, z_t, measurement_noise=0.01
-        )
-
-        assert len(model._constraints) == 2
-        assert isinstance(model._constraints[0], Conservation)
-        assert isinstance(model._constraints[1], Measurement)
-
-        state = np.array([0.5, 0.5, 0.0, 0.0, -0.5, -0.5])
-
-        # At t=0: ODE (2) + conservation (1) = 3
-        result_t0 = model.g(state, t=0.0)
-        assert result_t0.shape == (3,)
-
-        # At t=0.5: ODE (2) + conservation (1) + measurement (1) = 4
-        result_t05 = model.g(state, t=0.5)
-        assert result_t05.shape == (4,)
-
 
 # =============================================================================
 # Measurement Dataclass Edge Cases
@@ -682,21 +623,3 @@ class TestMeasurementEdgeCases:
 
         with pytest.raises(ValueError, match="must match state dimension"):
             ODEInformation(vf, E0, E1, constraints=[conservation])
-
-    def test_measurement_mismatched_A_dimension(self):
-        """Test that mismatched Measurement A dimension raises error."""
-
-        def vf(x, *, t):
-            return -x
-
-        E0, E1, _ = make_projection_matrices(d=2, q=1)
-
-        # Measurement A has wrong dimension (3 instead of 2)
-        measurement = Measurement(
-            A=np.array([[1.0, 1.0, 1.0]]),
-            z=np.array([[0.5]]),
-            z_t=np.array([0.5]),
-        )
-
-        with pytest.raises(ValueError, match="must match state dimension"):
-            ODEInformation(vf, E0, E1, constraints=[measurement])

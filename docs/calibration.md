@@ -15,7 +15,7 @@ by every EKF step.
 
 ### Post-hoc MLE on a fixed-step run
 
-Cheapest workflow: run any existing fixed-step loop, then rescale.
+Cheapest workflow: run any existing fixed-step filter, then rescale.
 `posthoc_mle_sigma_sqr` is the joint MLE of `sigma^2` under the assumption
 that one constant scale explains every step's whitened residual -- the same
 Gaussian likelihood the per-step estimator maximises, but with a single
@@ -25,7 +25,7 @@ kind="mean")` applied to the per-step trace.
 
 ```python
 import jax.numpy as np
-from ode_filters.filters import ekf1_sqr_loop, rts_sqr_smoother_loop
+from ode_filters import gaussian_filter
 from ode_filters.calibration import posthoc_mle_sigma_sqr, rescale_sqr_seq
 from ode_filters.measurement import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
@@ -39,43 +39,70 @@ prior = IWP(q=2, d=1)
 mu_0, S0 = taylor_mode_initialization(vf, np.array([0.1]), q=2)
 measure = ODEInformation(vf, prior.E0, prior.E1)
 
-(m_seq, P_seq_sqr, m_pred_seq, P_pred_seq_sqr,
- G_back, d_back, P_back, mz_seq, Pz_seq_sqr, _) = ekf1_sqr_loop(
-    mu_0, S0, prior, measure, (0.0, 5.0), N=50
-)
+# Run an uncalibrated fixed-step filter.
+result = gaussian_filter(mu_0, S0, prior, measure, (0.0, 5.0), N=50, calibration="none")
 
-sigma_sqr_hat = posthoc_mle_sigma_sqr(
-    np.stack(list(mz_seq)), np.stack(list(Pz_seq_sqr)),
-)
+sigma_sqr_hat = posthoc_mle_sigma_sqr(result.mz, result.Pz_sqr)
 
 # Rescale stored covariances in-place.
-P_seq_sqr_calibrated = rescale_sqr_seq(np.stack(list(P_seq_sqr)), sigma_sqr_hat)
+P_seq_sqr_calibrated = rescale_sqr_seq(result.P_sqr, sigma_sqr_hat)
 ```
 
 This is appropriate for smooth problems where a single global scalar captures
 the residual size well.
 
-### Per-step quasi-MLE inside the adaptive loop
+!!! warning "Joint / latent-force priors: pass `prior=`"
 
-`ekf1_sqr_adaptive_loop` runs the per-step quasi-MLE by default and applies it
+    For `JointPrior` / `PrecondJointPrior`, the diffusion `sigma^2` belongs to
+    the ODE-**state** block only -- the hidden/input block must not be rescaled
+    (Schmidt et al. 2021). The default `rescale_sqr` / `rescale_sqr_seq` scale
+    the *whole* covariance, which is wrong for these priors. Pass the prior so
+    the rescaling is routed through its block-aware
+    `apply_state_sigma_to_cov_sqr`:
+
+    ```python
+    P_seq_sqr_calibrated = rescale_sqr_seq(result.P_sqr, sigma_sqr_hat, prior=prior)
+    ```
+
+    For non-joint priors (`IWP`, `MaternPrior`, ...) passing `prior=` is
+    optional and gives the same result as the default whole-covariance scaling.
+    The online calibration path (`calibration="dynamic"`/`"diagonal"`) is
+    already block-aware, so this only matters for the post-hoc workflow above.
+
+### Per-step quasi-MLE inside the adaptive solver
+
+`gaussian_filter_adaptive` runs the per-step quasi-MLE by default and applies it
 to the stored covariances on every accepted step. See
 [Adaptive Step-Size Control](adaptive-steps.md).
 
 ```python
-from ode_filters.filters import ekf1_sqr_adaptive_loop
+from ode_filters import gaussian_filter_adaptive
 
-result = ekf1_sqr_adaptive_loop(
-    mu_0, S0, prior, measure, (0.0, 5.0), atol=1e-5, rtol=1e-3,
+result = gaussian_filter_adaptive(
+    mu_0, S0, prior, measure, save_at=np.linspace(0.0, 5.0, 50),
+    atol=1e-5, rtol=1e-3,
 )
-# result.sigma_sqr_seq holds the per-step estimates.
 ```
 
-Pass `calibrate=False` to record the estimates without scaling the stored
+For the per-step `sigma_sqr_seq` diagnostics on the accepted-step trajectory,
+use the lower-level trajectory driver `ekf1_sqr_adaptive_loop` from the
+submodule (see [Adaptive Step-Size Control](adaptive-steps.md)):
+
+```python
+from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+
+traj = ekf1_sqr_adaptive_loop(
+    mu_0, S0, prior, measure, (0.0, 5.0), atol=1e-5, rtol=1e-3,
+)
+# traj.sigma_sqr_seq holds the per-step estimates.
+```
+
+Pass `calibration="none"` to record the estimates without scaling the stored
 covariances (diagnostics only).
 
 ### Manual per-step estimation
 
-If you want the per-step number outside the adaptive loop (e.g., for
+If you want the per-step number outside the adaptive solver (e.g., for
 diagnostics on an existing fixed-step run):
 
 ```python
@@ -83,7 +110,7 @@ from ode_filters.calibration import quasi_mle_sigma_sqr
 
 sigma_sqr_per_step = [
     float(quasi_mle_sigma_sqr(mz, Pz_sqr))
-    for mz, Pz_sqr in zip(mz_seq, Pz_seq_sqr, strict=True)
+    for mz, Pz_sqr in zip(result.mz, result.Pz_sqr, strict=True)
 ]
 ```
 
@@ -114,15 +141,15 @@ genuine observations under data assimilation), the full output covariance is
 `H P_pred H.T + R` and feeding that into the quasi-MLE conflates the
 diffusion scale with the measurement noise (it biases `sigma_hat^2` downward).
 
-The adaptive loop handles this transparently: internally it recomputes the
+The adaptive solver handles this transparently: internally it recomputes the
 *noise-free* predicted residual covariance and uses that for calibration,
 matching what probnum and probdiffeq do. With the default `ODEInformation`
 (no measurements, `R = 0`) the distinction is moot.
 
-For the post-hoc workflow on a fixed-step loop with non-zero `R`, the caller
-must pass a noise-free `Pz_seq_sqr` to `posthoc_mle_sigma_sqr` -- the
-covariances returned by the loop include `R` and must be recomputed from the
-saved `(m_pred_seq, P_pred_seq_sqr)` first.
+For the post-hoc workflow on a fixed-step run with non-zero `R`, the caller
+must pass a noise-free `Pz_sqr` to `posthoc_mle_sigma_sqr` -- the
+covariances returned by the filter include `R` and must be recomputed from the
+saved `(result.m_pred, result.P_pred_sqr)` first.
 
 ## What calibration cannot fix
 
@@ -130,9 +157,10 @@ Calibration scales the posterior to match the size of the residuals. It does
 not correct a prior with the wrong smoothness (`q` too low), a vector field
 that is miscoded, or a Jacobian that the EKF linearisation cannot
 approximate. To check that the calibrated filter is honest, plot the whitened
-residual diagnostics described in the wiki note
-*whitened-residual-diagnostics* -- `||z_n||^2 / d` should hover near 1 on a
-well-specified problem.
+residuals: for each step the standardized innovation `z_n = P_z_sqr^{-T} m_z`
+should look like standard normal noise, so `||z_n||^2 / d` hovers near 1 on a
+well-specified problem (much larger means the uncertainty is too tight; much
+smaller means it is too loose).
 
 ## See also
 

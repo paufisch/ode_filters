@@ -19,11 +19,9 @@ import jax.numpy as np
 import numpy as onp
 import pytest
 
-from ode_filters.filters import (
-    ekf1_sqr_adaptive_loop,
-    ekf1_sqr_loop_dynamic,
-    ekf1_sqr_loop_dynamic_scan,
-)
+from ode_filters import gaussian_filter
+from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_loop import ekf1_sqr_loop_dynamic_scan
 from ode_filters.measurement.measurement_models import ODEInformation
 from ode_filters.priors.gmp_priors import IWP, taylor_mode_initialization
 
@@ -48,10 +46,10 @@ class TestSigmaFloorFixedStep:
 
     def test_default_no_clamp_collapses_sigma_to_zero(self, trivial_zero_setup):
         prior, mu_0, S0, measure = trivial_zero_setup
-        r = ekf1_sqr_loop_dynamic(
+        r = gaussian_filter(
             mu_0, S0, prior, measure, (0.0, 1.0), 10, calibration="dynamic"
         )
-        sigmas = onp.asarray(r[-2], dtype=float)
+        sigmas = onp.asarray(r.sigma_sqr, dtype=float)
         # With default min_sigma_sqr=0, the trivial-IC trajectory collapses:
         # every per-step sigma is exactly 0 (residual is identically 0 and
         # the math has no defensive floor).
@@ -60,7 +58,7 @@ class TestSigmaFloorFixedStep:
     def test_floor_keeps_sigma_above_threshold(self, trivial_zero_setup):
         prior, mu_0, S0, measure = trivial_zero_setup
         floor = 1e-30
-        r = ekf1_sqr_loop_dynamic(
+        r = gaussian_filter(
             mu_0,
             S0,
             prior,
@@ -70,11 +68,11 @@ class TestSigmaFloorFixedStep:
             calibration="dynamic",
             min_sigma_sqr=floor,
         )
-        sigmas = onp.asarray(r[-2], dtype=float)
+        sigmas = onp.asarray(r.sigma_sqr, dtype=float)
         assert onp.all(sigmas >= floor)
         # Finite final mean / covariance with the floor active.
-        assert onp.all(onp.isfinite(onp.asarray(r[0][-1])))
-        assert onp.all(onp.isfinite(onp.asarray(r[1][-1])))
+        assert onp.all(onp.isfinite(onp.asarray(r.m[-1])))
+        assert onp.all(onp.isfinite(onp.asarray(r.P_sqr[-1])))
 
 
 class TestSigmaFloorScan:
@@ -133,10 +131,10 @@ class TestSigmaFloorIsOptIn:
         x0 = np.array([0.1])
         mu_0, S0 = taylor_mode_initialization(vf, x0, q=2)
         measure = ODEInformation(vf, prior.E0, prior.E1)
-        r_default = ekf1_sqr_loop_dynamic(
+        r_default = gaussian_filter(
             mu_0, S0, prior, measure, (0.0, 1.0), 20, calibration="dynamic"
         )
-        r_zero = ekf1_sqr_loop_dynamic(
+        r_zero = gaussian_filter(
             mu_0,
             S0,
             prior,
@@ -146,9 +144,9 @@ class TestSigmaFloorIsOptIn:
             calibration="dynamic",
             min_sigma_sqr=0.0,
         )
-        assert np.allclose(r_default[0][-1], r_zero[0][-1], atol=0.0)
+        assert np.allclose(r_default.m[-1], r_zero.m[-1], atol=0.0)
         assert np.allclose(
-            onp.asarray(r_default[-2], dtype=float),
-            onp.asarray(r_zero[-2], dtype=float),
+            onp.asarray(r_default.sigma_sqr, dtype=float),
+            onp.asarray(r_zero.sigma_sqr, dtype=float),
             atol=0.0,
         )

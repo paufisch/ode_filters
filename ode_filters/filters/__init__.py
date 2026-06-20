@@ -1,56 +1,38 @@
-"""Filtering routines for ODE models."""
+"""Filtering and smoothing routines for ODE models.
+
+The public solver API is the consolidated :func:`gaussian_filter` /
+:func:`gaussian_filter_adaptive` / :func:`rts_smoother` (returning
+:class:`FilterResult`), plus the pluggable :class:`Correction` strategies and the
+adaptive step-size controllers. The historical ``ekf1_sqr_loop*`` / ``*_step*``
+matrix is now an implementation detail of those entry points; import it from the
+``ode_filters.filters.ode_filter_loop`` / ``ode_filter_step`` /
+``ode_filter_adaptive`` submodules if you need the low-level variants directly.
+"""
 
 from .adaptive_controller import PController, PIController, StepSizeController
-from .ode_filter_adaptive import AdaptiveLoopResult, ekf1_sqr_adaptive_loop
-from .ode_filter_loop import (
-    ekf1_sqr_loop,
-    ekf1_sqr_loop_dynamic,
-    ekf1_sqr_loop_dynamic_scan,
-    ekf1_sqr_loop_preconditioned,
-    ekf1_sqr_loop_preconditioned_dynamic,
-    ekf1_sqr_loop_preconditioned_dynamic_scan,
-    ekf1_sqr_loop_preconditioned_sequential,
-    ekf1_sqr_loop_preconditioned_sequential_scan,
-    ekf1_sqr_loop_sequential,
-    ekf1_sqr_loop_sequential_scan,
-    rts_sqr_smoother_loop,
-    rts_sqr_smoother_loop_preconditioned,
+from .correction import (
+    Correction,
+    CorrectionResult,
+    IteratedTaylorCorrection,
+    TaylorCorrection,
 )
-from .ode_filter_step import (
-    ekf1_sqr_filter_step,
-    ekf1_sqr_filter_step_preconditioned,
-    ekf1_sqr_filter_step_preconditioned_sequential,
-    ekf1_sqr_filter_step_preconditioned_sequential_scan,
-    ekf1_sqr_filter_step_sequential,
-    ekf1_sqr_filter_step_sequential_scan,
-    rts_sqr_smoother_step,
-    rts_sqr_smoother_step_preconditioned,
+from .gaussian_filter import (
+    FilterResult,
+    gaussian_filter,
+    gaussian_filter_adaptive,
+    rts_smoother,
 )
 
 __all__ = [
-    "AdaptiveLoopResult",
+    "Correction",
+    "CorrectionResult",
+    "FilterResult",
+    "IteratedTaylorCorrection",
     "PController",
     "PIController",
     "StepSizeController",
-    "ekf1_sqr_adaptive_loop",
-    "ekf1_sqr_filter_step",
-    "ekf1_sqr_filter_step_preconditioned",
-    "ekf1_sqr_filter_step_preconditioned_sequential",
-    "ekf1_sqr_filter_step_preconditioned_sequential_scan",
-    "ekf1_sqr_filter_step_sequential",
-    "ekf1_sqr_filter_step_sequential_scan",
-    "ekf1_sqr_loop",
-    "ekf1_sqr_loop_dynamic",
-    "ekf1_sqr_loop_dynamic_scan",
-    "ekf1_sqr_loop_preconditioned",
-    "ekf1_sqr_loop_preconditioned_dynamic",
-    "ekf1_sqr_loop_preconditioned_dynamic_scan",
-    "ekf1_sqr_loop_preconditioned_sequential",
-    "ekf1_sqr_loop_preconditioned_sequential_scan",
-    "ekf1_sqr_loop_sequential",
-    "ekf1_sqr_loop_sequential_scan",
-    "rts_sqr_smoother_loop",
-    "rts_sqr_smoother_loop_preconditioned",
-    "rts_sqr_smoother_step",
-    "rts_sqr_smoother_step_preconditioned",
+    "TaylorCorrection",
+    "gaussian_filter",
+    "gaussian_filter_adaptive",
+    "rts_smoother",
 ]

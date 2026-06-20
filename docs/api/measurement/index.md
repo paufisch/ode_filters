@@ -39,10 +39,12 @@ This separation ensures:
 
 Additional constraints are added via frozen dataclasses:
 
-- **`Conservation`**: Time-invariant linear constraints `A @ x = p`
-- **`Measurement`**: Time-varying observations `A @ x = z[t]` at specified times
-
-These can be combined freely with any ODE class.
+- **`Conservation`**: Time-invariant linear constraints `A @ x = p`, passed via
+  the ODE class's `constraints=` argument.
+- **`Measurement`**: Time-varying observations `A @ x = z[t]` at specified times.
+  These are *not* measure constraints; build an observation model with
+  `prepare_observations([Measurement(...)], E0, ts)` and pass it as
+  `obs_model=` to the solver.
 
 ## Usage Examples
 
@@ -81,6 +83,7 @@ For estimating unknown parameters alongside the state, use `JointPrior` with
 the hidden state classes:
 
 ```python
+from ode_filters import gaussian_filter, prepare_observations
 from ode_filters.priors import IWP, JointPrior
 from ode_filters.measurement import SecondOrderODEInformationWithHidden, Measurement
 
@@ -94,17 +97,22 @@ def vf(x, v, u, *, t):
     omega = 1.0
     return -(omega**2) * x - u * v
 
-# Observations of position
-A_obs = prior_joint.E0[:1, :]  # observe x only
-obs = Measurement(A=A_obs, z=observations, z_t=obs_times, noise=0.01)
-
 model = SecondOrderODEInformationWithHidden(
     vf,
     E0=prior_joint.E0_x,        # extracts x
     E1=prior_joint.E1,          # extracts dx/dt
     E2=prior_joint.E2,          # extracts d^2x/dt^2
     E0_hidden=prior_joint.E0_hidden,  # extracts u
-    constraints=[obs]
+)
+
+# Data observations go through obs_model, not the measure constraints.
+# Observe position x only; align observation times to the filter grid `ts`.
+A_obs = prior_joint.E0_x[:1, :]  # observe x only
+meas = Measurement(A=A_obs, z=observations, z_t=obs_times, noise=0.01)
+obs_model = prepare_observations([meas], prior_joint.E0_x, ts)
+
+result = gaussian_filter(
+    mu_0, P_0_sqr, prior_joint, model, tspan, N, obs_model=obs_model
 )
 ```
 
@@ -206,9 +214,3 @@ model = TransformedMeasurement(
 ## API Reference
 
 ::: ode_filters.measurement
-handler: python
-options:
-show_object_full_path: true
-show_source: false
-members_order: source
-show_signature_annotations: true

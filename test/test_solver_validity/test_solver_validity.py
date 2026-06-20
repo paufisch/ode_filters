@@ -5,12 +5,7 @@ import jax.numpy as np
 import pytest
 from scipy.integrate import solve_ivp
 
-from ode_filters.filters.ode_filter_loop import (
-    ekf1_sqr_loop,
-    ekf1_sqr_loop_preconditioned,
-    rts_sqr_smoother_loop,
-    rts_sqr_smoother_loop_preconditioned,
-)
+from ode_filters import gaussian_filter, rts_smoother
 from ode_filters.measurement.measurement_models import ODEInformation
 from ode_filters.priors.gmp_priors import IWP, PrecondIWP, taylor_mode_initialization
 
@@ -34,18 +29,14 @@ def _solve_standard(vf, x0, *, tspan, N, q=3, Xi_scale=0.5):
     mu_0, Sigma_0_sqr = taylor_mode_initialization(vf, x0, q)
     measure = ODEInformation(vf, prior.E0, prior.E1)
 
-    result = ekf1_sqr_loop(mu_0, Sigma_0_sqr, prior, measure, tspan, N)
-
-    # result is a tuple: (m_seq, P_seq_sqr, m_pred, P_pred, G, d, P_back, mz, Pz, ll)
-    m_seq = np.array(result[0])
-    P_seq_sqr_arr = np.array(result[1])
-    G_back = np.array(result[4])
-    d_back = np.array(result[5])
-    P_back = np.array(result[6])
-
-    m_smooth, P_smooth_sqr = rts_sqr_smoother_loop(
-        m_seq[-1], P_seq_sqr_arr[-1], G_back, d_back, P_back, N
+    result = gaussian_filter(
+        mu_0, Sigma_0_sqr, prior, measure, tspan, N, calibration="none"
     )
+
+    m_seq = np.array(result.m)
+    P_seq_sqr_arr = np.array(result.P_sqr)
+
+    m_smooth, P_smooth_sqr = rts_smoother(prior, result)
 
     E0 = prior.E0
     ts = np.linspace(tspan[0], tspan[1], N + 1)
@@ -68,31 +59,14 @@ def _solve_preconditioned(vf, x0, *, tspan, N, q=3, Xi_scale=0.5):
     mu_0, Sigma_0_sqr = taylor_mode_initialization(vf, x0, q)
     measure = ODEInformation(vf, prior.E0, prior.E1)
 
-    result = ekf1_sqr_loop_preconditioned(mu_0, Sigma_0_sqr, prior, measure, tspan, N)
-
-    # result tuple: (m_seq, P_seq_sqr, m_seq_bar, P_seq_sqr_bar,
-    #   m_pred_bar, P_pred_bar, G_back_bar, d_back_bar, P_back_bar,
-    #   mz, Pz, T_h, ll)
-    m_seq = np.array(result[0])
-    P_seq_sqr_arr = np.array(result[1])
-    m_seq_bar = np.array(result[2])
-    P_seq_sqr_bar = np.array(result[3])
-    G_back_bar = np.array(result[6])
-    d_back_bar = np.array(result[7])
-    P_back_bar = np.array(result[8])
-    T_h = result[11]
-
-    m_smooth, P_smooth_sqr = rts_sqr_smoother_loop_preconditioned(
-        m_seq[-1],
-        P_seq_sqr_arr[-1],
-        m_seq_bar[-1],
-        P_seq_sqr_bar[-1],
-        G_back_bar,
-        d_back_bar,
-        P_back_bar,
-        N,
-        T_h,
+    result = gaussian_filter(
+        mu_0, Sigma_0_sqr, prior, measure, tspan, N, calibration="none"
     )
+
+    m_seq = np.array(result.m)
+    P_seq_sqr_arr = np.array(result.P_sqr)
+
+    m_smooth, P_smooth_sqr = rts_smoother(prior, result)
 
     E0 = prior.E0
     ts = np.linspace(tspan[0], tspan[1], N + 1)
@@ -231,9 +205,13 @@ class TestConvergenceOrder:
         # Linear regression: log_err = slope * log_N + intercept
         slope = float(np.polyfit(log_N, log_err, 1)[0])
 
-        # Slope should be negative (error decreases), and |slope| ~ q
-        assert slope < -1.5, (
-            f"Filter convergence slope {slope:.2f}, expected <= -1.5 for q={q}"
+        # The EK1 filter converges at global order ~q to q+1; for q=3 the
+        # empirical slope is ~-3.9 (errors 3e-8 -> 8e-12 over N=50..400 in
+        # float64). Require at least order ~3 so the test pins near-theoretical
+        # order rather than merely catching catastrophic regressions.
+        assert slope < -3.0, (
+            f"Filter convergence slope {slope:.2f}, expected <~ -3.9 (>= order 3) "
+            f"for q={q}"
         )
 
     @pytest.mark.parametrize("solver", SOLVERS)
@@ -255,8 +233,11 @@ class TestConvergenceOrder:
         log_err = np.log(np.array(errors))
         slope = float(np.polyfit(log_N, log_err, 1)[0])
 
-        assert slope < -1.5, (
-            f"Smoother convergence slope {slope:.2f}, expected <= -1.5 for q={q}"
+        # The smoother converges at least as fast as the filter; for q=3 the
+        # empirical slope is ~-4.0. Require at least order ~3.
+        assert slope < -3.0, (
+            f"Smoother convergence slope {slope:.2f}, expected <~ -4.0 (>= order 3) "
+            f"for q={q}"
         )
 
 
@@ -357,13 +338,19 @@ class TestProbabilisticProperties:
         x0 = np.array([1.0])
         tspan = (0.0, 2.0)
 
-        _, _, _, _, P_smooth_coarse = solver(_vf_exp_decay, x0, tspan=tspan, N=50, q=3)
-        _, _, _, _, P_smooth_fine = solver(_vf_exp_decay, x0, tspan=tspan, N=200, q=3)
+        n_coarse, n_fine = 50, 200
+        _, _, _, _, P_smooth_coarse = solver(
+            _vf_exp_decay, x0, tspan=tspan, N=n_coarse, q=3
+        )
+        _, _, _, _, P_smooth_fine = solver(
+            _vf_exp_decay, x0, tspan=tspan, N=n_fine, q=3
+        )
 
-        # Compare average posterior variance at midpoint
-        # Coarse grid midpoint index: 25, Fine grid midpoint index: 100
-        var_coarse = float(np.sum(P_smooth_coarse[25] ** 2))
-        var_fine = float(np.sum(P_smooth_fine[100] ** 2))
+        # Compare posterior variance at the same physical time t=1.0 (the grid
+        # midpoint of each run), computed from N rather than hard-coded so the
+        # test is robust to grid changes.
+        var_coarse = float(np.sum(P_smooth_coarse[n_coarse // 2] ** 2))
+        var_fine = float(np.sum(P_smooth_fine[n_fine // 2] ** 2))
 
         assert var_fine < var_coarse, (
             f"Fine variance ({var_fine:.2e}) >= coarse variance ({var_coarse:.2e})"

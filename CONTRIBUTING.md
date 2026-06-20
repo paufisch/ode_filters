@@ -1,70 +1,93 @@
 # Contributing to ode_filters
 
-## Code Style
+Contributions are very welcome! This guide covers the development setup and the
+conventions enforced by CI. The authoritative style rules live in
+[`CLAUDE.md`](CLAUDE.md); this file focuses on *how to get set up and submit a
+change*.
 
-- Follow **PEP 8** (enforced by Ruff)
-- Run `uv run pre-commit run --all-files` before committing
-- Lowercase module names with underscores (`gmp_priors.py`)
-- PascalCase for classes (`BasePrior`, `ODEInformation`)
-- Prefix private attributes with `_` (e.g., `_R`, `_jacobian_vf`)
+## Development setup
 
-## Type Hints
-
-Always use type hints. Use `Array` from JAX, `ArrayLike` for flexible inputs:
-
-```python
-def A(self, h: float) -> Array:
-```
-
-## Imports
-
-```python
-# stdlib
-from collections.abc import Callable
-
-# third-party
-import jax.numpy as np
-from jax import Array
-
-# local (relative)
-from .gmp_priors import BasePrior
-```
-
-## Docstrings
-
-Google-style, ASCII only (no Unicode math symbols):
-
-```python
-def function(arg: int) -> str:
-    """Short description.
-
-    Args:
-        arg: Description.
-
-    Returns:
-        Description.
-    """
-```
-
-## Testing
+The project uses [uv](https://docs.astral.sh/uv/) for environment and
+dependency management.
 
 ```bash
-uv run pytest              # run tests
-uv run pytest --cov        # with coverage
+git clone https://github.com/paufisch/ode_filters.git
+cd ode_filters
+uv sync --group dev          # create the venv and install runtime + dev deps
+uv run pre-commit install    # install the git hook so checks run on every commit
 ```
 
-Tests go in `test/` mirroring package structure. Use `hypothesis` for property-based tests.
+That's it -- `uv run <cmd>` always executes inside the managed environment, so
+you never need to activate a venv manually.
 
-## Before Committing
+## Branching workflow
+
+CI runs on `development` and `main`. Open pull requests against `development`:
+
+```
+feature/your-change  ->  development  ->  main
+```
+
+## Making a change
+
+1. Branch from `development`.
+2. Make your change and add tests under `test/` (mirroring the package layout).
+3. Run the checks locally (CI runs the same ones):
+
+   ```bash
+   uv run pre-commit run --all-files   # ruff (lint+format), pyright, nbstripout, ...
+   uv run pytest                       # tests + coverage
+   ```
+
+4. Push and open a PR. Note in the description whether the change is breaking.
+
+## Documentation
+
+Docs are built with MkDocs; example notebooks in `docs/examples/` are executed
+during the build, so they must run end-to-end.
 
 ```bash
-uv run pre-commit run --all-files
-uv run pytest
+uv run --group docs mkdocs serve         # live preview at http://localhost:8000
+uv run --group docs mkdocs build --strict  # what CI checks
 ```
 
-## API Design
+When you change the public API, verify the notebooks still execute:
 
-- Prefer `E0`/`E1` matrices over `q`/`d` integers
-- Use keyword-only arguments: `def f(x, *, t):`
-- Export public API through `__init__.py`
-- JAX arrays are immutable; use `.at[].set()` for updates
+```bash
+uv run jupyter nbconvert --to notebook --execute \
+  docs/examples/<notebook>.ipynb --output-dir /tmp/nb_test
+```
+
+## Type checking
+
+Static checking uses **pyright**, which runs as a pre-commit hook (and therefore
+in CI, since CI runs `pre-commit run --all-files`). The tree is pyright-clean, so
+please keep it that way -- add type hints (`Array` for outputs, `ArrayLike` for
+scalar/array inputs) rather than introducing new errors. Run it directly with
+`uv run pyright` for a fast type-only check.
+
+There is also opt-in *runtime* shape checking via
+[jaxtyping](https://github.com/patrick-kidger/jaxtyping) + beartype. Enabling it
+wraps every `ode_filters` function so that its annotations -- including jaxtyping
+array types like `Float[Array, "n n"]` -- are validated on each call:
+
+```bash
+ODE_FILTERS_TYPECHECK=1 uv run pytest
+```
+
+It is off by default because a few negative-path tests intentionally pass
+invalid inputs (to assert the library's own `ValueError`s), which the runtime
+checker rejects earlier with a `TypeCheckError`. Use it locally to check new
+code. Migrating annotations from plain `Array` to jaxtyping shapes -- and
+reconciling those tests -- is an ongoing, incremental effort; new code is
+encouraged to use jaxtyping types.
+
+## Quick reference
+
+| Task            | Command                                  |
+| --------------- | ---------------------------------------- |
+| Install hooks   | `uv run pre-commit install`              |
+| Lint + format   | `uv run pre-commit run --all-files`      |
+| Tests           | `uv run pytest`                          |
+| Type check      | `uv run pyright`                         |
+| Docs preview    | `uv run --group docs mkdocs serve`       |

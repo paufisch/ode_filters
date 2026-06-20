@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
 
 import jax
-import jax.numpy as np
 from jax import Array
+from jax.typing import ArrayLike
 
 from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
 from ..measurement.measurement_models import BaseODEInformation
+from .correction import Correction, TaylorCorrection
 
 StateFunction = Callable[[Array], Array]
 JacobianFunction = Callable[[Array], Array]
@@ -37,9 +39,15 @@ def ekf1_sqr_filter_step(
     m_prev: Array,
     P_prev_sqr: Array,
     measure: BaseODEInformation,
-    t: float = 0.0,
+    t: ArrayLike = 0.0,
+    *,
+    correction: Correction | None = None,
 ) -> FilterStepResult:
-    """Perform a single square-root EKF prediction and update step.
+    """Perform a single square-root Gaussian prediction and update step.
+
+    The prediction is a square-root marginalization; the measurement update is
+    delegated to a :class:`Correction` strategy, which decides *how* to
+    linearize (EK0/EK1/...) given *what* the measurement model observes.
 
     Args:
         A_t: State transition matrix for current step.
@@ -49,10 +57,15 @@ def ekf1_sqr_filter_step(
         P_prev_sqr: Previous state covariance (square-root form).
         measure: Measurement model (e.g., ODEInformation or subclass).
         t: Current time (default 0.0).
+        correction: Linearization/correction strategy. Defaults to
+            ``TaylorCorrection(order=1)`` (EK1), which reproduces the historical
+            behavior exactly.
 
     Returns:
         Tuple of 4 tuples containing prediction, backward pass, and update results.
     """
+    if correction is None:
+        correction = TaylorCorrection(order=1)
 
     m_pred, P_pred_sqr = sqr_marginalization(A_t, b_t, Q_t_sqr, m_prev, P_prev_sqr)
     # this is optional if only filtering is relevant
@@ -60,18 +73,13 @@ def ekf1_sqr_filter_step(
         A_t, m_prev, P_prev_sqr, m_pred, P_pred_sqr, Q_t_sqr
     )
 
-    H_t, c_t = measure.linearize(m_pred, t=t)
-    R_t_sqr = measure.get_noise(t=t)
-
-    m_z, P_z_sqr = sqr_marginalization(H_t, c_t, R_t_sqr, m_pred, P_pred_sqr)
-    _, d, P_t_sqr = sqr_inversion(H_t, m_pred, P_pred_sqr, m_z, P_z_sqr, R_t_sqr)
-    m_t = d  # for no zero measurements: m_t = K_t @ z_observed_t + d
+    result = correction.correct(measure, m_pred, P_pred_sqr, t=t)
 
     return (
         (m_pred, P_pred_sqr),
         (G_back, d_back, P_back_sqr),
-        (m_z, P_z_sqr),
-        (m_t, P_t_sqr),
+        (result.mz, result.Pz_sqr),
+        (result.m, result.P_sqr),
     )
 
 
@@ -100,6 +108,46 @@ def rts_sqr_smoother_step(
     return (m_s_prev, P_s_prev_sqr)
 
 
+class _BarMeasure:
+    """Adapt a measurement model to preconditioned (bar) coordinates.
+
+    The state evolves in bar space (``x = T x_bar``) but the measurement model
+    linearizes in original space. This wrapper presents the model *as if* it
+    acted on the bar state, so the same :class:`Correction` strategy (EK0 / EK1 /
+    IEKF) used on the plain path can drive the preconditioned update with no
+    duplicated linearization logic:
+
+    - ``linearize(x_bar)`` returns ``(H @ T, c)`` where ``(H, c)`` is the
+      original-space linearization at ``T x_bar`` -- so ``(H T) x_bar + c`` is
+      the same affine residual as ``H (T x_bar) + c``;
+    - ``E_constraint`` becomes ``E_constraint @ T`` so the EK0 (``order=0``)
+      branch overwrites the ODE-defect rows with the *bar-space* selector;
+    - ``get_noise`` / ``ode_dim`` pass through unchanged.
+
+    It is a thin, single-step view (``T`` is the current step's preconditioner),
+    used only inside the traced step body -- not a pytree.
+    """
+
+    def __init__(self, measure: BaseODEInformation, T: Array) -> None:
+        self._measure = measure
+        self._T = T
+
+    def linearize(self, state: Array, *, t: ArrayLike = 0.0) -> tuple[Array, Array]:
+        H, c = self._measure.linearize(self._T @ state, t=t)
+        return H @ self._T, c
+
+    def get_noise(self, *, t: ArrayLike = 0.0) -> Array:
+        return self._measure.get_noise(t=t)
+
+    @property
+    def E_constraint(self) -> Array:
+        return self._measure.E_constraint @ self._T
+
+    @property
+    def ode_dim(self) -> int:
+        return self._measure.ode_dim
+
+
 # Preconditioned version of ekf1_sqr_filter_step
 # T is a preconditioner with x_bar = T^-1 x
 # A, Q and b are stepsize-independent in the transformed space
@@ -112,9 +160,17 @@ def ekf1_sqr_filter_step_preconditioned(
     m_prev_bar: Array,
     P_prev_sqr_bar: Array,
     measure: BaseODEInformation,
-    t: float = 0.0,
+    t: ArrayLike = 0.0,
+    *,
+    correction: Correction | None = None,
 ) -> PreconditionedFilterStepResult:
     """Perform a single preconditioned square-root EKF step.
+
+    The measurement update is delegated to a :class:`Correction` strategy
+    operating in preconditioned coordinates (via :class:`_BarMeasure`), so EK0 /
+    EK1 / IEKF all work on the preconditioned path with the same linearization
+    logic as the plain step. The default ``TaylorCorrection(order=1)`` (EK1) is
+    bit-identical to the previous inlined behavior.
 
     Args:
         A_bar: Stepsize-independent state transition matrix.
@@ -125,10 +181,14 @@ def ekf1_sqr_filter_step_preconditioned(
         P_prev_sqr_bar: Previous state covariance (square-root form, preconditioned space).
         measure: Measurement model (e.g., ODEInformation or subclass).
         t: Current time (default 0.0).
+        correction: Linearization/correction strategy; defaults to
+            ``TaylorCorrection(order=1)`` (EK1).
 
     Returns:
         Tuple of 5 tuples with preconditioned and original-space results.
     """
+    if correction is None:
+        correction = TaylorCorrection(order=1)
 
     m_pred_bar, P_pred_sqr_bar = sqr_marginalization(
         A_bar, b_bar, Q_sqr_bar, m_prev_bar, P_prev_sqr_bar
@@ -137,17 +197,10 @@ def ekf1_sqr_filter_step_preconditioned(
         A_bar, m_prev_bar, P_prev_sqr_bar, m_pred_bar, P_pred_sqr_bar, Q_sqr_bar
     )
 
-    H_t, c_t = measure.linearize(T_t @ m_pred_bar, t=t)
-    H_t_bar = H_t @ T_t
-    R_t_sqr = measure.get_noise(t=t)
-
-    m_z, P_z_sqr = sqr_marginalization(
-        H_t_bar, c_t, R_t_sqr, m_pred_bar, P_pred_sqr_bar
-    )
-    _, d_bar, P_t_sqr_bar = sqr_inversion(
-        H_t_bar, m_pred_bar, P_pred_sqr_bar, m_z, P_z_sqr, R_t_sqr
-    )
-    m_t_bar = d_bar  # for non zero measurements: K_t_bar @ z_observed_t + d_bar
+    bar_measure = cast(BaseODEInformation, _BarMeasure(measure, T_t))
+    res = correction.correct(bar_measure, m_pred_bar, P_pred_sqr_bar, t=t)
+    m_t_bar, P_t_sqr_bar = res.m, res.P_sqr
+    m_z, P_z_sqr = res.mz, res.Pz_sqr
 
     m_t = T_t @ m_t_bar
     P_t_sqr = P_t_sqr_bar @ T_t.T
@@ -201,181 +254,6 @@ def rts_sqr_smoother_step_preconditioned(
 # from the measurement model, decoupling the ODE model from observation
 # scheduling.
 
-SeqFilterStepResult = tuple[
-    tuple[Array, Array],  # (m_pred, P_pred_sqr)
-    tuple[Array, Array, Array],  # (G_back, d_back, P_back_sqr)
-    tuple[Array, Array],  # (mz_ode, Pz_ode_sqr) - ODE obs marginal
-    tuple[Array, Array],  # (mz_obs, Pz_obs_sqr) - observation marginal
-    tuple[Array, Array],  # (m_t, P_t_sqr) - final updated state
-]
-
-SeqPrecondFilterStepResult = tuple[
-    tuple[Array, Array],  # (m_pred_bar, P_pred_sqr_bar)
-    tuple[Array, Array, Array],  # (G_back_bar, d_back_bar, P_back_sqr_bar)
-    tuple[Array, Array],  # (mz_ode, Pz_ode_sqr)
-    tuple[Array, Array],  # (mz_obs, Pz_obs_sqr)
-    tuple[Array, Array],  # (m_t_bar, P_t_sqr_bar)
-    tuple[Array, Array],  # (m_t, P_t_sqr)
-]
-
-
-def ekf1_sqr_filter_step_sequential(
-    A_t: Array,
-    b_t: Array,
-    Q_t_sqr: Array,
-    m_prev: Array,
-    P_prev_sqr: Array,
-    measure: BaseODEInformation,
-    t: float = 0.0,
-    *,
-    obs: tuple[Array, Array, Array] | None = None,
-) -> SeqFilterStepResult:
-    """Perform a sequential square-root EKF step: ODE update then observation.
-
-    Unlike the joint update in ``ekf1_sqr_filter_step``, this function first
-    incorporates ODE + Conservation information, then applies an optional
-    observation update using the ODE-updated state as the prior.
-
-    Args:
-        A_t: State transition matrix for current step.
-        b_t: Drift vector for current step.
-        Q_t_sqr: Square-root of process noise covariance.
-        m_prev: Previous state mean estimate.
-        P_prev_sqr: Previous state covariance (square-root form).
-        measure: Measurement model (e.g., ODEInformation or subclass).
-        t: Current time (default 0.0).
-        obs: Optional observation tuple ``(H_obs, c_obs, R_obs_sqr)``.
-            When provided, the observation update uses the ODE-updated
-            state ``(m_ode, P_ode_sqr)`` as its prior.
-
-    Returns:
-        Tuple of 5 tuples: prediction, backward pass, ODE observation
-        marginal, observation marginal, and final updated state.
-    """
-    # Prediction
-    m_pred, P_pred_sqr = sqr_marginalization(A_t, b_t, Q_t_sqr, m_prev, P_prev_sqr)
-    G_back, d_back, P_back_sqr = sqr_inversion(
-        A_t, m_prev, P_prev_sqr, m_pred, P_pred_sqr, Q_t_sqr
-    )
-
-    # ODE + Conservation update
-    H_ode, c_ode = measure.linearize_fixed(m_pred, t=t)
-    R_ode_sqr = measure.get_fixed_noise_sqr()
-    mz_ode, Pz_ode_sqr = sqr_marginalization(
-        H_ode, c_ode, R_ode_sqr, m_pred, P_pred_sqr
-    )
-    _, m_ode, P_ode_sqr = sqr_inversion(
-        H_ode, m_pred, P_pred_sqr, mz_ode, Pz_ode_sqr, R_ode_sqr
-    )
-
-    # Observation update
-    if obs is not None:
-        H_obs, c_obs, R_obs_sqr = obs
-        mz_obs, Pz_obs_sqr = sqr_marginalization(
-            H_obs, c_obs, R_obs_sqr, m_ode, P_ode_sqr
-        )
-        _, m_t, P_t_sqr = sqr_inversion(
-            H_obs, m_ode, P_ode_sqr, mz_obs, Pz_obs_sqr, R_obs_sqr
-        )
-    else:
-        m_t = m_ode
-        P_t_sqr = P_ode_sqr
-        mz_obs = np.zeros(0)
-        Pz_obs_sqr = np.zeros((0, 0))
-
-    return (
-        (m_pred, P_pred_sqr),
-        (G_back, d_back, P_back_sqr),
-        (mz_ode, Pz_ode_sqr),
-        (mz_obs, Pz_obs_sqr),
-        (m_t, P_t_sqr),
-    )
-
-
-def ekf1_sqr_filter_step_preconditioned_sequential(
-    A_bar: Array,
-    b_bar: Array,
-    Q_sqr_bar: Array,
-    T_t: Array,
-    m_prev_bar: Array,
-    P_prev_sqr_bar: Array,
-    measure: BaseODEInformation,
-    t: float = 0.0,
-    *,
-    obs: tuple[Array, Array, Array] | None = None,
-) -> SeqPrecondFilterStepResult:
-    """Perform a sequential preconditioned square-root EKF step.
-
-    Args:
-        A_bar: Stepsize-independent state transition matrix.
-        b_bar: Stepsize-independent drift vector.
-        Q_sqr_bar: Square-root of stepsize-independent process noise covariance.
-        T_t: Preconditioning transformation matrix for current step.
-        m_prev_bar: Previous state mean estimate (preconditioned space).
-        P_prev_sqr_bar: Previous state covariance (square-root form, preconditioned).
-        measure: Measurement model (e.g., ODEInformation or subclass).
-        t: Current time (default 0.0).
-        obs: Optional observation tuple ``(H_obs, c_obs, R_obs_sqr)``.
-
-    Returns:
-        Tuple of 6 tuples with preconditioned and original-space results.
-    """
-    # Prediction
-    m_pred_bar, P_pred_sqr_bar = sqr_marginalization(
-        A_bar, b_bar, Q_sqr_bar, m_prev_bar, P_prev_sqr_bar
-    )
-    G_back_bar, d_back_bar, P_back_sqr_bar = sqr_inversion(
-        A_bar, m_prev_bar, P_prev_sqr_bar, m_pred_bar, P_pred_sqr_bar, Q_sqr_bar
-    )
-
-    # ODE + Conservation update (linearize in original space)
-    H_ode, c_ode = measure.linearize_fixed(T_t @ m_pred_bar, t=t)
-    H_ode_bar = H_ode @ T_t
-    R_ode_sqr = measure.get_fixed_noise_sqr()
-    mz_ode, Pz_ode_sqr = sqr_marginalization(
-        H_ode_bar, c_ode, R_ode_sqr, m_pred_bar, P_pred_sqr_bar
-    )
-    _, m_ode_bar, P_ode_sqr_bar = sqr_inversion(
-        H_ode_bar, m_pred_bar, P_pred_sqr_bar, mz_ode, Pz_ode_sqr, R_ode_sqr
-    )
-
-    # Observation update
-    if obs is not None:
-        H_obs, c_obs, R_obs_sqr = obs
-        H_obs_bar = H_obs @ T_t
-        mz_obs, Pz_obs_sqr = sqr_marginalization(
-            H_obs_bar, c_obs, R_obs_sqr, m_ode_bar, P_ode_sqr_bar
-        )
-        _, m_t_bar, P_t_sqr_bar = sqr_inversion(
-            H_obs_bar, m_ode_bar, P_ode_sqr_bar, mz_obs, Pz_obs_sqr, R_obs_sqr
-        )
-    else:
-        m_t_bar = m_ode_bar
-        P_t_sqr_bar = P_ode_sqr_bar
-        mz_obs = np.zeros(0)
-        Pz_obs_sqr = np.zeros((0, 0))
-
-    m_t = T_t @ m_t_bar
-    P_t_sqr = P_t_sqr_bar @ T_t.T
-
-    return (
-        (m_pred_bar, P_pred_sqr_bar),
-        (G_back_bar, d_back_bar, P_back_sqr_bar),
-        (mz_ode, Pz_ode_sqr),
-        (mz_obs, Pz_obs_sqr),
-        (m_t_bar, P_t_sqr_bar),
-        (m_t, P_t_sqr),
-    )
-
-
-# =============================================================================
-# Scan-compatible sequential update filter step functions
-# =============================================================================
-# These always execute the observation update with fixed-shape arrays,
-# using ``jnp.where`` to select between the observation-updated and
-# ODE-only states based on a boolean mask.  This avoids data-dependent
-# branching and makes the step function compatible with ``jax.lax.scan``.
-
 
 def ekf1_sqr_filter_step_sequential_scan(
     A_t: Array,
@@ -384,11 +262,13 @@ def ekf1_sqr_filter_step_sequential_scan(
     m_prev: Array,
     P_prev_sqr: Array,
     measure: BaseODEInformation,
-    t: float,
+    t: ArrayLike,
     H_obs: Array,
     c_obs: Array,
     R_obs_sqr: Array,
     obs_active: Array,
+    *,
+    correction: Correction | None = None,
 ) -> tuple[
     tuple[Array, Array],
     tuple[Array, Array, Array],
@@ -414,26 +294,27 @@ def ekf1_sqr_filter_step_sequential_scan(
         c_obs: Observation offset, shape ``[obs_dim]``.
         R_obs_sqr: Square-root observation noise, shape ``[obs_dim, obs_dim]``.
         obs_active: Scalar boolean — whether observations are active.
+        correction: Linearization strategy for the ODE update (defaults to
+            ``TaylorCorrection(order=1)``, i.e. EK1). Uses the fixed
+            (ODE + Conservation) linearization; the observation update is linear.
 
     Returns:
         Tuple of 5 tuples: prediction, backward pass, ODE observation
         marginal, observation marginal, and final updated state.
     """
+    if correction is None:
+        correction = TaylorCorrection(order=1)
+
     # Prediction
     m_pred, P_pred_sqr = sqr_marginalization(A_t, b_t, Q_t_sqr, m_prev, P_prev_sqr)
     G_back, d_back, P_back_sqr = sqr_inversion(
         A_t, m_prev, P_prev_sqr, m_pred, P_pred_sqr, Q_t_sqr
     )
 
-    # ODE + Conservation update
-    H_ode, c_ode = measure.linearize_fixed(m_pred, t=t)
-    R_ode_sqr = measure.get_fixed_noise_sqr()
-    mz_ode, Pz_ode_sqr = sqr_marginalization(
-        H_ode, c_ode, R_ode_sqr, m_pred, P_pred_sqr
-    )
-    _, m_ode, P_ode_sqr = sqr_inversion(
-        H_ode, m_pred, P_pred_sqr, mz_ode, Pz_ode_sqr, R_ode_sqr
-    )
+    # ODE + Conservation update (linearized by the chosen correction)
+    res_ode = correction.correct(measure, m_pred, P_pred_sqr, t=t)
+    mz_ode, Pz_ode_sqr = res_ode.mz, res_ode.Pz_sqr
+    m_ode, P_ode_sqr = res_ode.m, res_ode.P_sqr
 
     # Observation update (always executed for fixed shapes)
     mz_obs, Pz_obs_sqr = sqr_marginalization(H_obs, c_obs, R_obs_sqr, m_ode, P_ode_sqr)
@@ -450,90 +331,5 @@ def ekf1_sqr_filter_step_sequential_scan(
         (G_back, d_back, P_back_sqr),
         (mz_ode, Pz_ode_sqr),
         (mz_obs, Pz_obs_sqr),
-        (m_t, P_t_sqr),
-    )
-
-
-def ekf1_sqr_filter_step_preconditioned_sequential_scan(
-    A_bar: Array,
-    b_bar: Array,
-    Q_sqr_bar: Array,
-    T_t: Array,
-    m_prev_bar: Array,
-    P_prev_sqr_bar: Array,
-    measure: BaseODEInformation,
-    t: float,
-    H_obs: Array,
-    c_obs: Array,
-    R_obs_sqr: Array,
-    obs_active: Array,
-) -> tuple[
-    tuple[Array, Array],
-    tuple[Array, Array, Array],
-    tuple[Array, Array],
-    tuple[Array, Array],
-    tuple[Array, Array],
-    tuple[Array, Array],
-]:
-    """Scan-compatible preconditioned sequential square-root EKF step.
-
-    Args:
-        A_bar: Stepsize-independent state transition matrix.
-        b_bar: Stepsize-independent drift vector.
-        Q_sqr_bar: Square-root stepsize-independent process noise.
-        T_t: Preconditioning transformation matrix.
-        m_prev_bar: Previous state mean (preconditioned space).
-        P_prev_sqr_bar: Previous state covariance (preconditioned, square-root).
-        measure: Measurement model (ODE + Conservation only).
-        t: Current time.
-        H_obs: Observation Jacobian, shape ``[obs_dim, state_dim]``.
-        c_obs: Observation offset, shape ``[obs_dim]``.
-        R_obs_sqr: Square-root observation noise, shape ``[obs_dim, obs_dim]``.
-        obs_active: Scalar boolean — whether observations are active.
-
-    Returns:
-        Tuple of 6 tuples with preconditioned and original-space results.
-    """
-    # Prediction
-    m_pred_bar, P_pred_sqr_bar = sqr_marginalization(
-        A_bar, b_bar, Q_sqr_bar, m_prev_bar, P_prev_sqr_bar
-    )
-    G_back_bar, d_back_bar, P_back_sqr_bar = sqr_inversion(
-        A_bar, m_prev_bar, P_prev_sqr_bar, m_pred_bar, P_pred_sqr_bar, Q_sqr_bar
-    )
-
-    # ODE + Conservation update (linearize in original space)
-    H_ode, c_ode = measure.linearize_fixed(T_t @ m_pred_bar, t=t)
-    H_ode_bar = H_ode @ T_t
-    R_ode_sqr = measure.get_fixed_noise_sqr()
-    mz_ode, Pz_ode_sqr = sqr_marginalization(
-        H_ode_bar, c_ode, R_ode_sqr, m_pred_bar, P_pred_sqr_bar
-    )
-    _, m_ode_bar, P_ode_sqr_bar = sqr_inversion(
-        H_ode_bar, m_pred_bar, P_pred_sqr_bar, mz_ode, Pz_ode_sqr, R_ode_sqr
-    )
-
-    # Observation update (always executed for fixed shapes)
-    H_obs_bar = H_obs @ T_t
-    mz_obs, Pz_obs_sqr = sqr_marginalization(
-        H_obs_bar, c_obs, R_obs_sqr, m_ode_bar, P_ode_sqr_bar
-    )
-    _, m_obs_bar, P_obs_sqr_bar = sqr_inversion(
-        H_obs_bar, m_ode_bar, P_ode_sqr_bar, mz_obs, Pz_obs_sqr, R_obs_sqr
-    )
-
-    # Select: use obs-updated state when active, else ODE-only
-    m_t_bar = jax.lax.select(obs_active, m_obs_bar, m_ode_bar)
-    P_t_sqr_bar = jax.lax.select(obs_active, P_obs_sqr_bar, P_ode_sqr_bar)
-
-    m_t = T_t @ m_t_bar
-    P_t_sqr = P_t_sqr_bar @ T_t.T
-
-    return (
-        (m_pred_bar, P_pred_sqr_bar),
-        (G_back_bar, d_back_bar, P_back_sqr_bar),
-        (mz_ode, Pz_ode_sqr),
-        (mz_obs, Pz_obs_sqr),
-        (m_t_bar, P_t_sqr_bar),
         (m_t, P_t_sqr),
     )
