@@ -13,24 +13,26 @@ numerically stable square-root Kalman filtering and smoothing.
 
 ```python
 import jax.numpy as np
-from ode_filters import gaussian_filter
-from ode_filters.measurement import ODEInformation
-from ode_filters.priors import IWP, taylor_mode_initialization
+from ode_filters import IWP, ODEInformation, gaussian_filter, taylor_mode_initialization
 
 
-def vf(x, *, t):          # the ODE: dx/dt = -x
+def vf(x, *, t):                  # the ODE:  dx/dt = -x,  x(0) = 1
     return -x
 
 
-prior = IWP(q=2, d=1)                              # 1. a smoothness prior
-mu_0, S0 = taylor_mode_initialization(vf, np.array([1.0]), q=2)
-measure = ODEInformation(vf, prior.E0, prior.E1)   # 2. the ODE as data
+prior = IWP(q=2, d=1)                                       # 1. a smoothness prior
+mu_0, P0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
+measure = ODEInformation(vf, prior.E0, prior.E1)            # 2. the ODE as data
 
-# 3. forward filter -> mean + square-root covariance at each grid point
-result = gaussian_filter(mu_0, S0, prior, measure, (0.0, 5.0), N=50)
+# 3. filter forward -> a Gaussian posterior at every grid point
+result = gaussian_filter(mu_0, P0_sqr, prior, measure, (0.0, 5.0), N=50)
 
-P_seq_sqr = result.P_sqr
-std = np.sqrt((P_seq_sqr.transpose(0, 2, 1) @ P_seq_sqr)[:, 0, 0])  # uncertainty
+mean = result.m[:, 0]                                       # the solution estimate ...
+P = np.einsum("nij,nik->njk", result.P_sqr, result.P_sqr)   # ... with full covariance
+std = np.sqrt(P[:, 0, 0])                                   # ... so it comes with error bars
+
+print(f"x(5) = {mean[-1]:.4f}  +/-  {2 * std[-1]:.0e}   (exact: {np.exp(-5.0):.4f})")
+# x(5) = 0.0067  +/-  5e-06   (exact: 0.0067)
 ```
 
 New here? Read **[What is a probabilistic ODE solver?](probabilistic-ode-solvers.md)**
