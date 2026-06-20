@@ -118,3 +118,40 @@ def sqr_inversion(
     _, Lambda_sqr = np.linalg.qr(C)
 
     return K, d, Lambda_sqr
+
+
+def compose_backward_conditionals(
+    cond_outer: tuple[Array, Array, Array],
+    cond_inner: tuple[Array, Array, Array],
+) -> tuple[Array, Array, Array]:
+    """Compose two affine Gaussian (backward) conditionals into one.
+
+    Given an outer conditional ``p(x | y) = N(G1 y + d1, P1)`` and an inner
+    conditional ``p(y | z) = N(G2 z + d2, P2)``, returns the marginalised
+    conditional ``p(x | z) = N(G z + d, P)`` with::
+
+        G = G1 @ G2,   d = G1 @ d2 + d1,   P = G1 @ P2 @ G1.T + P1,
+
+    in square-root form (``P = P_sqr.T @ P_sqr``). This is the fixed-point
+    smoothing "merge" of two conditionals (Kraemer 2025, "Adaptive Probabilistic
+    ODE Solvers Without Adaptive Memory Requirements", Eq. 18/19): composing the
+    per-step backward conditionals of an interval into a single conditional lets
+    an adaptive smoother store one conditional per *save* interval instead of one
+    per (data-dependent) sub-step.
+
+    The mean offset and noise covariance are exactly the marginal of
+    ``N(d2, P2)`` pushed through the affine map ``x = G1 (.) + d1``, so the noise
+    reuses :func:`sqr_marginalization` (its QR keeps the square-root form); only
+    the composed linear operator ``G1 @ G2`` is added.
+
+    Args:
+        cond_outer: ``(G1, d1, P1_sqr)`` parametrising ``p(x | y)``.
+        cond_inner: ``(G2, d2, P2_sqr)`` parametrising ``p(y | z)``.
+
+    Returns:
+        ``(G, d, P_sqr)`` parametrising the composed conditional ``p(x | z)``.
+    """
+    G1, d1, P1_sqr = cond_outer
+    G2, d2, P2_sqr = cond_inner
+    d, P_sqr = sqr_marginalization(G1, d1, P1_sqr, d2, P2_sqr)
+    return G1 @ G2, d, P_sqr

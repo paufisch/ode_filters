@@ -1,4 +1,4 @@
-"""Tests for ODEconservation and ODEconservationmeasurement factory functions."""
+"""Tests for the ODEconservation factory function."""
 
 import jax.numpy as np
 import pytest
@@ -6,7 +6,6 @@ import pytest
 from ode_filters.measurement.measurement_models import (
     Conservation,
     ODEconservation,
-    ODEconservationmeasurement,
 )
 
 
@@ -114,72 +113,4 @@ class TestODEconservationMethods:
         R = conservation_model.get_noise(t=0.0)
 
         # Shape should be (d + k, d + k) = (3, 3)
-        assert R.shape == (3, 3)
-
-
-class TestODEconservationmeasurement:
-    """Tests for ODEconservationmeasurement class."""
-
-    @pytest.fixture
-    def measurement_model(self):
-        """Create ODEconservationmeasurement for testing."""
-
-        def vf(x, *, t):
-            return -x
-
-        E0, E1 = make_projection_matrices(d=1, q=1)
-        C = np.array([[1.0]])  # Conservation constraint
-        p = np.array([1.0])
-        A = np.array([[1.0]])  # Observation matrix
-        z = np.array([[0.5], [0.8]])  # Measurements
-        z_t = np.array([0.5, 1.0])  # Measurement times
-
-        return ODEconservationmeasurement(
-            vf=vf, E0=E0, E1=E1, C=C, p=p, A=A, z=z, z_t=z_t
-        )
-
-    def test_g_without_measurement(self, measurement_model):
-        """Test g at time without measurement."""
-        state = np.array([1.0, 0.5])
-        result = measurement_model.g(state, t=0.0)  # No measurement at t=0
-
-        # Should only have ODE + conservation info (d + k = 1 + 1 = 2)
-        assert result.shape == (2,)
-
-    def test_g_with_measurement(self, measurement_model):
-        """Test g at time with measurement."""
-        state = np.array([1.0, 0.5])
-        result = measurement_model.g(state, t=0.5)  # Measurement at t=0.5
-
-        # Should have ODE + conservation + measurement info (d + k + k_meas = 1 + 1 + 1 = 3)
-        assert result.shape == (3,)
-
-    def test_jacobian_g_without_measurement(self, measurement_model):
-        """Test jacobian_g at time without measurement."""
-        state = np.array([1.0, 0.5])
-        jacobian = measurement_model.jacobian_g(state, t=0.0)
-
-        # Shape: (d + k, (q+1)*d) = (2, 2)
-        assert jacobian.shape == (2, 2)
-
-    def test_jacobian_g_with_measurement(self, measurement_model):
-        """Test jacobian_g at time with measurement."""
-        state = np.array([1.0, 0.5])
-        jacobian = measurement_model.jacobian_g(state, t=0.5)
-
-        # Shape: (d + k + k_meas, (q+1)*d) = (3, 2)
-        assert jacobian.shape == (3, 2)
-
-    def test_get_noise_without_measurement(self, measurement_model):
-        """Test get_noise at time without measurement."""
-        R = measurement_model.get_noise(t=0.0)
-
-        # Shape: (d + k, d + k) = (2, 2)
-        assert R.shape == (2, 2)
-
-    def test_get_noise_with_measurement(self, measurement_model):
-        """Test get_noise at time with measurement."""
-        R = measurement_model.get_noise(t=0.5)
-
-        # Shape: (d + k + k_meas, d + k + k_meas) = (3, 3)
         assert R.shape == (3, 3)

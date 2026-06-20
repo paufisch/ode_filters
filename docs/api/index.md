@@ -1,9 +1,27 @@
 # API Reference
 
-Use the links below to browse the package API grouped by subpackage. Each page
-is generated with mkdocstrings and stays in sync with the Python source.
+The API mirrors the package layout. New here? Read
+[What is a probabilistic ODE solver?](../probabilistic-ode-solvers.md) and
+[How to choose](../how-to-choose.md) first — this reference is for looking things
+up, and assumes the [notation](../notation.md).
 
-- [Filters](filters/index.md): Square-root filtering and smoothing routines.
-- [Inference](inference/index.md): Square-root Gaussian algebra primitives.
-- [Measurement](measurement/index.md): Measurement model helpers.
-- [Priors](priors/index.md): Gaussian Markov process priors.
+## Which function do I need?
+
+| Task | Reach for |
+| --- | --- |
+| solve an ODE (fixed step) | [`gaussian_filter`](filters/index.md) + `rts_smoother` |
+| solve with tolerance-based stepping | [`gaussian_filter_adaptive`](filters/index.md) (jit/vmap/grad-able) |
+| pick the linearization (EK0 / EK1) | [`TaylorCorrection`](filters/index.md) |
+| define the ODE / observations | [Measurement](measurement/index.md) models |
+| choose a prior | [`IWP` / `MaternPrior` / `JointPrior`](priors/index.md) |
+| initialize the state | [`taylor_mode_initialization`](priors/index.md) |
+| calibrate uncertainty | [calibration guide](../calibration.md) |
+
+## Subpackages
+
+- **[Filters](filters/index.md)** — filtering / smoothing loops, corrections, adaptive control.
+- **[Inference](inference/index.md)** — square-root Gaussian algebra.
+- **[Measurement](measurement/index.md)** — ODE-information and observation models.
+- **[Priors](priors/index.md)** — Gauss–Markov process priors.
+
+Each page is generated with mkdocstrings and stays in sync with the source.

@@ -31,7 +31,7 @@ import numpy as np
 from probdiffeq import ivpsolve, ivpsolvers, taylor
 from scipy.integrate import solve_ivp
 
-from ode_filters.filters import ekf1_sqr_loop
+from ode_filters import gaussian_filter
 from ode_filters.measurement import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
 
@@ -134,8 +134,10 @@ def setup_ode_filters(problem: ODEProblem, N: int, q: int = 2) -> Callable:
     measure = ODEInformation(problem.vf, prior.E0, prior.E1)
 
     def solve():
-        result = ekf1_sqr_loop(mu_0, Sigma_0_sqr, prior, measure, problem.tspan, N)
-        return result[0][-1]  # Return final mean
+        result = gaussian_filter(
+            mu_0, Sigma_0_sqr, prior, measure, problem.tspan, N, calibration="none"
+        )
+        return result.m[-1]  # Return final mean
 
     return solve
 
@@ -149,8 +151,10 @@ def setup_ode_filters_jit(problem: ODEProblem, N: int, q: int = 2) -> Callable:
 
     @jax.jit
     def solve(mu_0, Sigma_0_sqr, tspan):
-        result = ekf1_sqr_loop(mu_0, Sigma_0_sqr, prior, measure, tspan, N)
-        return result[0][-1]
+        result = gaussian_filter(
+            mu_0, Sigma_0_sqr, prior, measure, tspan, N, calibration="none"
+        )
+        return result.m[-1]
 
     def run():
         return solve(mu_0, Sigma_0_sqr, problem.tspan).block_until_ready()

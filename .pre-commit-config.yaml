@@ -1,4 +1,8 @@
 repos:
+  - repo: meta
+    hooks:
+      - id: check-hooks-apply
+      - id: check-useless-excludes
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.7
     hooks:
@@ -17,12 +21,22 @@ repos:
       - id: check-toml
       - id: check-added-large-files
         args: ["--maxkb=500"]
-  - repo: https://github.com/asottile/pyupgrade
-    rev: v3.21.2
-    hooks:
-      - id: pyupgrade
-        args: [--py313-plus]
+  # NOTE: pyupgrade is intentionally omitted -- ruff's `UP` rules (selected in
+  # pyproject.toml) already perform the same py313+ rewrites in a single pass.
   - repo: https://github.com/kynan/nbstripout
     rev: 0.8.2
     hooks:
       - id: nbstripout
+  - repo: local
+    hooks:
+      # Static type checking. Run through `uv` (rather than a pinned mirror) so
+      # the pyright version is single-sourced from the locked dev dependencies.
+      # Checks the whole `ode_filters` package per [tool.pyright] -- hence
+      # pass_filenames: false; `types: [python]` only triggers it on .py changes.
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
