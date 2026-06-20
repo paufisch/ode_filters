@@ -39,13 +39,39 @@ m_seq = result.m            # mean at each save_at time
 P_seq_sqr = result.P_sqr    # square-root covariance at each save_at time
 ```
 
+## Smoothing an adaptive solve
+
+By default the adaptive solver is filtering-only. Pass `smoother=True` to also
+obtain the RTS-smoothed posterior at the save grid. It runs a *fixed-point*
+smoother during the forward pass — composing each accepted sub-step's backward
+conditional into a single composite per save interval — so memory is
+`O(len(save_at))` regardless of how many adaptive sub-steps were taken (Krämer,
+*Adaptive Probabilistic ODE Solvers Without Adaptive Memory Requirements*,
+2025). The result then carries the backward pass, so `rts_smoother` consumes it
+directly, and the whole solve stays `jit`/`vmap`/`grad`-able:
+
+```python
+from ode_filters import rts_smoother
+
+result = gaussian_filter_adaptive(
+    mu_0, S0, prior, measure, save_at,
+    atol=1e-5, rtol=1e-3, smoother=True,
+)
+m_smooth, P_smooth_sqr = rts_smoother(prior, result)
+```
+
+`smoother=True` is not yet supported together with `obs_model`.
+
 ## Inspecting the step-size trajectory
 
 `gaussian_filter_adaptive` reports the solution on `save_at` only; it does not
-expose the accepted step sizes, the reject count, or the full accepted-step
-trajectory. For those diagnostics, drop down to the lower-level trajectory
-driver `ekf1_sqr_adaptive_loop` from the submodule. (This is the lower-level
-tool; prefer `gaussian_filter_adaptive` for ordinary use.)
+expose the accepted step sizes, the reject count, or the per-accepted-step
+diffusion trace. For those diagnostics, drop down to `ekf1_sqr_adaptive_loop`.
+This is an **internal driver** (not part of the public API and *not*
+`jit`/`grad`-able — it is a plain Python `while` loop with a data-dependent step
+count); it is retained for these dense per-step diagnostics and for the
+`sigma_in_error="running_mean"` controller variant. For the solution and the
+smoother on a fixed grid, prefer `gaussian_filter_adaptive`.
 
 ```python
 from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
@@ -59,8 +85,11 @@ print(f"{len(traj.h_seq)} accepted, {traj.n_rejected} rejected")
 print(f"step range: {min(traj.h_seq):.3g} ... {max(traj.h_seq):.3g}")
 ```
 
-`traj` is an `AdaptiveLoopResult` named tuple whose accepted-step sequences
-are laid out so the smoother can consume them directly:
+`traj` is an `AdaptiveLoopResult` named tuple that also carries every accepted
+step's backward transition, so it can be smoothed over the *dense* adaptive grid
+with the low-level `rts_sqr_smoother_loop` (use the public
+`gaussian_filter_adaptive(..., smoother=True)` above unless you specifically need
+the dense trajectory):
 
 ```python
 from ode_filters.filters.ode_filter_loop import rts_sqr_smoother_loop

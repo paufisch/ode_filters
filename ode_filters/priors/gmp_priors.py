@@ -508,20 +508,23 @@ class MaternPrior(BasePrior):
     ):
         """Initialize the Matern prior.
 
-        This creates a Matern process prior for a d-dimensional process where each
-        dimension is modeled independently by a q+1 times integrated Matern process
-        of the same length scale with possibly different output scale (Xi).
+        This creates a Matern process prior for a d-dimensional process whose
+        dimensions share the same smoothness ``q`` and length scale and are
+        coupled by the component-correlation matrix ``Xi``: the process noise is
+        ``kron(Q_scalar(h), Xi)``. ``Xi`` may be any positive-(semi)definite
+        matrix -- a diagonal ``Xi`` gives independent per-dimension output
+        scales, off-diagonal entries add cross-dimension correlation. (The
+        per-component ``"diagonal"`` calibration modes additionally require
+        ``Xi`` diagonal; that is checked at solve time.)
 
         Args:
             q: Smoothness order.
             d: State dimension.
             length_scale: Length scale of the process.
-            Xi: Optional scaling matrix (shape [d, d]).
+            Xi: Optional component-correlation matrix (shape [d, d]).
         """
-        # TODO: check if the above assumptions permit Xi to be a non-diagonal matrix.
         super().__init__(q, d, Xi)
         self._F, self._L, self._q = _matern_companion_form(length_scale, q)
-        # self._Q_param = np.asarray(self._q, dtype=float)
         self.S = self._q * self._L @ self._L.T  # Precompute S = L @ Q @ L.T
         self.n = self._F.shape[0]
 

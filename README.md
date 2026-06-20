@@ -18,7 +18,8 @@ A JAX-based implementation of probabilistic ODE solvers using Gaussian filtering
 - **State-parameter estimation** - Joint inference with hidden states
 - **Black-box measurements** - Custom observation models with autodiff Jacobians
 - **Transformed measurements** - Nonlinear state transformations with chain-rule Jacobians
-- **Pluggable linearization** - EK0 / EK1 corrections, selectable per solve
+- **Pluggable linearization** - EK0 / EK1 / IEKF corrections, selectable per solve
+- **Adaptive step sizes** - jit/vmap/grad-safe adaptive solving, with optional fixed-point smoothing
 - **Parameter estimation** - Differentiable marginal likelihood with an Optax-friendly `fit` API
 
 ## Installation
@@ -41,30 +42,37 @@ pip install -e ".[dev]"
 
 ```python
 import jax.numpy as np
-from ode_filters.filters import ekf1_sqr_loop, rts_sqr_smoother_loop
-from ode_filters.measurement import ODEInformation
-from ode_filters.priors import IWP, taylor_mode_initialization
+from ode_filters import (
+    IWP,
+    ODEInformation,
+    gaussian_filter,
+    rts_smoother,
+    taylor_mode_initialization,
+)
 
 # Define ODE: dx/dt = -x (exponential decay)
 def vf(x, *, t):
     return -x
 
 x0 = np.array([1.0])
-tspan = (0, 5)  # a tuple: hashable for use as a jax.jit static argument
+tspan = (0.0, 5.0)  # a tuple: hashable for use as a jax.jit static argument
 
-# Setup prior and measurement model
+# Set up the prior and the ODE-information measurement model
 prior = IWP(q=2, d=1, Xi=0.5 * np.eye(1))
 mu_0, Sigma_0_sqr = taylor_mode_initialization(vf, x0, q=2)
 measure = ODEInformation(vf, prior.E0, prior.E1)
 
-# Run filter and smoother
-m_seq, P_sqr, *_, G, d, P_back, _, _ = ekf1_sqr_loop(
-    mu_0, Sigma_0_sqr, prior, measure, tspan, N=50
-)
-m_smooth, P_smooth_sqr = rts_sqr_smoother_loop(
-    m_seq[-1], P_sqr[-1], G, d, P_back, N=50
-)
+# Filter on a fixed grid, then smooth
+result = gaussian_filter(mu_0, Sigma_0_sqr, prior, measure, tspan, N=50)
+m_smooth, P_smooth_sqr = rts_smoother(prior, result)
+
+# result.m / result.P_sqr -> filtered means / square-root covariances at the grid
+# result.log_likelihood   -> calibrated marginal log-likelihood
 ```
+
+For adaptive step sizes, use `gaussian_filter_adaptive(mu_0, Sigma_0_sqr, prior,
+measure, save_at=...)` — it is `jit` / `vmap` / `grad`-safe; pass `smoother=True`
+to also get a fixed-point smoothing pass that `rts_smoother` consumes.
 
 ## Package Structure
 

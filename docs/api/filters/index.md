@@ -26,10 +26,16 @@ named fields (recover a covariance with `P = P_sqr.T @ P_sqr`; see
 | `m_pred`, `P_pred_sqr` | one-step predictions (before each update) |
 | `G_back`, `d_back`, `P_back_sqr` | backward transitions consumed by `rts_smoother` |
 | `sigma_sqr` | per-step calibrated diffusion `sigma_hat^2` |
+| `success` | adaptive only: whether sub-stepping reached every save time (`None` for the fixed grid) |
 | `m_bar`, `P_bar_sqr`, `T` | preconditioned-space internals (`None` for a plain prior) |
 
-`gaussian_filter_adaptive` is filtering-only, so its backward-pass fields are
-`None` and `rts_smoother` does not apply to it.
+`gaussian_filter_adaptive` is **filtering-only by default** (`smoother=False`):
+its backward-pass fields are then `None` and `rts_smoother` raises. Pass
+`smoother=True` to additionally compute a fixed-point smoothing backward pass
+(one composite conditional per save interval, `O(#save points)` memory); the
+result then carries `G_back` / `d_back` / `P_back_sqr` and `rts_smoother(prior,
+result)` works directly. `smoother=True` is not supported together with
+`obs_model`.
 
 The low-level scan loops and step functions that `gaussian_filter` wraps live in
 the `ode_filters.filters.ode_filter_loop` / `ode_filter_step` / `ode_filter_adaptive`

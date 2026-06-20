@@ -284,6 +284,17 @@ def ekf1_sqr_adaptive_loop(
 ) -> AdaptiveLoopResult:
     """Adaptive-step square-root EKF with per-step diffusion calibration.
 
+    .. note::
+        **Internal driver -- not part of the public API.** The supported
+        adaptive entry point is :func:`ekf1_sqr_adaptive_solve` (wrapped by
+        ``gaussian_filter_adaptive``), which is ``jit`` / ``vmap`` / reverse-
+        ``grad``-able and, with ``smoother=True``, also returns a fixed-point
+        smoothing pass. This function is a plain Python ``while`` loop with a
+        data-dependent step count, so it is **not** traceable/differentiable; it
+        is retained only for the two things the jittable solver does not expose:
+        the dense per-accepted-step diffusion trace (``sigma_sqr_seq``) and the
+        ``sigma_in_error="running_mean"`` controller variant.
+
     Python ``while`` driver around a jitted per-step body. Every accepted
     step contributes to the returned sequences and the result carries the
     smoothing-relevant outputs, so it can be fed directly to
@@ -864,9 +875,6 @@ def ekf1_sqr_adaptive_solve(
     )
 
 
-__all__ = [
-    "AdaptiveLoopResult",
-    "AdaptiveSolveResult",
-    "ekf1_sqr_adaptive_loop",
-    "ekf1_sqr_adaptive_solve",
-]
+# No module-level ``__all__``: this is an internal implementation submodule (like
+# its siblings ode_filter_loop / ode_filter_step), not re-exported from the
+# package. The public adaptive entry point is ``gaussian_filter_adaptive``.

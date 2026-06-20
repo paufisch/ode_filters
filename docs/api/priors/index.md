@@ -16,4 +16,10 @@ it encodes the smoothness assumed before seeing the ODE. See
 `taylor_mode_initialization(vf, x0, q)`. Symbols are defined in
 [Notation](../../notation.md).
 
+Every prior exposes the discrete-time transition `A(h)`, drift `b(h)`, process
+noise `Q(h)`, and — what the square-root filter actually consumes — its
+upper-triangular square root `Q_sqr(h)` (`Q = Q_sqr.T @ Q_sqr`). For `IWP` /
+`PrecondIWP` this is a closed form that avoids ever factorizing the dense,
+ill-conditioned `Q(h)`.
+
 ::: ode_filters.priors
