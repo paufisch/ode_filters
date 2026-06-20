@@ -19,7 +19,7 @@ the old 9-to-16-wide positional tuples. Smoothing is a separate call,
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 import jax.numpy as np
 from jax import Array
@@ -32,8 +32,10 @@ from ..priors.gmp_priors import (
     PrecondMaternPrior,
 )
 from .correction import Correction
-from .ode_filter_adaptive import ekf1_sqr_adaptive_solve
+from .ode_filter_adaptive import CalibrationMode, ekf1_sqr_adaptive_solve
 from .ode_filter_loop import (
+    DynamicObsScanLoopResult,
+    DynamicScanLoopResult,
     ekf1_sqr_loop_dynamic_scan,
     ekf1_sqr_loop_preconditioned_dynamic_scan,
     rts_sqr_smoother_loop,
@@ -103,7 +105,7 @@ def gaussian_filter(
     N: int,
     *,
     correction: Correction | None = None,
-    calibration: str = "dynamic",
+    calibration: CalibrationMode = "dynamic",
     obs_model: ObsModel | None = None,
     min_sigma_sqr: float = 0.0,
 ) -> FilterResult:
@@ -208,7 +210,7 @@ def gaussian_filter(
             Pz_sqr,
             sigma_sqr,
             ll,
-        ) = out
+        ) = cast(DynamicScanLoopResult, out)
         ll_obs = None
     else:
         (
@@ -226,7 +228,7 @@ def gaussian_filter(
             sigma_sqr,
             ll,
             ll_obs,
-        ) = out
+        ) = cast(DynamicObsScanLoopResult, out)
     return FilterResult(
         t=t,
         m=m_seq,
@@ -258,7 +260,7 @@ def gaussian_filter_adaptive(
     atol: float = 1e-4,
     rtol: float = 1e-2,
     h_init: float | None = None,
-    calibration: str = "dynamic",
+    calibration: CalibrationMode = "dynamic",
     controller=None,
     min_sigma_sqr: float = 0.0,
     max_steps: int = 4096,
@@ -317,7 +319,7 @@ def rts_smoother(prior: BasePrior, result: FilterResult) -> tuple[Array, Array]:
         Tuple ``(m_smooth, P_smooth_sqr)`` of smoothed means and square-root
         covariances, shapes ``[K, state_dim]`` and ``[K, state_dim, state_dim]``.
     """
-    if result.G_back is None:
+    if result.G_back is None or result.d_back is None or result.P_back_sqr is None:
         raise ValueError(
             "FilterResult carries no backward pass (e.g. from "
             "gaussian_filter_adaptive); smoothing requires a fixed-grid "
@@ -325,6 +327,8 @@ def rts_smoother(prior: BasePrior, result: FilterResult) -> tuple[Array, Array]:
         )
     N = result.m.shape[0] - 1
     if result.T is not None:
+        # A preconditioned backward pass always carries m_bar / P_bar_sqr.
+        assert result.m_bar is not None and result.P_bar_sqr is not None
         return rts_sqr_smoother_loop_preconditioned(
             result.m[-1],
             result.P_sqr[-1],

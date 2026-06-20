@@ -25,12 +25,15 @@ absorbs misfit and confounds the likelihood over ``theta``.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from jax import Array
 
 from ..measurement.measurement_models import BaseODEInformation, ObsModel
 from .parameters import unwrap
+
+if TYPE_CHECKING:
+    from ..filters.ode_filter_adaptive import CalibrationMode
 
 
 class InferenceProblem(NamedTuple):
@@ -101,9 +104,13 @@ def marginal_loglik(theta: Any, data: ObsModel, *, model: InferenceProblem) -> A
         measure,
         model.tspan,
         model.N,
-        calibration=model.calibration,
+        # InferenceProblem.calibration is a plain str; the value is validated by
+        # the solver, so narrow it to the literal mode the filter expects.
+        calibration=cast("CalibrationMode", model.calibration),
         min_sigma_sqr=model.min_sigma_sqr,
         obs_model=data,
         correction=model.correction,
     )
+    # obs_model was provided, so the filter always fills in the obs-likelihood.
+    assert result.log_likelihood_obs is not None
     return result.log_likelihood_obs

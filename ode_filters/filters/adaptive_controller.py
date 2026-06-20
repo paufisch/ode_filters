@@ -28,8 +28,24 @@ class StepSizeController(Protocol):
     """Duck-typed interface for step-size controllers.
 
     ``err_prev`` may be ``None`` to indicate the absence of memory (first
-    step, or right after a reject).
+    step, or right after a reject). Besides :meth:`propose`, controllers expose
+    the static coefficients (``safety``, ``_alpha``, ``min_factor``,
+    ``max_factor``) that the adaptive loop reads to re-implement the proposal
+    under ``jax.numpy`` tracing.
     """
+
+    # Declared as read-only properties so the frozen-dataclass implementations
+    # (whose fields are immutable) satisfy the protocol.
+    @property
+    def safety(self) -> float: ...
+    @property
+    def min_factor(self) -> float: ...
+    @property
+    def max_factor(self) -> float: ...
+    @property
+    def _alpha(self) -> float:
+        """Resolved proportional gain (with order-based default applied)."""
+        ...
 
     def propose(self, h: float, err: float, err_prev: float | None) -> float:
         """Return the proposed next step size."""

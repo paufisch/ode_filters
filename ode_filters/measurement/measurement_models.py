@@ -295,11 +295,11 @@ class BaseODEInformation(ABC):
     _d: int
     _state_dim: int
     _base_R: Array
-    _constraints: list[Conservation]
+    _constraints: list[Conservation | Measurement]
 
     def _init_constraints(
         self,
-        constraints: list[Conservation] | None,
+        constraints: list[Conservation | Measurement] | None,
     ) -> None:
         """Initialize constraint list and validate.
 
@@ -331,7 +331,7 @@ class BaseODEInformation(ABC):
         """Conservation constraints registered on this measure (always active)."""
         return [c for c in self._constraints if isinstance(c, Conservation)]
 
-    def _build_noise_matrix(self, t: float) -> Array:
+    def _build_noise_matrix(self, t: ArrayLike) -> Array:
         """Build combined noise matrix for all active constraints at time t."""
         conservations = self._conservations()
         cons_dim = sum(c.dim for c in conservations)
@@ -408,14 +408,14 @@ class BaseODEInformation(ABC):
             raise ValueError("R must be scalar, 1D, or 2D array.")
 
     @abstractmethod
-    def _ode_residual(self, state: Array, *, t: float) -> Array:
+    def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
         """Compute the ODE residual."""
 
     @abstractmethod
-    def _ode_jacobian(self, state: Array, *, t: float) -> Array:
+    def _ode_jacobian(self, state: Array, *, t: ArrayLike) -> Array:
         """Compute the ODE Jacobian."""
 
-    def g(self, state: Array, *, t: float) -> Array:
+    def g(self, state: Array, *, t: ArrayLike) -> Array:
         """Evaluate the observation model for a flattened state vector.
 
         Args:
@@ -437,7 +437,7 @@ class BaseODEInformation(ABC):
 
         return np.concatenate(residuals) if len(residuals) > 1 else residuals[0]
 
-    def jacobian_g(self, state: Array, *, t: float) -> Array:
+    def jacobian_g(self, state: Array, *, t: ArrayLike) -> Array:
         """Return the Jacobian of the observation model at ``state``.
 
         Args:
@@ -458,7 +458,7 @@ class BaseODEInformation(ABC):
 
         return np.concatenate(jacobians) if len(jacobians) > 1 else jacobians[0]
 
-    def get_noise(self, *, t: float) -> Array:
+    def get_noise(self, *, t: ArrayLike) -> Array:
         """Return the square root of the measurement noise covariance at time ``t``.
 
         Returns an upper-triangular matrix L such that L.T @ L ≈ R,
@@ -473,7 +473,7 @@ class BaseODEInformation(ABC):
         R = self._build_noise_matrix(t)
         return _safe_cholesky_sqr(R, R.shape[0])
 
-    def linearize(self, state: Array, *, t: float) -> tuple[Array, Array]:
+    def linearize(self, state: Array, *, t: ArrayLike) -> tuple[Array, Array]:
         """Linearize the observation model around the given state.
 
         Args:
@@ -533,7 +533,7 @@ class ODEInformation(BaseODEInformation):
 
     def __init__(
         self,
-        vf: Callable[[Array], Array],
+        vf: Callable[..., Array],
         E0: ArrayLike,
         E1: ArrayLike,
         constraints: list[Conservation | Measurement] | None = None,
@@ -548,12 +548,12 @@ class ODEInformation(BaseODEInformation):
         self._jacobian_vf = jax.jacfwd(self._vf)
         self._init_constraints(constraints)
 
-    def _ode_residual(self, state: Array, *, t: float) -> Array:
+    def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
         x = self._E0 @ state
         vf_eval = self._vf(x, t=t)
         return self._E_constraint @ state - vf_eval
 
-    def _ode_jacobian(self, state: Array, *, t: float) -> Array:
+    def _ode_jacobian(self, state: Array, *, t: ArrayLike) -> Array:
         x = self._E0 @ state
         jac_vf = self._jacobian_vf(x, t=t)
         return self._E_constraint - jac_vf @ self._E0
@@ -593,13 +593,13 @@ class ODEInformationWithHidden(BaseODEInformation):
         self._jacobian_vf_u = jax.jacfwd(self._vf, argnums=1)
         self._init_constraints(constraints)
 
-    def _ode_residual(self, state: Array, *, t: float) -> Array:
+    def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
         x = self._E0 @ state
         u = self._E0_hidden @ state
         vf_eval = self._vf(x, u, t=t)
         return self._E_constraint @ state - vf_eval
 
-    def _ode_jacobian(self, state: Array, *, t: float) -> Array:
+    def _ode_jacobian(self, state: Array, *, t: ArrayLike) -> Array:
         x = self._E0 @ state
         u = self._E0_hidden @ state
         jac_vf_x = self._jacobian_vf_x(x, u, t=t)
@@ -643,13 +643,13 @@ class SecondOrderODEInformation(BaseODEInformation):
         self._jacobian_vf_v = jax.jacfwd(self._vf, argnums=1)
         self._init_constraints(constraints)
 
-    def _ode_residual(self, state: Array, *, t: float) -> Array:
+    def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
         x = self._E0 @ state
         v = self._E1 @ state
         vf_eval = self._vf(x, v, t=t)
         return self._E_constraint @ state - vf_eval
 
-    def _ode_jacobian(self, state: Array, *, t: float) -> Array:
+    def _ode_jacobian(self, state: Array, *, t: ArrayLike) -> Array:
         x = self._E0 @ state
         v = self._E1 @ state
         jac_x = self._jacobian_vf_x(x, v, t=t)
@@ -695,14 +695,14 @@ class SecondOrderODEInformationWithHidden(BaseODEInformation):
         self._jacobian_vf_u = jax.jacfwd(self._vf, argnums=2)
         self._init_constraints(constraints)
 
-    def _ode_residual(self, state: Array, *, t: float) -> Array:
+    def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
         x = self._E0 @ state
         v = self._E1 @ state
         u = self._E0_hidden @ state
         vf_eval = self._vf(x, v, u, t=t)
         return self._E_constraint @ state - vf_eval
 
-    def _ode_jacobian(self, state: Array, *, t: float) -> Array:
+    def _ode_jacobian(self, state: Array, *, t: ArrayLike) -> Array:
         x = self._E0 @ state
         v = self._E1 @ state
         u = self._E0_hidden @ state
@@ -745,7 +745,7 @@ class BlackBoxMeasurement:
 
     def __init__(
         self,
-        g_func: Callable[[Array], Array],
+        g_func: Callable[..., Array],
         state_dim: int,
         obs_dim: int,
         noise: float | ArrayLike = 0.0,
@@ -810,7 +810,7 @@ class BlackBoxMeasurement:
         else:
             raise ValueError("'noise' must be scalar, 1D, or 2D array.")
 
-    def g(self, state: Array, *, t: float) -> Array:
+    def g(self, state: Array, *, t: ArrayLike) -> Array:
         """Evaluate the measurement function.
 
         Args:
@@ -823,7 +823,7 @@ class BlackBoxMeasurement:
         state_arr = self._validate_state(state)
         return self._g_func(state_arr, t=t)
 
-    def jacobian_g(self, state: Array, *, t: float) -> Array:
+    def jacobian_g(self, state: Array, *, t: ArrayLike) -> Array:
         """Compute Jacobian of the measurement function via autodiff.
 
         Args:
@@ -836,7 +836,7 @@ class BlackBoxMeasurement:
         state_arr = self._validate_state(state)
         return self._jacobian_g_func(state_arr, t)
 
-    def get_noise(self, *, t: float) -> Array:
+    def get_noise(self, *, t: ArrayLike) -> Array:
         """Return the square root of the measurement noise covariance.
 
         Returns an upper-triangular matrix L such that L.T @ L ≈ R.
@@ -849,7 +849,7 @@ class BlackBoxMeasurement:
         """
         return _safe_cholesky_sqr(self._R, self._obs_dim)
 
-    def linearize(self, state: Array, *, t: float) -> tuple[Array, Array]:
+    def linearize(self, state: Array, *, t: ArrayLike) -> tuple[Array, Array]:
         """Linearize the measurement model around the given state.
 
         Args:
@@ -946,7 +946,7 @@ class TransformedMeasurement:
         """Set the measurement noise covariance matrix on the base model."""
         self._base.R = value
 
-    def g(self, state: Array, *, t: float) -> Array:
+    def g(self, state: Array, *, t: ArrayLike) -> Array:
         """Evaluate the measurement function on transformed state.
 
         Computes g(sigma(state), t).
@@ -961,7 +961,7 @@ class TransformedMeasurement:
         transformed = self._sigma(state)
         return self._base.g(transformed, t=t)
 
-    def jacobian_g(self, state: Array, *, t: float) -> Array:
+    def jacobian_g(self, state: Array, *, t: ArrayLike) -> Array:
         """Compute Jacobian with chain rule: J_g(sigma(state)) @ J_sigma(state).
 
         Args:
@@ -976,7 +976,7 @@ class TransformedMeasurement:
         J_sigma = self._jacobian_sigma(state)
         return J_base @ J_sigma
 
-    def get_noise(self, *, t: float) -> Array:
+    def get_noise(self, *, t: ArrayLike) -> Array:
         """Return the square root of the noise covariance (delegated to base model).
 
         Args:
@@ -987,7 +987,7 @@ class TransformedMeasurement:
         """
         return self._base.get_noise(t=t)
 
-    def linearize(self, state: Array, *, t: float) -> tuple[Array, Array]:
+    def linearize(self, state: Array, *, t: ArrayLike) -> tuple[Array, Array]:
         """Linearize the transformed measurement model.
 
         Args:

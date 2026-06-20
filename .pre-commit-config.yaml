@@ -27,3 +27,16 @@ repos:
     rev: 0.8.2
     hooks:
       - id: nbstripout
+  - repo: local
+    hooks:
+      # Static type checking. Run through `uv` (rather than a pinned mirror) so
+      # the pyright version is single-sourced from the locked dev dependencies.
+      # Checks the whole `ode_filters` package per [tool.pyright] -- hence
+      # pass_filenames: false; `types: [python]` only triggers it on .py changes.
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true

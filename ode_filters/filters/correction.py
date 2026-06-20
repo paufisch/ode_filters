@@ -30,6 +30,7 @@ from typing import NamedTuple
 import equinox as eqx
 import jax
 from jax import Array
+from jax.typing import ArrayLike
 
 from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
 from ..measurement.measurement_models import BaseODEInformation
@@ -61,7 +62,7 @@ class CorrectionResult(NamedTuple):
 
 
 def _linearize(
-    measure: BaseODEInformation, state: Array, *, t: float, order: int
+    measure: BaseODEInformation, state: Array, *, t: ArrayLike, order: int
 ) -> tuple[Array, Array]:
     """Effective affine measurement model ``(H, c)`` with ``H x + c ~= g(x)``.
 
@@ -86,7 +87,7 @@ def _affine_correct(
     return m_new, P_new_sqr, mz, Pz_sqr
 
 
-def _noise(measure: BaseODEInformation, t: float) -> Array:
+def _noise(measure: BaseODEInformation, t: ArrayLike) -> Array:
     return measure.get_noise(t=t)
 
 
@@ -105,7 +106,7 @@ class Correction(eqx.Module):
         m_pred: Array,
         P_pred_sqr: Array,
         *,
-        t: float = 0.0,
+        t: ArrayLike = 0.0,
     ) -> CorrectionResult:
         """Update a predicted Gaussian with the measurement model at time ``t``.
 

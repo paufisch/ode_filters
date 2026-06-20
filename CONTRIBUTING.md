@@ -35,9 +35,8 @@ feature/your-change  ->  development  ->  main
 3. Run the checks locally (CI runs the same ones):
 
    ```bash
-   uv run pre-commit run --all-files   # ruff lint + format, nbstripout, ...
+   uv run pre-commit run --all-files   # ruff (lint+format), pyright, nbstripout, ...
    uv run pytest                       # tests + coverage
-   uv run pyright                      # static type checking (advisory)
    ```
 
 4. Push and open a PR. Note in the description whether the change is breaking.
@@ -61,9 +60,11 @@ uv run jupyter nbconvert --to notebook --execute \
 
 ## Type checking
 
-Static checking uses **pyright** (`uv run pyright`), currently advisory in CI
-while an existing baseline of findings is burned down -- please don't add new
-errors.
+Static checking uses **pyright**, which runs as a pre-commit hook (and therefore
+in CI, since CI runs `pre-commit run --all-files`). The tree is pyright-clean, so
+please keep it that way -- add type hints (`Array` for outputs, `ArrayLike` for
+scalar/array inputs) rather than introducing new errors. Run it directly with
+`uv run pyright` for a fast type-only check.
 
 There is also opt-in *runtime* shape checking via
 [jaxtyping](https://github.com/patrick-kidger/jaxtyping) + beartype. Enabling it

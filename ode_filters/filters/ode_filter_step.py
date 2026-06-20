@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 import jax
 from jax import Array
+from jax.typing import ArrayLike
 
 from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
 from ..measurement.measurement_models import BaseODEInformation
@@ -37,7 +38,7 @@ def ekf1_sqr_filter_step(
     m_prev: Array,
     P_prev_sqr: Array,
     measure: BaseODEInformation,
-    t: float = 0.0,
+    t: ArrayLike = 0.0,
     *,
     correction: Correction | None = None,
 ) -> FilterStepResult:
@@ -118,7 +119,7 @@ def ekf1_sqr_filter_step_preconditioned(
     m_prev_bar: Array,
     P_prev_sqr_bar: Array,
     measure: BaseODEInformation,
-    t: float = 0.0,
+    t: ArrayLike = 0.0,
 ) -> PreconditionedFilterStepResult:
     """Perform a single preconditioned square-root EKF step.
 
@@ -215,7 +216,7 @@ def ekf1_sqr_filter_step_sequential_scan(
     m_prev: Array,
     P_prev_sqr: Array,
     measure: BaseODEInformation,
-    t: float,
+    t: ArrayLike,
     H_obs: Array,
     c_obs: Array,
     R_obs_sqr: Array,

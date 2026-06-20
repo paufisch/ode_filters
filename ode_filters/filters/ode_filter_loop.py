@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Protocol, cast
 
 import jax
 import jax.numpy as np
 import numpy as onp
 from jax import Array
+from jax.typing import ArrayLike
 
 from ..calibration.sigma import quasi_mle_sigma_sqr_from_Q
 from ..measurement.measurement_models import (
@@ -24,6 +26,17 @@ from .ode_filter_step import (
 
 StateFunction = Callable[[Array], Array]
 JacobianFunction = Callable[[Array], Array]
+
+
+class _PrecondPrior(Protocol):
+    """Preconditioned prior exposing the stepsize-dependent transform ``T(h)``.
+
+    ``BasePrior`` does not declare ``T`` (only the preconditioned priors and the
+    standalone ``PrecondJointPrior`` do), so the preconditioned loops cast to
+    this protocol to access it.
+    """
+
+    def T(self, h: ArrayLike) -> Array: ...
 
 
 def _check_state_xi_diagonal(prior: BasePrior, calibration: str) -> None:
@@ -154,7 +167,7 @@ def rts_sqr_smoother_loop_preconditioned(
 # =============================================================================
 
 
-def _log_likelihood_contrib(mz: Array, Pz_sqr: Array) -> float:
+def _log_likelihood_contrib(mz: Array, Pz_sqr: Array) -> Array:
     """Compute log-likelihood contribution from an observation marginal."""
     log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
     v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
@@ -620,7 +633,7 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
     b_bar = prior.b(h)
     Q_bar_full = prior.Q(h)
     Q_sqr_bar = np.linalg.cholesky(Q_bar_full).T
-    T_h = prior.T(h)
+    T_h = cast("_PrecondPrior", prior).T(h)
     E1 = prior.E1
     d_ode = measure.ode_dim
 

@@ -64,13 +64,14 @@ settings define different generative models.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, cast
 
 import equinox.internal as eqxi
 import jax
 import jax.numpy as np
 import numpy as onp
 from jax import Array
+from jax.typing import ArrayLike
 
 from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
 from ..measurement.measurement_models import (
@@ -141,7 +142,7 @@ def _make_step_body(
     *,
     calibration: CalibrationMode = "dynamic",
     min_sigma_sqr: float = 0.0,
-) -> Callable[[float, float, Array, Array], tuple]:
+) -> Callable[[ArrayLike, ArrayLike, Array, Array], tuple]:
     """Construct and jit the per-step body of the adaptive loop.
 
     Args:
@@ -168,8 +169,8 @@ def _make_step_body(
     d_ode = measure.ode_dim
 
     def step_body(
-        h: float,
-        t_next: float,
+        h: ArrayLike,
+        t_next: ArrayLike,
         m_prev: Array,
         P_prev_sqr: Array,
     ) -> tuple:
@@ -686,11 +687,11 @@ def ekf1_sqr_adaptive_solve(
 
     if obs_model is None:
 
-        def scan_body(carry, target):
+        def scan_body_plain(carry, target):
             carry = integrate_to(target, carry)
             return carry, (carry[1], carry[2])
 
-        final, (m_seq, P_seq_sqr) = jax.lax.scan(scan_body, init, save_at[1:])
+        final, (m_seq, P_seq_sqr) = jax.lax.scan(scan_body_plain, init, save_at[1:])
     else:
         n_obs_steps = obs_model.c_seq.shape[0]
         if n_obs_steps != save_at.shape[0] - 1:
@@ -703,7 +704,7 @@ def ekf1_sqr_adaptive_solve(
         H_obs = obs_model.H
         R_obs_sqr = obs_model.R_sqr
 
-        def scan_body(carry, step_data):
+        def scan_body_obs(carry, step_data):
             target, c_obs, mask = step_data
             t, m, P_sqr, h, ll, err_prev = integrate_to(target, carry)
             # Exact (linear) observation update at the save time, masked off when
@@ -722,9 +723,11 @@ def ekf1_sqr_adaptive_solve(
             return (t, m, P_sqr, h, ll, err_prev), (m, P_sqr)
 
         final, (m_seq, P_seq_sqr) = jax.lax.scan(
-            scan_body, init, (save_at[1:], obs_model.c_seq, obs_model.mask)
+            scan_body_obs, init, (save_at[1:], obs_model.c_seq, obs_model.mask)
         )
 
+    m_seq = cast(Array, m_seq)
+    P_seq_sqr = cast(Array, P_seq_sqr)
     m_out = np.concatenate([mu_0[None], m_seq], axis=0)
     P_out = np.concatenate([Sigma_0_sqr[None], P_seq_sqr], axis=0)
     return AdaptiveSolveResult(t=save_at, m=m_out, P_sqr=P_out, log_likelihood=final[4])

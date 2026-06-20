@@ -18,8 +18,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: Lint & format (pre-commit)
+  checks:
+    name: Checks (lint, format, types)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,24 +28,11 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.13"
+      # pre-commit runs ruff (lint + format), the standard hygiene hooks, and
+      # pyright -- the single source of truth for static checks (mirrored by the
+      # local `uv run pre-commit run --all-files`).
       - name: Run pre-commit
         run: uv run --group dev pre-commit run --all-files --show-diff-on-failure
-
-  type-check:
-    name: Type check (pyright)
-    runs-on: ubuntu-latest
-    # Advisory for now: there is a baseline of pre-existing pyright findings
-    # being burned down. Flip continue-on-error to false once it reaches zero.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          python-version: "3.13"
-      - name: Run pyright
-        run: uv run --group dev pyright
 
   test:
     name: Tests (py${{ matrix.python-version }})
@@ -53,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.13"]
+        python-version: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv

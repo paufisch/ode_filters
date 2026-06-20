@@ -12,8 +12,10 @@ from jax import Array
 from jax.scipy.linalg import expm
 from jax.typing import ArrayLike
 
-MatrixFunction = Callable[[float], Array]
-VectorField = Callable[[ArrayLike], Array]
+MatrixFunction = Callable[[ArrayLike], Array]
+# vf is called positionally with 1 (order 1) or 2 (order 2) derivatives plus a
+# keyword-only ``t``; ``Callable[..., Array]`` captures both arities.
+VectorField = Callable[..., Array]
 
 
 class BasePrior(ABC):
@@ -59,19 +61,19 @@ class BasePrior(ABC):
         return self._E2
 
     @staticmethod
-    def _validate_h(h: float) -> float:
+    def _validate_h(h: ArrayLike) -> ArrayLike:
         return h
 
     @abstractmethod
-    def A(self, h: float) -> Array:
+    def A(self, h: ArrayLike) -> Array:
         pass  # pragma: no cover
 
     @abstractmethod
-    def b(self, h: float) -> Array:
+    def b(self, h: ArrayLike) -> Array:
         pass  # pragma: no cover
 
     @abstractmethod
-    def Q(self, h: float) -> Array:
+    def Q(self, h: ArrayLike) -> Array:
         pass  # pragma: no cover
 
     # ------------------------------------------------------------------
@@ -234,14 +236,14 @@ def _make_iwp_state_matrices(q: int) -> tuple[MatrixFunction, MatrixFunction]:
 
     dim = q + 1
 
-    def A(h: float) -> Array:
+    def A(h: ArrayLike) -> Array:
         mat = np.zeros((dim, dim), dtype=float)
         for i in range(dim):
             for j in range(i, dim):
                 mat = mat.at[i, j].set(h ** (j - i) / factorial(j - i))
         return mat
 
-    def Q(h: float) -> Array:
+    def Q(h: ArrayLike) -> Array:
         mat = np.zeros((dim, dim), dtype=float)
         for i in range(dim):
             for j in range(dim):
@@ -278,7 +280,7 @@ def _make_iwp_precond_state_matrices(
 
     factorials = np.array([float(factorial(q - idx)) for idx in range(dim)])
 
-    def T(h: float) -> Array:
+    def T(h: ArrayLike) -> Array:
         sqrt_h = np.sqrt(h)
         powers = q - np.arange(dim)
         diag_entries = sqrt_h * (h**powers) / factorials
@@ -294,7 +296,7 @@ class IWP(BasePrior):
         super().__init__(q, d, Xi)
         self._A, self._Q = _make_iwp_state_matrices(q)
 
-    def A(self, h: float) -> Array:
+    def A(self, h: ArrayLike) -> Array:
         """Return the state transition matrix for step size h.
 
         Args:
@@ -305,7 +307,7 @@ class IWP(BasePrior):
         """
         return np.kron(self._A(self._validate_h(h)), self._id)
 
-    def b(self, h: float) -> Array:
+    def b(self, h: ArrayLike) -> Array:
         """Return the drift vector for step size h.
 
         Args:
@@ -316,7 +318,7 @@ class IWP(BasePrior):
         """
         return self._b
 
-    def Q(self, h: float) -> Array:
+    def Q(self, h: ArrayLike) -> Array:
         """Return the diffusion matrix for step size h.
 
         Args:
@@ -340,7 +342,7 @@ class PrecondIWP(BasePrior):
         super().__init__(q, d, Xi)
         self._A_bar, self._Q_bar, self._T = _make_iwp_precond_state_matrices(q)
 
-    def A(self, h: float | None = None) -> Array:
+    def A(self, h: ArrayLike | None = None) -> Array:
         """Return the constant preconditioning transition matrix.
 
         Args:
@@ -351,7 +353,7 @@ class PrecondIWP(BasePrior):
         """
         return np.kron(self._A_bar, self._id)
 
-    def b(self, h: float | None = None) -> Array:
+    def b(self, h: ArrayLike | None = None) -> Array:
         """Return the zero drift vector.
 
         Args:
@@ -362,7 +364,7 @@ class PrecondIWP(BasePrior):
         """
         return self._b
 
-    def Q(self, h: float | None = None) -> Array:
+    def Q(self, h: ArrayLike | None = None) -> Array:
         """Return the constant preconditioning diffusion matrix.
 
         Args:
@@ -373,7 +375,7 @@ class PrecondIWP(BasePrior):
         """
         return np.kron(self._Q_bar, self.xi)
 
-    def T(self, h: float) -> Array:
+    def T(self, h: ArrayLike) -> Array:
         """Return the stepsize-dependent preconditioning transformation.
 
         Args:
@@ -385,7 +387,7 @@ class PrecondIWP(BasePrior):
         return np.kron(self._T(self._validate_h(h)), self._id)
 
 
-def _matern_companion_form(length_scale: float, q: int) -> tuple[Array, Array, float]:
+def _matern_companion_form(length_scale: float, q: int) -> tuple[Array, Array, Array]:
     """Construct the companion form matrices for a Matern GP prior.
 
     Parameters
@@ -481,7 +483,7 @@ class MaternPrior(BasePrior):
                 f"got {self.S.shape}"
             )
 
-    def _expm_block_matrix(self, h: float) -> Array:
+    def _expm_block_matrix(self, h: ArrayLike) -> Array:
         """Compute exp(H*h) for Hamiltonian block matrix.
 
         Args:
@@ -498,7 +500,7 @@ class MaternPrior(BasePrior):
         )
         return expm(H * h)
 
-    def A_and_Q(self, h: float) -> tuple[Array, Array]:
+    def A_and_Q(self, h: ArrayLike) -> tuple[Array, Array]:
         """Compute both A(h) and Q(h) efficiently in a single expm call.
         This is sometimes called matrix fraction decomposition (MFD)
 
@@ -518,7 +520,7 @@ class MaternPrior(BasePrior):
 
         return A_h, Q_h
 
-    def A(self, h: float) -> Array:
+    def A(self, h: ArrayLike) -> Array:
         """Return the state transition matrix for step size h.
 
         Args:
@@ -530,7 +532,7 @@ class MaternPrior(BasePrior):
         A_h, _ = self.A_and_Q(h)
         return np.kron(A_h, self._id)
 
-    def b(self, h: float) -> Array:
+    def b(self, h: ArrayLike) -> Array:
         """Return the drift vector for step size h.
 
         Args:
@@ -541,7 +543,7 @@ class MaternPrior(BasePrior):
         """
         return np.zeros(self.n)
 
-    def Q(self, h: float) -> Array:
+    def Q(self, h: ArrayLike) -> Array:
         """Return the diffusion matrix for step size h.
 
         Args:
@@ -582,7 +584,7 @@ class PrecondMaternPrior(BasePrior):
         self.n = self._F.shape[0]
         _, _, self._T = _make_iwp_precond_state_matrices(q)
 
-    def _expm_block_matrix(self, h: float) -> Array:
+    def _expm_block_matrix(self, h: ArrayLike) -> Array:
         """Compute exp(H*h) for the Hamiltonian block matrix.
 
         Args:
@@ -599,7 +601,7 @@ class PrecondMaternPrior(BasePrior):
         )
         return expm(H * h)
 
-    def _raw_A_and_Q(self, h: float) -> tuple[Array, Array]:
+    def _raw_A_and_Q(self, h: ArrayLike) -> tuple[Array, Array]:
         """Compute raw (non-preconditioned) A(h) and Q(h) via MFD.
 
         Args:
@@ -614,7 +616,7 @@ class PrecondMaternPrior(BasePrior):
         Q_h = 0.5 * (Q_h + Q_h.T)
         return A_h, Q_h
 
-    def _precond_discretise(self, h: float) -> tuple[Array, Array]:
+    def _precond_discretise(self, h: ArrayLike) -> tuple[Array, Array]:
         """Compute preconditioned A_bar(h) and Q_bar(h).
 
         Applies the IWP diagonal preconditioner: A_bar = T^{-1} A T,
@@ -635,31 +637,35 @@ class PrecondMaternPrior(BasePrior):
         Q_bar = T_inv @ Q_h @ T_inv.T
         return A_bar, Q_bar
 
-    def A(self, h: float) -> Array:
+    def A(self, h: ArrayLike | None = None) -> Array:
         """Return the preconditioned transition matrix for step size h.
 
         Args:
-            h: Step size.
+            h: Step size (required; Matern preconditioning is stepsize-dependent).
 
         Returns:
             Preconditioned transition matrix (shape [(q+1)*d, (q+1)*d]).
         """
+        if h is None:
+            raise ValueError("PrecondMaternPrior.A requires a step size h.")
         A_bar, _ = self._precond_discretise(h)
         return np.kron(A_bar, self._id)
 
-    def Q(self, h: float) -> Array:
+    def Q(self, h: ArrayLike | None = None) -> Array:
         """Return the preconditioned diffusion matrix for step size h.
 
         Args:
-            h: Step size.
+            h: Step size (required; Matern preconditioning is stepsize-dependent).
 
         Returns:
             Preconditioned diffusion matrix (shape [(q+1)*d, (q+1)*d]).
         """
+        if h is None:
+            raise ValueError("PrecondMaternPrior.Q requires a step size h.")
         _, Q_bar = self._precond_discretise(h)
         return np.kron(Q_bar, self.xi)
 
-    def b(self, h: float | None = None) -> Array:
+    def b(self, h: ArrayLike | None = None) -> Array:
         """Return the zero drift vector.
 
         Args:
@@ -670,7 +676,7 @@ class PrecondMaternPrior(BasePrior):
         """
         return self._b
 
-    def T(self, h: float) -> Array:
+    def T(self, h: ArrayLike) -> Array:
         """Return the stepsize-dependent preconditioning transformation.
 
         Uses the same preconditioner as PrecondIWP.
@@ -764,7 +770,7 @@ class JointPrior(BasePrior):
         """
         return self._E0_hidden
 
-    def A(self, h: float) -> Array:
+    def A(self, h: ArrayLike) -> Array:
         """Return the block-diagonal state transition matrix.
 
         Args:
@@ -777,7 +783,7 @@ class JointPrior(BasePrior):
             [[self._prior_x.A(h), self._zeros], [self._zeros.T, self._prior_u.A(h)]]
         )
 
-    def b(self, h: float) -> Array:
+    def b(self, h: ArrayLike) -> Array:
         """Return the concatenated drift vector.
 
         Args:
@@ -788,7 +794,7 @@ class JointPrior(BasePrior):
         """
         return np.concatenate([self._prior_x.b(h), self._prior_u.b(h)])
 
-    def Q(self, h: float) -> Array:
+    def Q(self, h: ArrayLike) -> Array:
         """Return the block-diagonal diffusion matrix.
 
         Args:
@@ -963,7 +969,7 @@ class PrecondJointPrior:
         """Second derivative extraction matrix for x (shape [d_x, D]), or None."""
         return self._E2
 
-    def A(self, h: float | None = None) -> Array:
+    def A(self, h: ArrayLike | None = None) -> Array:
         """Return the block-diagonal transition matrix.
 
         Args:
@@ -976,7 +982,7 @@ class PrecondJointPrior:
             [[self._prior_x.A(h), self._zeros], [self._zeros.T, self._prior_u.A(h)]]
         )
 
-    def b(self, h: float | None = None) -> Array:
+    def b(self, h: ArrayLike | None = None) -> Array:
         """Return the zero drift vector.
 
         Args:
@@ -987,7 +993,7 @@ class PrecondJointPrior:
         """
         return self._b
 
-    def Q(self, h: float | None = None) -> Array:
+    def Q(self, h: ArrayLike | None = None) -> Array:
         """Return the block-diagonal diffusion matrix.
 
         Args:
@@ -1000,7 +1006,7 @@ class PrecondJointPrior:
             [[self._prior_x.Q(h), self._zeros], [self._zeros.T, self._prior_u.Q(h)]]
         )
 
-    def T(self, h: float) -> Array:
+    def T(self, h: ArrayLike) -> Array:
         """Return the stepsize-dependent block-diagonal transformation matrix.
 
         Args:
