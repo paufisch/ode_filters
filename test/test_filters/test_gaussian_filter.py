@@ -11,6 +11,7 @@ import pytest
 
 from ode_filters import (
     IWP,
+    IteratedTaylorCorrection,
     ODEInformation,
     PrecondIWP,
     TaylorCorrection,
@@ -99,6 +100,80 @@ def test_preconditioned_dispatch_matches_loop():
     assert np.allclose(res.m, ref[0])
     assert np.allclose(res.P_sqr, ref[1])
     assert res.T is not None  # preconditioned path populated the smoother inputs
+
+
+def _cov_seq(P_sqr_seq):
+    """Per-step covariance P = P_sqr.T @ P_sqr for a stack of square-root factors."""
+    return np.einsum("kij,kil->kjl", P_sqr_seq, P_sqr_seq)
+
+
+def test_preconditioned_correction_runs_for_ek0_and_iekf():
+    """The Correction abstraction now reaches the preconditioned path."""
+    prior, measure, mu_0, P0_sqr = _logistic(PrecondIWP)
+    for corr in (TaylorCorrection(order=0), IteratedTaylorCorrection(max_iters=3)):
+        res = gaussian_filter(mu_0, P0_sqr, prior, measure, TSPAN, N, correction=corr)
+        assert np.all(np.isfinite(res.m))
+        assert np.all(np.isfinite(res.P_sqr))
+
+
+def test_preconditioned_ek0_matches_plain_ek0():
+    """EK0 via the bar-space wrapper must equal plain-space EK0 (not just run).
+
+    Preconditioning is a similarity transform, so with the same correction and
+    calibration the plain and preconditioned recursions are mathematically
+    identical -- this validates the _BarMeasure EK0 logic, not just that it runs.
+    """
+    ek0 = TaylorCorrection(order=0)
+    pp, mp, mu0p, P0p = _logistic(IWP)
+    res_plain = gaussian_filter(
+        mu0p, P0p, pp, mp, TSPAN, N, calibration="none", correction=ek0
+    )
+    pc, mc, mu0c, P0c = _logistic(PrecondIWP)
+    res_pre = gaussian_filter(
+        mu0c, P0c, pc, mc, TSPAN, N, calibration="none", correction=ek0
+    )
+    assert np.allclose(res_plain.m, res_pre.m, atol=1e-7)
+    assert np.allclose(_cov_seq(res_plain.P_sqr), _cov_seq(res_pre.P_sqr), atol=1e-7)
+
+
+def test_preconditioned_ek0_differs_from_ek1():
+    """EK0 and EK1 must give different results on a nonlinear ODE (precond path)."""
+    prior, measure, mu_0, P0_sqr = _logistic(PrecondIWP)
+    res0 = gaussian_filter(
+        mu_0, P0_sqr, prior, measure, TSPAN, N, correction=TaylorCorrection(order=0)
+    )
+    res1 = gaussian_filter(
+        mu_0, P0_sqr, prior, measure, TSPAN, N, correction=TaylorCorrection(order=1)
+    )
+    assert not np.allclose(res0.m, res1.m, atol=1e-7)
+
+
+def test_adaptive_correction_ek0_and_iekf():
+    """gaussian_filter_adaptive accepts a correction= (EK0/IEKF), no longer EK1-only."""
+    prior, measure, mu_0, P0_sqr = _logistic()
+    save_at = np.linspace(*TSPAN, 5)
+    for corr in (TaylorCorrection(order=0), IteratedTaylorCorrection(max_iters=2)):
+        res = gaussian_filter_adaptive(
+            mu_0, P0_sqr, prior, measure, save_at, correction=corr
+        )
+        assert bool(res.success)
+        assert np.all(np.isfinite(res.m))
+
+
+def test_adaptive_iekf_max_iters_1_equals_ek1():
+    """IEKF with max_iters=1 reduces to EK1 (the adaptive default)."""
+    prior, measure, mu_0, P0_sqr = _logistic()
+    save_at = np.linspace(*TSPAN, 5)
+    ek1 = gaussian_filter_adaptive(mu_0, P0_sqr, prior, measure, save_at)
+    iekf1 = gaussian_filter_adaptive(
+        mu_0,
+        P0_sqr,
+        prior,
+        measure,
+        save_at,
+        correction=IteratedTaylorCorrection(max_iters=1),
+    )
+    assert np.allclose(ek1.m, iekf1.m, atol=1e-10)
 
 
 def test_preconditioned_with_obs_raises():

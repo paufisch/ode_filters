@@ -46,19 +46,12 @@ class CorrectionResult(NamedTuple):
         mz: Innovation (predicted-observation) mean (shape ``[obs_dim]``).
         Pz_sqr: Innovation covariance in square-root form -- consumed by the
             Gaussian log-marginal-likelihood.
-        mz_ode: The ODE-defect rows of ``mz`` (``mz[:ode_dim]``); the only rows
-            that should drive diffusion calibration.
-        H_eff: The ODE-defect rows of the effective observation Jacobian
-            (``E_constraint`` for EK0, ``E1 - J_f E0`` for EK1); used by the
-            per-component "diagonal" calibration denominator.
     """
 
     m: Array
     P_sqr: Array
     mz: Array
     Pz_sqr: Array
-    mz_ode: Array
-    H_eff: Array
 
 
 def _linearize(
@@ -141,8 +134,7 @@ class TaylorCorrection(Correction):
         H, c = _linearize(measure, m_pred, t=t, order=self.order)
         R_sqr = _noise(measure, t)
         m, P_sqr, mz, Pz_sqr = _affine_correct(H, c, R_sqr, m_pred, P_pred_sqr)
-        d = measure.ode_dim
-        return CorrectionResult(m, P_sqr, mz, Pz_sqr, mz[:d], H[:d])
+        return CorrectionResult(m, P_sqr, mz, Pz_sqr)
 
 
 class IteratedTaylorCorrection(Correction):
@@ -170,7 +162,7 @@ class IteratedTaylorCorrection(Correction):
         def update_from(m_lin):
             H, c = _linearize(measure, m_lin, t=t, order=1)
             m, P_sqr, mz, Pz_sqr = _affine_correct(H, c, R_sqr, m_pred, P_pred_sqr)
-            return m, P_sqr, mz, Pz_sqr, H
+            return m, P_sqr, mz, Pz_sqr
 
         # Iteration 0 linearizes at the prediction (this alone == EK1); each
         # further pass relinearizes at the current updated mean.
@@ -178,6 +170,5 @@ class IteratedTaylorCorrection(Correction):
         carry = jax.lax.fori_loop(
             1, self.max_iters, lambda _i, c: update_from(c[0]), init
         )
-        m, P_sqr, mz, Pz_sqr, H = carry
-        d = measure.ode_dim
-        return CorrectionResult(m, P_sqr, mz, Pz_sqr, mz[:d], H[:d])
+        m, P_sqr, mz, Pz_sqr = carry
+        return CorrectionResult(m, P_sqr, mz, Pz_sqr)

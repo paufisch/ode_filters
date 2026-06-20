@@ -181,7 +181,6 @@ def _calibrate_diffusion(
     mz_ode: Array,
     H_ode: Array,
     E1: Array,
-    Q_full: Array,
     Q_sqr: Array,
     prior: BasePrior,
     min_sigma_sqr: float,
@@ -191,7 +190,12 @@ def _calibrate_diffusion(
 
     Shared by every fixed-grid loop variant and the adaptive step body (plain
     and preconditioned; the preconditioned callers pass the bar-space ``E1`` /
-    ``H_ode`` / ``Q``).
+    ``H_ode`` / ``Q_sqr``).
+
+    Works entirely from the square-root process noise ``Q_sqr`` -- the diagonal
+    denominator ``diag(H Q H.T)`` is computed as the row-norms of ``H @ Q_sqr.T``
+    rather than from a dense ``Q``, so the filter never forms or factorizes the
+    (ill-conditioned) dense process-noise matrix.
 
     Args:
         calibration: One of ``"dynamic"``, ``"diagonal"``, ``"diagonal_ekf0"``,
@@ -199,9 +203,8 @@ def _calibrate_diffusion(
         mz_ode: ODE-defect innovation mean (``mz[:d_ode]``).
         H_ode: ODE-defect rows of the (effective) observation Jacobian.
         E1: First-derivative selection matrix (used by ``"diagonal_ekf0"``).
-        Q_full: Process-noise covariance ``Q(h)`` (dense; for the diagonal
-            denominator).
-        Q_sqr: Square-root process noise ``Q(h)_sqr`` (scaled by the diffusion).
+        Q_sqr: Square-root process noise ``Q(h)_sqr`` (``Q = Q_sqr.T @ Q_sqr``);
+            also the noise that gets scaled by the diffusion and propagated.
         prior: Prior, for ``apply_state_sigma_sqr``.
         min_sigma_sqr: Lower bound on the estimate.
 
@@ -212,7 +215,9 @@ def _calibrate_diffusion(
     """
     if calibration in ("diagonal", "diagonal_ekf0"):
         H_for_calib = E1 if calibration == "diagonal_ekf0" else H_ode
-        denom = np.einsum("ij,jk,ik->i", H_for_calib, Q_full, H_for_calib)
+        # diag(H Q H.T)_i = || (H @ Q_sqr.T)[i] ||^2, since Q = Q_sqr.T @ Q_sqr.
+        HQ_sqr = H_for_calib @ Q_sqr.T
+        denom = np.sum(HQ_sqr * HQ_sqr, axis=1)
         sigma_sqr = np.maximum(mz_ode**2 / denom, min_sigma_sqr)
         return sigma_sqr, prior.apply_state_sigma_sqr(Q_sqr, sigma_sqr)
 
@@ -280,8 +285,7 @@ def _ekf1_sqr_loop_dynamic_obs_scan(
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     A_h = prior.A(h)
     b_h = prior.b(h)
-    Q_h = prior.Q(h)
-    Q_h_sqr = np.linalg.cholesky(Q_h).T
+    Q_h_sqr = prior.Q_sqr(h)
     E1 = prior.E1
     d_ode = measure.ode_dim
 
@@ -306,7 +310,7 @@ def _ekf1_sqr_loop_dynamic_obs_scan(
         mz_ode_prov = mz_pred[:d_ode]
 
         sigma_sqr, Q_step_sqr = _calibrate_diffusion(
-            calibration, mz_ode_prov, H_ode, E1, Q_h, Q_h_sqr, prior, min_sigma_sqr
+            calibration, mz_ode_prov, H_ode, E1, Q_h_sqr, prior, min_sigma_sqr
         )
 
         (
@@ -477,8 +481,7 @@ def ekf1_sqr_loop_dynamic_scan(
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     A_h = prior.A(h)
     b_h = prior.b(h)
-    Q_h = prior.Q(h)
-    Q_h_sqr = np.linalg.cholesky(Q_h).T
+    Q_h_sqr = prior.Q_sqr(h)
     E1 = prior.E1
     d_ode = measure.ode_dim
 
@@ -497,7 +500,7 @@ def ekf1_sqr_loop_dynamic_scan(
         mz_ode = mz_pred[:d_ode]
 
         sigma_sqr, Q_step_sqr = _calibrate_diffusion(
-            calibration, mz_ode, H_ode, E1, Q_h, Q_h_sqr, prior, min_sigma_sqr
+            calibration, mz_ode, H_ode, E1, Q_h_sqr, prior, min_sigma_sqr
         )
 
         (
@@ -595,6 +598,7 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
     *,
     calibration: str = "dynamic",
     min_sigma_sqr: float = 0.0,
+    correction: Correction | None = None,
 ) -> PrecondDynamicScanLoopResult:
     """Preconditioned fixed-grid square-root EKF filter with calibration.
 
@@ -615,6 +619,10 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
             ``prior._prior_x.xi`` to be diagonal.
         min_sigma_sqr: Lower bound applied to per-step ``sigma_hat^2``
             before baking into ``Q_step_sqr_bar``. Default ``0.0``.
+        correction: Linearization/correction strategy for the measurement update
+            (default ``TaylorCorrection(order=1)``, i.e. EK1), applied in
+            preconditioned coordinates. As on the plain path, the diffusion
+            calibration uses its own linearization (selected by ``calibration``).
 
     Returns:
         :class:`PrecondDynamicScanLoopResult` -- 12 arrays, ``T_h``, and the
@@ -631,8 +639,7 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     A_bar = prior.A(h)
     b_bar = prior.b(h)
-    Q_bar_full = prior.Q(h)
-    Q_sqr_bar = np.linalg.cholesky(Q_bar_full).T
+    Q_sqr_bar = prior.Q_sqr(h)
     T_h = cast("_PrecondPrior", prior).T(h)
     E1 = prior.E1
     d_ode = measure.ode_dim
@@ -660,7 +667,6 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
             mz_ode,
             H_ode_bar,
             E1_bar,
-            Q_bar_full,
             Q_sqr_bar,
             prior,
             min_sigma_sqr,
@@ -681,6 +687,7 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
             P_prev_sqr_bar,
             measure,
             t=t_i,
+            correction=correction,
         )
 
         ll_step = _log_likelihood_contrib(mz, Pz_sqr)

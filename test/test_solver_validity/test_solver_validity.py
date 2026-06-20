@@ -205,9 +205,13 @@ class TestConvergenceOrder:
         # Linear regression: log_err = slope * log_N + intercept
         slope = float(np.polyfit(log_N, log_err, 1)[0])
 
-        # Slope should be negative (error decreases), and |slope| ~ q
-        assert slope < -1.5, (
-            f"Filter convergence slope {slope:.2f}, expected <= -1.5 for q={q}"
+        # The EK1 filter converges at global order ~q to q+1; for q=3 the
+        # empirical slope is ~-3.9 (errors 3e-8 -> 8e-12 over N=50..400 in
+        # float64). Require at least order ~3 so the test pins near-theoretical
+        # order rather than merely catching catastrophic regressions.
+        assert slope < -3.0, (
+            f"Filter convergence slope {slope:.2f}, expected <~ -3.9 (>= order 3) "
+            f"for q={q}"
         )
 
     @pytest.mark.parametrize("solver", SOLVERS)
@@ -229,8 +233,11 @@ class TestConvergenceOrder:
         log_err = np.log(np.array(errors))
         slope = float(np.polyfit(log_N, log_err, 1)[0])
 
-        assert slope < -1.5, (
-            f"Smoother convergence slope {slope:.2f}, expected <= -1.5 for q={q}"
+        # The smoother converges at least as fast as the filter; for q=3 the
+        # empirical slope is ~-4.0. Require at least order ~3.
+        assert slope < -3.0, (
+            f"Smoother convergence slope {slope:.2f}, expected <~ -4.0 (>= order 3) "
+            f"for q={q}"
         )
 
 

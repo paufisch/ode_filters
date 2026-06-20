@@ -204,3 +204,61 @@ def test_obs_model_wrong_length_raises():
         ekf1_sqr_adaptive_solve(
             mu_0, S0_sqr, prior, measure, save_at, obs_model=obs_wrong
         )
+
+
+def _blowup_problem(x0_val=1.0):
+    """dx/dt = x^2 has the closed-form solution x(t) = x0 / (1 - x0 t), which
+    blows up at t = 1/x0. Integrating past that point cannot succeed."""
+
+    def vf(x, *, t):
+        return x * x
+
+    x0 = np.array([x0_val])
+    prior = IWP(q=2, d=1)
+    mu_0, S0_sqr = taylor_mode_initialization(vf, x0, q=2)
+    measure = ODEInformation(vf, prior.E0, prior.E1)
+    return prior, measure, mu_0, S0_sqr
+
+
+def test_success_flag_true_on_normal_solve():
+    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    res = ekf1_sqr_adaptive_solve(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    assert bool(res.success)
+    assert np.all(np.isfinite(res.m))
+
+
+def test_blowup_fails_gracefully_without_nan():
+    """A finite-time blow-up must not silently emit NaN: the guard rejects the
+    non-finite error, the solver shrinks h, and on exhaustion it reports
+    success=False while leaving the output finite (the last accepted state)."""
+    prior, measure, mu_0, S0_sqr = _blowup_problem(x0_val=1.0)
+    save_at = np.linspace(0.0, 2.0, 5)  # blow-up at t=1.0 is inside the grid
+    res = ekf1_sqr_adaptive_solve(mu_0, S0_sqr, prior, measure, save_at, max_steps=200)
+    assert not bool(res.success)
+    # Crucially, no NaN leaks into the returned arrays.
+    assert np.all(np.isfinite(res.m))
+    assert np.all(np.isfinite(res.P_sqr))
+
+
+def test_blowup_failure_is_jittable():
+    """The guard + success flag survive jit (no Python branching on traced err).
+
+    ``max_steps`` bounds the checkpointed while-loop and so must be static.
+    """
+    prior, measure, mu_0, S0_sqr = _blowup_problem(x0_val=1.0)
+    save_at = np.linspace(0.0, 2.0, 5)
+    f = jax.jit(
+        ekf1_sqr_adaptive_solve, static_argnums=(2, 3), static_argnames=("max_steps",)
+    )
+    res = f(mu_0, S0_sqr, prior, measure, save_at, max_steps=200)
+    assert not bool(res.success)
+    assert np.all(np.isfinite(res.m))
+
+
+def test_gaussian_filter_adaptive_surfaces_success():
+    from ode_filters import gaussian_filter_adaptive
+
+    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    res = gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    assert res.success is not None
+    assert bool(res.success)

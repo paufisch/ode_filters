@@ -80,6 +80,7 @@ from ..measurement.measurement_models import (
 )
 from ..priors.gmp_priors import BasePrior
 from .adaptive_controller import PIController, StepSizeController
+from .correction import Correction
 from .ode_filter_loop import (
     _calibrate_diffusion,
     _check_state_xi_diagonal,
@@ -142,6 +143,7 @@ def _make_step_body(
     *,
     calibration: CalibrationMode = "dynamic",
     min_sigma_sqr: float = 0.0,
+    correction: Correction | None = None,
 ) -> Callable[[ArrayLike, ArrayLike, Array, Array], tuple]:
     """Construct and jit the per-step body of the adaptive loop.
 
@@ -153,6 +155,9 @@ def _make_step_body(
         calibration: ``"dynamic"`` (default), ``"diagonal"``, ``"diagonal_ekf0"``,
             or ``"none"``. See module docstring for the model each scheme
             corresponds to.
+        correction: Linearization/correction strategy for the measurement update
+            (default ``TaylorCorrection(order=1)``, i.e. EK1). Enables EK0 /
+            IEKF in the adaptive solver.
 
     The returned ``step_body`` produces (in order):
       ``m_pred, P_pred_sqr, G_back, d_back, P_back_sqr, mz, Pz_sqr, m, P_sqr,
@@ -176,8 +181,7 @@ def _make_step_body(
     ) -> tuple:
         A_h = prior.A(h)
         b_h = prior.b(h)
-        Q_h = prior.Q(h)
-        Q_h_sqr = np.linalg.cholesky(Q_h).T
+        Q_h_sqr = prior.Q_sqr(h)
 
         # Mean is independent of the prior covariance, so it can be used to
         # linearise the measurement model up front.
@@ -193,7 +197,7 @@ def _make_step_body(
         mz_ode = mz_pred[:d_ode]
 
         sigma_sqr, Q_step_sqr = _calibrate_diffusion(
-            calibration, mz_ode, H_ode, E1, Q_h, Q_h_sqr, prior, min_sigma_sqr
+            calibration, mz_ode, H_ode, E1, Q_h_sqr, prior, min_sigma_sqr
         )
         # The adaptive driver stores/uses a per-component vector; broadcast the
         # scalar (dynamic / none) modes to length d.
@@ -209,15 +213,25 @@ def _make_step_body(
             (mz, Pz_sqr),
             (m, P_sqr),
         ) = ekf1_sqr_filter_step(
-            A_h, b_h, Q_step_sqr, m_prev, P_prev_sqr, measure, t=t_next
+            A_h,
+            b_h,
+            Q_step_sqr,
+            m_prev,
+            P_prev_sqr,
+            measure,
+            t=t_next,
+            correction=correction,
         )
 
         # Local error estimate (Bosch et al. 2021 Eq. 49; Bosch et al. 2022
         # sec. 3: error vector has the dimension of the ODE solution).
         # diag(E0_state Q E0_state.T) is the per-component, uncalibrated
         # state-value variance; the driver multiplies it by whatever
-        # sigma_for_err it chooses.
-        D_unscaled_sqr_diag = np.diag(E0_state @ Q_h @ E0_state.T)
+        # sigma_for_err it chooses. Computed from the square-root Q_h_sqr
+        # (Q = Q_sqr.T @ Q_sqr) as the row-norms of E0_state @ Q_h_sqr.T, so the
+        # dense Q is never formed.
+        E0Q_sqr = E0_state @ Q_h_sqr.T
+        D_unscaled_sqr_diag = np.sum(E0Q_sqr * E0Q_sqr, axis=1)
         D = np.sqrt(np.maximum(sigma_vec * D_unscaled_sqr_diag, 0.0))
         m_value = E0_state @ m_pred
         err = _local_error_norm(D, m_value, atol, rtol)
@@ -262,6 +276,7 @@ def ekf1_sqr_adaptive_loop(
     sigma_in_error: SigmaInError = "running_mean",
     min_sigma_sqr: float = 0.0,
     max_steps: int = 100_000,
+    correction: Correction | None = None,
 ) -> AdaptiveLoopResult:
     """Adaptive-step square-root EKF with per-step diffusion calibration.
 
@@ -386,6 +401,7 @@ def ekf1_sqr_adaptive_loop(
         rtol,
         calibration=calibration,
         min_sigma_sqr=min_sigma_sqr,
+        correction=correction,
     )
 
     t = t_start
@@ -526,12 +542,19 @@ class AdaptiveSolveResult(NamedTuple):
             ``[K, state_dim, state_dim]`` (``P = P_sqr.T @ P_sqr``).
         log_likelihood: Accumulated Gaussian log-marginal-likelihood (scalar),
             summed over every accepted step.
+        success: Scalar boolean -- ``True`` if the adaptive sub-stepping reached
+            the final save time with a finite log-likelihood. ``False`` signals a
+            failed solve (e.g. a blow-up exhausted ``max_steps`` before the
+            endpoint); the returned ``m`` / ``P_sqr`` then hold the last accepted
+            (finite) state rather than NaN. Because the solver is jittable it
+            cannot raise -- check this flag instead.
     """
 
     t: Array
     m: Array
     P_sqr: Array
     log_likelihood: Array
+    success: Array
 
 
 def _controller_coeffs(
@@ -571,6 +594,7 @@ def ekf1_sqr_adaptive_solve(
     controller: StepSizeController | None = None,
     min_sigma_sqr: float = 0.0,
     max_steps: int = 4096,
+    correction: Correction | None = None,
 ) -> AdaptiveSolveResult:
     """``jit`` / ``vmap`` / ``grad``-able adaptive EKF1, saved on a fixed grid.
 
@@ -625,6 +649,11 @@ def ekf1_sqr_adaptive_solve(
         max_steps: Hard cap on sub-steps per save interval (bounds the checkpointed
             while-loop). Raise it (or loosen tolerances) if a solve fails to reach a
             save time.
+        correction: Linearization/correction strategy for the ODE measurement
+            update (default ``TaylorCorrection(order=1)``, i.e. EK1); pass
+            ``TaylorCorrection(order=0)`` for EK0 or ``IteratedTaylorCorrection``
+            for IEKF. The observation update (if ``obs_model`` is given) is linear
+            and unaffected.
 
     Returns:
         An :class:`AdaptiveSolveResult` with the solution sampled at ``save_at``.
@@ -640,6 +669,7 @@ def ekf1_sqr_adaptive_solve(
         rtol,
         calibration=calibration,
         min_sigma_sqr=min_sigma_sqr,
+        correction=correction,
     )
     span = save_at[-1] - save_at[0]
     h0 = span / 100.0 if h_init is None else np.asarray(h_init, dtype=float)
@@ -648,6 +678,12 @@ def ekf1_sqr_adaptive_solve(
         # Gustafsson PI law (jax form of adaptive_controller.PIController.propose);
         # err_prev < 0 signals "no memory" (first step / right after a reject) and
         # drops the integral term.
+        # A non-finite error (NaN/inf from a blow-up) is mapped to +inf so the
+        # proposed factor collapses to ``min_factor`` (a shrink) instead of
+        # propagating NaN into ``h`` -- which would otherwise turn ``h_try`` NaN
+        # and spin the checkpointed while-loop to ``max_steps`` with no progress.
+        # (cast: jnp.where's overloads widen to Array | tuple under pyright.)
+        err = cast(Array, np.where(np.isfinite(err), err, np.inf))
         err = np.maximum(err, 1e-12)
         proportional = err ** (-alpha)
         integral = np.where(
@@ -670,7 +706,10 @@ def ekf1_sqr_adaptive_solve(
             out = step_body(h_try, t_next, m, P_sqr)
             m_new, P_new_sqr = out[7], out[8]
             err, loglik_step = out[10], out[11]
-            accept = err <= 1.0
+            # Reject non-finite errors (NaN/inf): never accept a NaN state, and
+            # ``propose`` shrinks ``h`` so the loop can recover instead of
+            # silently emitting NaN.
+            accept = (err <= 1.0) & np.isfinite(err)
             t2 = np.where(accept, t_next, t)
             m2 = np.where(accept, m_new, m)
             P2 = np.where(accept, P_new_sqr, P_sqr)
@@ -730,7 +769,15 @@ def ekf1_sqr_adaptive_solve(
     P_seq_sqr = cast(Array, P_seq_sqr)
     m_out = np.concatenate([mu_0[None], m_seq], axis=0)
     P_out = np.concatenate([Sigma_0_sqr[None], P_seq_sqr], axis=0)
-    return AdaptiveSolveResult(t=save_at, m=m_out, P_sqr=P_out, log_likelihood=final[4])
+    # The solve succeeded iff the sub-stepping reached the final save time
+    # (``final[0]`` is the running time after the last interval) with a finite
+    # log-likelihood. A blow-up that exhausts ``max_steps`` leaves ``final[0]``
+    # short of ``save_at[-1]``.
+    end_tol = 1e-10 * np.abs(save_at[-1]) + 1e-12
+    success = (final[0] >= save_at[-1] - end_tol) & np.isfinite(final[4])
+    return AdaptiveSolveResult(
+        t=save_at, m=m_out, P_sqr=P_out, log_likelihood=final[4], success=success
+    )
 
 
 __all__ = [

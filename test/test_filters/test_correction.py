@@ -145,15 +145,20 @@ def test_ek1_equivalence_with_conservation():
 # --------------------------------------------------------------------------- #
 
 
-def test_ek0_h_eff_is_selection_matrix():
+def test_ek0_effective_jacobian_is_selection_matrix():
+    from ode_filters.filters.correction import _linearize
+
     prior, measure, m0, P0_sqr = _decay_ode()
-    m_pred, P_pred_sqr = _predict(prior, m0, P0_sqr)
+    m_pred, _ = _predict(prior, m0, P0_sqr)
 
-    res0 = TaylorCorrection(order=0).correct(measure, m_pred, P_pred_sqr, t=T_EVAL)
-
-    # EK0 drops the vector-field Jacobian: H_eff == E_constraint (== E1 here).
-    assert np.allclose(res0.H_eff, measure.E_constraint, atol=1e-12)
-    assert np.allclose(res0.H_eff, prior.E1, atol=1e-12)
+    # EK0 (order=0) drops the vector-field Jacobian on the ODE-defect rows: the
+    # effective Jacobian there is E_constraint (== E1 here), unlike EK1.
+    H0, _ = _linearize(measure, m_pred, t=T_EVAL, order=0)
+    H1, _ = _linearize(measure, m_pred, t=T_EVAL, order=1)
+    d = measure.ode_dim
+    assert np.allclose(H0[:d], measure.E_constraint, atol=1e-12)
+    assert np.allclose(H0[:d], prior.E1, atol=1e-12)
+    assert not np.allclose(H1[:d], H0[:d], atol=1e-9)  # EK1 keeps J_f
 
 
 def test_ek0_differs_from_ek1_for_nonlinear_vf():
@@ -211,7 +216,8 @@ def test_orthogonality_hidden_state_model():
     (_, _), (m_t, _) = _reference_ek1_update(measure, m_pred, P_pred_sqr)
     res = TaylorCorrection(order=1).correct(measure, m_pred, P_pred_sqr, t=T_EVAL)
     assert np.allclose(res.m, m_t, atol=1e-12)
-    assert res.mz_ode.shape[0] == measure.ode_dim
+    # The innovation includes at least the ODE-defect rows.
+    assert res.mz.shape[0] >= measure.ode_dim
 
 
 # --------------------------------------------------------------------------- #

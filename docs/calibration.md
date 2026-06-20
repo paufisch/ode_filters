@@ -51,6 +51,24 @@ P_seq_sqr_calibrated = rescale_sqr_seq(result.P_sqr, sigma_sqr_hat)
 This is appropriate for smooth problems where a single global scalar captures
 the residual size well.
 
+!!! warning "Joint / latent-force priors: pass `prior=`"
+
+    For `JointPrior` / `PrecondJointPrior`, the diffusion `sigma^2` belongs to
+    the ODE-**state** block only -- the hidden/input block must not be rescaled
+    (Schmidt et al. 2021). The default `rescale_sqr` / `rescale_sqr_seq` scale
+    the *whole* covariance, which is wrong for these priors. Pass the prior so
+    the rescaling is routed through its block-aware
+    `apply_state_sigma_to_cov_sqr`:
+
+    ```python
+    P_seq_sqr_calibrated = rescale_sqr_seq(result.P_sqr, sigma_sqr_hat, prior=prior)
+    ```
+
+    For non-joint priors (`IWP`, `MaternPrior`, ...) passing `prior=` is
+    optional and gives the same result as the default whole-covariance scaling.
+    The online calibration path (`calibration="dynamic"`/`"diagonal"`) is
+    already block-aware, so this only matters for the post-hoc workflow above.
+
 ### Per-step quasi-MLE inside the adaptive solver
 
 `gaussian_filter_adaptive` runs the per-step quasi-MLE by default and applies it

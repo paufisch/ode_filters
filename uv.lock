@@ -482,6 +482,24 @@ wheels = [
 ]
 
 [[package]]
+name = "diffrax"
+version = "0.7.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "equinox" },
+    { name = "jax" },
+    { name = "jaxtyping" },
+    { name = "lineax" },
+    { name = "optimistix" },
+    { name = "typing-extensions" },
+    { name = "wadler-lindig" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5a/ea/a22853377a840d70d1d174d43183f12990c66eecf34ba7e76eec781249d0/diffrax-0.7.2.tar.gz", hash = "sha256:9adc70fe90dba83f7dd839845839b2531a3dd736a3944fe1aa26598507cfb48e", size = 155159, upload-time = "2026-02-18T01:14:04.964Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6c/48/c42f657f3d6b4d9d9674c9bc48e763d024511ea4cc1d6e0c68c7b4380c43/diffrax-0.7.2-py3-none-any.whl", hash = "sha256:1beee2f991cd049962fe3c89da28f933753aa66d80bef857533276c9f23301ed", size = 199673, upload-time = "2026-02-18T01:14:03.38Z" },
+]
+
+[[package]]
 name = "distlib"
 version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1030,6 +1048,21 @@ wheels = [
 ]
 
 [[package]]
+name = "lineax"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "equinox" },
+    { name = "jax" },
+    { name = "jaxtyping" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/35/d6/4e28416a6fe58dd6bc7565b1ffa330f4d0ba7d74212642b1b734c511299e/lineax-0.1.0.tar.gz", hash = "sha256:5f1a8f060142af2cdbf7d66b99e8d3071c3aa734b677df6339df4b4c4c0554d2", size = 50209, upload-time = "2026-01-27T21:17:26.652Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/80/0c/2ed47112fc1958a0a81c9b015d4e1861953a1ec3a17b081c0180a25ce82c/lineax-0.1.0-py3-none-any.whl", hash = "sha256:f00911c6b07d427c4835db46856970c8348bc82a035b51f4386ad09382af957a", size = 74600, upload-time = "2026-01-27T21:17:25.33Z" },
+]
+
+[[package]]
 name = "makefun"
 version = "1.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1551,6 +1584,11 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+benchmarks = [
+    { name = "diffrax" },
+    { name = "matplotlib" },
+    { name = "scipy" },
+]
 examples = [
     { name = "matplotlib" },
 ]
@@ -1572,6 +1610,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cases" },
     { name = "pytest-cov" },
+    { name = "scipy" },
 ]
 docs = [
     { name = "matplotlib" },
@@ -1584,12 +1623,15 @@ docs = [
 
 [package.metadata]
 requires-dist = [
+    { name = "diffrax", marker = "extra == 'benchmarks'", specifier = ">=0.6" },
     { name = "equinox", specifier = ">=0.11" },
     { name = "jax", specifier = ">=0.8.0" },
+    { name = "matplotlib", marker = "extra == 'benchmarks'", specifier = ">=3.10.7" },
     { name = "matplotlib", marker = "extra == 'examples'", specifier = ">=3.10.7" },
     { name = "numpy", specifier = ">=2.3.4" },
+    { name = "scipy", marker = "extra == 'benchmarks'", specifier = ">=1.13" },
 ]
-provides-extras = ["examples"]
+provides-extras = ["examples", "benchmarks"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1608,6 +1650,7 @@ dev = [
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-cases", specifier = ">=3.9.1" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "scipy", specifier = ">=1.13" },
 ]
 docs = [
     { name = "matplotlib", specifier = ">=3.10.7" },
@@ -1640,6 +1683,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8c/f9/e3d11ae6f298ee941a0690e353a323d158ba5dedc436e75621c310845c5c/optax-0.2.8.tar.gz", hash = "sha256:5b225b35066fc3eebaa4d798f1b4173b4d57d1a480610908981f8343b50af0b0", size = 301193, upload-time = "2026-03-20T23:30:05.465Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8a/69/6a93d8600c339d7687a05857c7907bd4dd8cf88691a5ea106d7a50af90a1/optax-0.2.8-py3-none-any.whl", hash = "sha256:e3ca2d36c99daab1800ae9dbc0545034382d6bc780b24d969e1b0df65fa31cb4", size = 402960, upload-time = "2026-03-20T23:30:03.886Z" },
+]
+
+[[package]]
+name = "optimistix"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "equinox" },
+    { name = "jax" },
+    { name = "jaxtyping" },
+    { name = "lineax" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5c/0b/3bdc0e698cb0d264e5dca0b5bb171342a950a43fa6e046d8c57189298422/optimistix-0.1.0.tar.gz", hash = "sha256:f05c9104748e87e1dc10a0b4a2be94e427f98c3eab0b1d41ea24a593d76be03d", size = 70164, upload-time = "2026-02-16T13:35:43.991Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/63/53/6a81a6ebb1739f19c32002139719d4ee021a349d5bdbe066910feed327a1/optimistix-0.1.0-py3-none-any.whl", hash = "sha256:c8edda7bf7fe48839c93fcd72bce750c950ed9f7033158303150b7ab395add81", size = 101740, upload-time = "2026-02-16T13:35:42.971Z" },
 ]
 
 [[package]]

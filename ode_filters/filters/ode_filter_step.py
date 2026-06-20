@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
 
 import jax
 from jax import Array
@@ -107,6 +108,46 @@ def rts_sqr_smoother_step(
     return (m_s_prev, P_s_prev_sqr)
 
 
+class _BarMeasure:
+    """Adapt a measurement model to preconditioned (bar) coordinates.
+
+    The state evolves in bar space (``x = T x_bar``) but the measurement model
+    linearizes in original space. This wrapper presents the model *as if* it
+    acted on the bar state, so the same :class:`Correction` strategy (EK0 / EK1 /
+    IEKF) used on the plain path can drive the preconditioned update with no
+    duplicated linearization logic:
+
+    - ``linearize(x_bar)`` returns ``(H @ T, c)`` where ``(H, c)`` is the
+      original-space linearization at ``T x_bar`` -- so ``(H T) x_bar + c`` is
+      the same affine residual as ``H (T x_bar) + c``;
+    - ``E_constraint`` becomes ``E_constraint @ T`` so the EK0 (``order=0``)
+      branch overwrites the ODE-defect rows with the *bar-space* selector;
+    - ``get_noise`` / ``ode_dim`` pass through unchanged.
+
+    It is a thin, single-step view (``T`` is the current step's preconditioner),
+    used only inside the traced step body -- not a pytree.
+    """
+
+    def __init__(self, measure: BaseODEInformation, T: Array) -> None:
+        self._measure = measure
+        self._T = T
+
+    def linearize(self, state: Array, *, t: ArrayLike = 0.0) -> tuple[Array, Array]:
+        H, c = self._measure.linearize(self._T @ state, t=t)
+        return H @ self._T, c
+
+    def get_noise(self, *, t: ArrayLike = 0.0) -> Array:
+        return self._measure.get_noise(t=t)
+
+    @property
+    def E_constraint(self) -> Array:
+        return self._measure.E_constraint @ self._T
+
+    @property
+    def ode_dim(self) -> int:
+        return self._measure.ode_dim
+
+
 # Preconditioned version of ekf1_sqr_filter_step
 # T is a preconditioner with x_bar = T^-1 x
 # A, Q and b are stepsize-independent in the transformed space
@@ -120,8 +161,16 @@ def ekf1_sqr_filter_step_preconditioned(
     P_prev_sqr_bar: Array,
     measure: BaseODEInformation,
     t: ArrayLike = 0.0,
+    *,
+    correction: Correction | None = None,
 ) -> PreconditionedFilterStepResult:
     """Perform a single preconditioned square-root EKF step.
+
+    The measurement update is delegated to a :class:`Correction` strategy
+    operating in preconditioned coordinates (via :class:`_BarMeasure`), so EK0 /
+    EK1 / IEKF all work on the preconditioned path with the same linearization
+    logic as the plain step. The default ``TaylorCorrection(order=1)`` (EK1) is
+    bit-identical to the previous inlined behavior.
 
     Args:
         A_bar: Stepsize-independent state transition matrix.
@@ -132,10 +181,14 @@ def ekf1_sqr_filter_step_preconditioned(
         P_prev_sqr_bar: Previous state covariance (square-root form, preconditioned space).
         measure: Measurement model (e.g., ODEInformation or subclass).
         t: Current time (default 0.0).
+        correction: Linearization/correction strategy; defaults to
+            ``TaylorCorrection(order=1)`` (EK1).
 
     Returns:
         Tuple of 5 tuples with preconditioned and original-space results.
     """
+    if correction is None:
+        correction = TaylorCorrection(order=1)
 
     m_pred_bar, P_pred_sqr_bar = sqr_marginalization(
         A_bar, b_bar, Q_sqr_bar, m_prev_bar, P_prev_sqr_bar
@@ -144,17 +197,10 @@ def ekf1_sqr_filter_step_preconditioned(
         A_bar, m_prev_bar, P_prev_sqr_bar, m_pred_bar, P_pred_sqr_bar, Q_sqr_bar
     )
 
-    H_t, c_t = measure.linearize(T_t @ m_pred_bar, t=t)
-    H_t_bar = H_t @ T_t
-    R_t_sqr = measure.get_noise(t=t)
-
-    m_z, P_z_sqr = sqr_marginalization(
-        H_t_bar, c_t, R_t_sqr, m_pred_bar, P_pred_sqr_bar
-    )
-    _, d_bar, P_t_sqr_bar = sqr_inversion(
-        H_t_bar, m_pred_bar, P_pred_sqr_bar, m_z, P_z_sqr, R_t_sqr
-    )
-    m_t_bar = d_bar  # for non zero measurements: K_t_bar @ z_observed_t + d_bar
+    bar_measure = cast(BaseODEInformation, _BarMeasure(measure, T_t))
+    res = correction.correct(bar_measure, m_pred_bar, P_pred_sqr_bar, t=t)
+    m_t_bar, P_t_sqr_bar = res.m, res.P_sqr
+    m_z, P_z_sqr = res.mz, res.Pz_sqr
 
     m_t = T_t @ m_t_bar
     P_t_sqr = P_t_sqr_bar @ T_t.T

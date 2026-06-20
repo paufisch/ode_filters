@@ -33,6 +33,10 @@ classifiers = [
 [project.optional-dependencies]
 # `pip install ode-filters[examples]` to run the example notebooks locally.
 examples = ["matplotlib>=3.10.7"]
+# `pip install ode-filters[benchmarks]` to run the work-precision / calibration
+# benchmarks in `benchmarks/`, which compare against classical (Diffrax) and
+# reference (SciPy) solvers.
+benchmarks = ["diffrax>=0.6", "scipy>=1.13", "matplotlib>=3.10.7"]
 
 [project.urls]
 Homepage = "https://github.com/paufisch/ode_filters"
@@ -57,6 +61,7 @@ dev = [
     "pytest>=8.4.2",
     "pytest-cases>=3.9.1",
     "pytest-cov>=7.0.0",
+    "scipy>=1.13",  # reference solver in test_solver_validity (hard import)
 ]
 docs = [
     "matplotlib>=3.10.7",  # required: example notebooks execute during the build

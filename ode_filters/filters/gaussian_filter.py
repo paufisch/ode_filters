@@ -70,6 +70,10 @@ class FilterResult(NamedTuple):
         P_bar_sqr: Preconditioned-space square-root covariances (``None`` for plain).
         T: Preconditioner matrix (``None`` for plain); presence selects the
             preconditioned smoother.
+        success: Scalar boolean -- whether an adaptive solve reached the final
+            save time (see :class:`AdaptiveSolveResult`). ``None`` for the
+            fixed-grid paths, which run a deterministic number of steps and
+            always complete.
     """
 
     t: Array
@@ -88,6 +92,7 @@ class FilterResult(NamedTuple):
     m_bar: Array | None
     P_bar_sqr: Array | None
     T: Array | None
+    success: Array | None = None
 
 
 def _is_preconditioned(prior: BasePrior) -> bool:
@@ -135,10 +140,10 @@ def gaussian_filter(
     t = np.linspace(tspan[0], tspan[1], N + 1)
 
     if _is_preconditioned(prior):
-        if obs_model is not None or correction is not None:
+        if obs_model is not None:
             raise NotImplementedError(
-                "Preconditioned priors do not yet support observations or a "
-                "non-default correction. Use a plain IWP / Matern prior for those."
+                "Preconditioned priors do not yet support external observations. "
+                "Use a plain IWP / Matern prior for an obs_model."
             )
         out = ekf1_sqr_loop_preconditioned_dynamic_scan(
             mu_0,
@@ -149,6 +154,7 @@ def gaussian_filter(
             N,
             calibration=calibration,
             min_sigma_sqr=min_sigma_sqr,
+            correction=correction,
         )
         (
             m_seq,
@@ -256,6 +262,7 @@ def gaussian_filter_adaptive(
     measure: BaseODEInformation,
     save_at: Array,
     *,
+    correction: Correction | None = None,
     obs_model: ObsModel | None = None,
     atol: float = 1e-4,
     rtol: float = 1e-2,
@@ -270,6 +277,10 @@ def gaussian_filter_adaptive(
     ``jit`` / ``vmap`` / reverse-``grad``-able (checkpointed adaptive loop).
     Filtering only -- the result carries no backward pass, so :func:`rts_smoother`
     does not apply. See :func:`ekf1_sqr_adaptive_solve` for the full argument docs.
+
+    ``correction`` selects the linearization (EK0/EK1/IEKF), matching
+    :func:`gaussian_filter`; ``result.success`` reports whether the adaptive
+    sub-stepping reached the final save time.
     """
     res = ekf1_sqr_adaptive_solve(
         mu_0,
@@ -285,6 +296,7 @@ def gaussian_filter_adaptive(
         controller=controller,
         min_sigma_sqr=min_sigma_sqr,
         max_steps=max_steps,
+        correction=correction,
     )
     return FilterResult(
         t=res.t,
@@ -303,6 +315,7 @@ def gaussian_filter_adaptive(
         m_bar=None,
         P_bar_sqr=None,
         T=None,
+        success=res.success,
     )
 
 

@@ -18,6 +18,17 @@ MatrixFunction = Callable[[ArrayLike], Array]
 VectorField = Callable[..., Array]
 
 
+def _cholesky_upper(M: Array) -> Array:
+    """Upper-triangular factor ``U`` with ``U.T @ U == M`` (square-root form).
+
+    Symmetrizes ``M`` first so a tiny non-symmetric residual (e.g. from
+    ``expm``) does not break the Cholesky. This is the library's square-root
+    convention (``A = A_sqr.T @ A_sqr`` with ``A_sqr`` upper-triangular).
+    """
+    M = 0.5 * (M + M.T)
+    return np.linalg.cholesky(M).T
+
+
 class BasePrior(ABC):
     def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         if not isinstance(q, int):
@@ -75,6 +86,18 @@ class BasePrior(ABC):
     @abstractmethod
     def Q(self, h: ArrayLike) -> Array:
         pass  # pragma: no cover
+
+    def Q_sqr(self, h: ArrayLike) -> Array:
+        """Upper-triangular square root of ``Q(h)``: ``Q_sqr.T @ Q_sqr == Q(h)``.
+
+        This is the quantity the square-root filter actually consumes. The
+        default factorizes the dense ``Q(h)`` with a (symmetrized) Cholesky;
+        subclasses with a closed-form factor (``IWP`` / ``PrecondIWP``) or a
+        block structure (``JointPrior``) override this to avoid factorizing a
+        dense -- and, for the integrated Wiener process, severely
+        ill-conditioned -- matrix at runtime.
+        """
+        return _cholesky_upper(self.Q(h))
 
     # ------------------------------------------------------------------
     # Block-aware calibration hooks. Defaults treat the whole state as a
@@ -295,6 +318,16 @@ class IWP(BasePrior):
     def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         super().__init__(q, d, Xi)
         self._A, self._Q = _make_iwp_state_matrices(q)
+        # Closed-form square root of Q(h). The dense Hilbert-like Q(h) is
+        # severely ill-conditioned for moderate q (entries scale as
+        # h^(2q+1-i-j)); factorizing it directly loses precision. Instead use
+        # Q(h) = T(h) Q_bar T(h) with T(h) diagonal and Q_bar the constant
+        # (h-independent) Hilbert matrix, so its Cholesky is computed once and
+        # the stepsize dependence enters only through the well-behaved diagonal
+        # T(h): Q(h)_sqr = kron(chol(Q_bar).T @ T(h), chol(xi).T).
+        _, _Q_bar_scalar, self._T_scalar = _make_iwp_precond_state_matrices(q)
+        self._Q_bar_sqr_scalar = _cholesky_upper(_Q_bar_scalar)
+        self._xi_sqr = _cholesky_upper(self.xi)
 
     def A(self, h: ArrayLike) -> Array:
         """Return the state transition matrix for step size h.
@@ -329,6 +362,16 @@ class IWP(BasePrior):
         """
         return np.kron(self._Q(self._validate_h(h)), self.xi)
 
+    def Q_sqr(self, h: ArrayLike) -> Array:
+        """Closed-form upper-triangular square root of ``Q(h)``.
+
+        ``Q(h)_sqr = kron(chol(Q_bar).T @ T(h), chol(xi).T)`` (see
+        :meth:`__init__`); never forms or factorizes the dense ill-conditioned
+        ``Q(h)``.
+        """
+        Q_scalar_sqr = self._Q_bar_sqr_scalar @ self._T_scalar(self._validate_h(h))
+        return np.kron(Q_scalar_sqr, self._xi_sqr)
+
 
 class PrecondIWP(BasePrior):
     """Preconditioned Integrated Wiener Process prior.
@@ -341,6 +384,11 @@ class PrecondIWP(BasePrior):
     def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         super().__init__(q, d, Xi)
         self._A_bar, self._Q_bar, self._T = _make_iwp_precond_state_matrices(q)
+        # Q is stepsize-independent in preconditioned space, so its square root
+        # is a single constant computed once: kron(chol(Q_bar).T, chol(xi).T).
+        self._Q_sqr_const = np.kron(
+            _cholesky_upper(self._Q_bar), _cholesky_upper(self.xi)
+        )
 
     def A(self, h: ArrayLike | None = None) -> Array:
         """Return the constant preconditioning transition matrix.
@@ -374,6 +422,13 @@ class PrecondIWP(BasePrior):
             Constant diffusion matrix (shape [(q+1)*d, (q+1)*d]).
         """
         return np.kron(self._Q_bar, self.xi)
+
+    def Q_sqr(self, h: ArrayLike | None = None) -> Array:
+        """Return the constant upper-triangular square root of ``Q``.
+
+        Stepsize-independent in preconditioned space (see :meth:`__init__`).
+        """
+        return self._Q_sqr_const
 
     def T(self, h: ArrayLike) -> Array:
         """Return the stepsize-dependent preconditioning transformation.
@@ -539,9 +594,13 @@ class MaternPrior(BasePrior):
             h: Step size.
 
         Returns:
-            Zero drift vector (shape [n]).
+            Zero drift vector (shape [(q+1)*d]).
         """
-        return np.zeros(self.n)
+        # ``self._b`` is the Kron-lifted zero drift of length ``(q+1)*d`` set by
+        # ``BasePrior.__init__`` -- using it (rather than ``np.zeros(self.n)``,
+        # which has the un-lifted length ``q+1``) keeps ``b`` consistent with the
+        # ``(q+1)*d`` state for ``d > 1``.
+        return self._b
 
     def Q(self, h: ArrayLike) -> Array:
         """Return the diffusion matrix for step size h.
@@ -550,7 +609,7 @@ class MaternPrior(BasePrior):
             h: Step size.
 
         Returns:
-            Diffusion matrix (shape [n, n]).
+            Diffusion matrix (shape [(q+1)*d, (q+1)*d]).
         """
         _, Q_h = self.A_and_Q(h)
         Q_h = 0.5 * (Q_h + Q_h.T)
@@ -664,6 +723,16 @@ class PrecondMaternPrior(BasePrior):
             raise ValueError("PrecondMaternPrior.Q requires a step size h.")
         _, Q_bar = self._precond_discretise(h)
         return np.kron(Q_bar, self.xi)
+
+    def Q_sqr(self, h: ArrayLike | None = None) -> Array:
+        """Upper-triangular square root of the preconditioned ``Q(h)``.
+
+        The preconditioned ``Q_bar(h)`` is well-conditioned (it converges to the
+        IWP constant as ``h -> 0``), so a symmetrized Cholesky is stable here.
+        Accepts ``h=None`` for interface symmetry with the other preconditioned
+        priors, but ``Q`` itself requires ``h``.
+        """
+        return _cholesky_upper(self.Q(h))
 
     def b(self, h: ArrayLike | None = None) -> Array:
         """Return the zero drift vector.
@@ -805,6 +874,21 @@ class JointPrior(BasePrior):
         """
         return np.block(
             [[self._prior_x.Q(h), self._zeros], [self._zeros.T, self._prior_u.Q(h)]]
+        )
+
+    def Q_sqr(self, h: ArrayLike) -> Array:
+        """Block-diagonal upper-triangular square root of ``Q(h)``.
+
+        ``Q`` is block-diagonal, so its square root is the block-diagonal of the
+        sub-priors' square roots -- this delegates to each sub-prior's
+        :meth:`Q_sqr` (closed-form for ``IWP``) rather than factorizing the
+        dense joint ``Q(h)``.
+        """
+        return np.block(
+            [
+                [self._prior_x.Q_sqr(h), self._zeros],
+                [self._zeros.T, self._prior_u.Q_sqr(h)],
+            ]
         )
 
     @property
@@ -1004,6 +1088,19 @@ class PrecondJointPrior:
         """
         return np.block(
             [[self._prior_x.Q(h), self._zeros], [self._zeros.T, self._prior_u.Q(h)]]
+        )
+
+    def Q_sqr(self, h: ArrayLike | None = None) -> Array:
+        """Block-diagonal upper-triangular square root of ``Q``.
+
+        Delegates to each sub-prior's :meth:`Q_sqr` (constant for ``PrecondIWP``)
+        rather than factorizing the dense joint ``Q``.
+        """
+        return np.block(
+            [
+                [self._prior_x.Q_sqr(h), self._zeros],
+                [self._zeros.T, self._prior_u.Q_sqr(h)],
+            ]
         )
 
     def T(self, h: ArrayLike) -> Array:
