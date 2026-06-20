@@ -31,8 +31,8 @@ named fields (recover a covariance with `P = P_sqr.T @ P_sqr`; see
 `gaussian_filter_adaptive` is filtering-only, so its backward-pass fields are
 `None` and `rts_smoother` does not apply to it.
 
-The low-level loop variants (`ekf1_sqr_loop*`, `*_step*`, the adaptive trajectory
-driver) live in the `ode_filters.filters.ode_filter_loop` / `ode_filter_step` /
-`ode_filter_adaptive` submodules; `gaussian_filter` wraps them.
+The low-level scan loops and step functions that `gaussian_filter` wraps live in
+the `ode_filters.filters.ode_filter_loop` / `ode_filter_step` / `ode_filter_adaptive`
+submodules; they are implementation detail, not part of the public API.
 
 ::: ode_filters.filters
