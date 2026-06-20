@@ -388,6 +388,8 @@ def test_iekf_one_iteration_equals_ek1():
 
 
 def test_iekf_converges_to_fixed_point():
+    from ode_filters.filters.correction import _affine_correct, _linearize, _noise
+
     prior, measure, m0, P0_sqr = _decay_ode()
     m_pred, P_pred_sqr = _predict(prior, m0, P0_sqr)
     a = IteratedTaylorCorrection(max_iters=10).correct(
@@ -398,6 +400,14 @@ def test_iekf_converges_to_fixed_point():
     )
     assert np.all(np.isfinite(a.m))
     assert np.allclose(a.m, b.m, atol=1e-10)  # converged (more iters -> same point)
+
+    # Stationarity: the converged mean must be an actual fixed point of the
+    # relinearization map -- one more EK1 update *linearized at a.m* (using the
+    # same prediction) must not move the mean. (Self-consistency across iteration
+    # counts alone would also pass for a wrong-but-stable point.)
+    H, c = _linearize(measure, a.m, t=T_EVAL, order=1)
+    m_star = _affine_correct(H, c, _noise(measure, T_EVAL), m_pred, P_pred_sqr)[0]
+    assert np.allclose(m_star, a.m, atol=1e-9)
 
 
 def test_iekf_differs_from_ek1_for_nonlinear_vf():

@@ -542,12 +542,13 @@ class AdaptiveSolveResult(NamedTuple):
             ``[K, state_dim, state_dim]`` (``P = P_sqr.T @ P_sqr``).
         log_likelihood: Accumulated Gaussian log-marginal-likelihood (scalar),
             summed over every accepted step.
-        success: Scalar boolean -- ``True`` if the adaptive sub-stepping reached
-            the final save time with a finite log-likelihood. ``False`` signals a
-            failed solve (e.g. a blow-up exhausted ``max_steps`` before the
-            endpoint); the returned ``m`` / ``P_sqr`` then hold the last accepted
-            (finite) state rather than NaN. Because the solver is jittable it
-            cannot raise -- check this flag instead.
+        success: Scalar boolean -- ``True`` iff the adaptive sub-stepping landed
+            on *every* save time (not just the last) with a finite
+            log-likelihood. ``False`` signals a failed solve (e.g. a blow-up
+            exhausted ``max_steps`` before some save point), in which case the
+            save(s) at or after the stall hold the last accepted state at the
+            stalled time rather than the requested time. Because the solver is
+            jittable it cannot raise -- check this flag instead.
     """
 
     t: Array
@@ -724,13 +725,20 @@ def ekf1_sqr_adaptive_solve(
 
     init = (save_at[0], mu_0, Sigma_0_sqr, h0, np.array(0.0), np.array(-1.0))
 
+    def _reached(t, target):
+        # Did the sub-stepping actually land on this save time (vs. stalling at
+        # max_steps short of it)? Same tolerance as the while-loop ``cond``.
+        return t >= target - (1e-10 * np.abs(target) + 1e-12)
+
     if obs_model is None:
 
         def scan_body_plain(carry, target):
             carry = integrate_to(target, carry)
-            return carry, (carry[1], carry[2])
+            return carry, (carry[1], carry[2], _reached(carry[0], target))
 
-        final, (m_seq, P_seq_sqr) = jax.lax.scan(scan_body_plain, init, save_at[1:])
+        final, (m_seq, P_seq_sqr, reached_seq) = jax.lax.scan(
+            scan_body_plain, init, save_at[1:]
+        )
     else:
         n_obs_steps = obs_model.c_seq.shape[0]
         if n_obs_steps != save_at.shape[0] - 1:
@@ -746,6 +754,7 @@ def ekf1_sqr_adaptive_solve(
         def scan_body_obs(carry, step_data):
             target, c_obs, mask = step_data
             t, m, P_sqr, h, ll, err_prev = integrate_to(target, carry)
+            reached = _reached(t, target)
             # Exact (linear) observation update at the save time, masked off when
             # no observation is active there (same all-or-nothing convention as the
             # dynamic-observation scan loop).
@@ -759,9 +768,9 @@ def ekf1_sqr_adaptive_solve(
             ll = ll + np.where(
                 obs_active, _log_likelihood_contrib(mz_obs, Pz_obs_sqr), 0.0
             )
-            return (t, m, P_sqr, h, ll, err_prev), (m, P_sqr)
+            return (t, m, P_sqr, h, ll, err_prev), (m, P_sqr, reached)
 
-        final, (m_seq, P_seq_sqr) = jax.lax.scan(
+        final, (m_seq, P_seq_sqr, reached_seq) = jax.lax.scan(
             scan_body_obs, init, (save_at[1:], obs_model.c_seq, obs_model.mask)
         )
 
@@ -769,12 +778,12 @@ def ekf1_sqr_adaptive_solve(
     P_seq_sqr = cast(Array, P_seq_sqr)
     m_out = np.concatenate([mu_0[None], m_seq], axis=0)
     P_out = np.concatenate([Sigma_0_sqr[None], P_seq_sqr], axis=0)
-    # The solve succeeded iff the sub-stepping reached the final save time
-    # (``final[0]`` is the running time after the last interval) with a finite
-    # log-likelihood. A blow-up that exhausts ``max_steps`` leaves ``final[0]``
-    # short of ``save_at[-1]``.
-    end_tol = 1e-10 * np.abs(save_at[-1]) + 1e-12
-    success = (final[0] >= save_at[-1] - end_tol) & np.isfinite(final[4])
+    # The solve succeeded iff *every* save interval's sub-stepping landed on its
+    # target time (not just the final one -- a middle interval can exhaust
+    # max_steps and stall while a later, easier interval still reaches the end)
+    # and the log-likelihood is finite. ``reached_seq`` has one flag per save
+    # interval, so ``np.all`` covers every intermediate save as well.
+    success = np.all(reached_seq) & np.isfinite(final[4])
     return AdaptiveSolveResult(
         t=save_at, m=m_out, P_sqr=P_out, log_likelihood=final[4], success=success
     )

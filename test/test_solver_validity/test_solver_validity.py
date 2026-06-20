@@ -338,13 +338,19 @@ class TestProbabilisticProperties:
         x0 = np.array([1.0])
         tspan = (0.0, 2.0)
 
-        _, _, _, _, P_smooth_coarse = solver(_vf_exp_decay, x0, tspan=tspan, N=50, q=3)
-        _, _, _, _, P_smooth_fine = solver(_vf_exp_decay, x0, tspan=tspan, N=200, q=3)
+        n_coarse, n_fine = 50, 200
+        _, _, _, _, P_smooth_coarse = solver(
+            _vf_exp_decay, x0, tspan=tspan, N=n_coarse, q=3
+        )
+        _, _, _, _, P_smooth_fine = solver(
+            _vf_exp_decay, x0, tspan=tspan, N=n_fine, q=3
+        )
 
-        # Compare average posterior variance at midpoint
-        # Coarse grid midpoint index: 25, Fine grid midpoint index: 100
-        var_coarse = float(np.sum(P_smooth_coarse[25] ** 2))
-        var_fine = float(np.sum(P_smooth_fine[100] ** 2))
+        # Compare posterior variance at the same physical time t=1.0 (the grid
+        # midpoint of each run), computed from N rather than hard-coded so the
+        # test is robust to grid changes.
+        var_coarse = float(np.sum(P_smooth_coarse[n_coarse // 2] ** 2))
+        var_fine = float(np.sum(P_smooth_fine[n_fine // 2] ** 2))
 
         assert var_fine < var_coarse, (
             f"Fine variance ({var_fine:.2e}) >= coarse variance ({var_coarse:.2e})"

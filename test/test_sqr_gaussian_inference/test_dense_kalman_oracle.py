@@ -13,6 +13,7 @@ import jax
 import jax.numpy as np
 import pytest
 
+from ode_filters import IWP
 from ode_filters.inference.sqr_gaussian_inference import (
     sqr_inversion,
     sqr_marginalization,
@@ -105,3 +106,34 @@ def test_inversion_no_noise_matches_dense(n_state, n_obs):
     assert np.allclose(K, K_dense, atol=1e-7)
     assert np.allclose(d, mu - K_dense @ mu_z, atol=1e-7)
     assert np.allclose(Lambda_sqr.T @ Lambda_sqr, P_post, atol=1e-7)
+
+
+# --------------------------------------------------------------------------- #
+# Diagonal-calibration denominator: the row-norm form used by
+# _calibrate_diffusion must equal the dense diag(H Q H.T), so the filter never
+# needs to form the dense Q (change #2).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("n_state,n_obs", _SHAPES)
+@pytest.mark.parametrize("seed", _SEEDS)
+def test_diag_hqht_row_norms_match_dense(n_state, n_obs, seed):
+    keys = jax.random.split(jax.random.PRNGKey(seed + 200), 2)
+    H = jax.random.normal(keys[0], (n_obs, n_state))
+    Q, Q_sqr = _random_spd_sqr(keys[1], n_state)
+
+    dense = np.einsum("ij,jk,ik->i", H, Q, H)  # diag(H Q H.T)
+    row_norms = np.sum((H @ Q_sqr.T) ** 2, axis=1)  # _calibrate_diffusion form
+    assert np.allclose(row_norms, dense, rtol=1e-9, atol=1e-12)
+
+
+def test_diag_hqht_row_norms_match_dense_for_real_prior():
+    """Tie the identity to the actual closed-form prior square root."""
+    prior = IWP(q=3, d=2)
+    h = 0.2
+    H = prior.E1
+    Q = prior.Q(h)
+    Q_sqr = prior.Q_sqr(h)
+    dense = np.einsum("ij,jk,ik->i", H, Q, H)
+    row_norms = np.sum((H @ Q_sqr.T) ** 2, axis=1)
+    assert np.allclose(row_norms, dense, rtol=1e-9, atol=1e-12)

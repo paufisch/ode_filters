@@ -218,7 +218,15 @@ def _calibrate_diffusion(
         # diag(H Q H.T)_i = || (H @ Q_sqr.T)[i] ||^2, since Q = Q_sqr.T @ Q_sqr.
         HQ_sqr = H_for_calib @ Q_sqr.T
         denom = np.sum(HQ_sqr * HQ_sqr, axis=1)
-        sigma_sqr = np.maximum(mz_ode**2 / denom, min_sigma_sqr)
+        # A degenerate row (denom == 0, e.g. a structurally-zero H row or
+        # h -> 0 driving Q_sqr -> 0) would make mz_ode**2 / denom NaN/inf and
+        # slip past min_sigma_sqr. The double ``where`` floors such rows to
+        # min_sigma_sqr and keeps the division off the zero denominator on both
+        # the forward and the reverse (autodiff) pass.
+        positive = denom > 0.0
+        safe_denom = np.where(positive, denom, 1.0)
+        sigma_est = np.where(positive, mz_ode**2 / safe_denom, min_sigma_sqr)
+        sigma_sqr = np.maximum(sigma_est, min_sigma_sqr)
         return sigma_sqr, prior.apply_state_sigma_sqr(Q_sqr, sigma_sqr)
 
     sigma_scalar = np.maximum(

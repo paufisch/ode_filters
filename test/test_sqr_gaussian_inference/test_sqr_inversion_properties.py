@@ -274,17 +274,18 @@ def test_sqr_inversion_property_cholesky_consistency(inputs):
     eigenvalues_Sigma = np.linalg.eigvalsh(Sigma_reconstructed)
     eigenvalues_Lambda = np.linalg.eigvalsh(Lambda_reconstructed)
 
-    assert np.all(
-        eigenvalues_Sigma > -1e-1
-    )  # Relaxed for float32 and pathological cases
-    assert np.all(
-        eigenvalues_Lambda > -1e-1
-    )  # Relaxed for float32 and pathological cases
+    # Both are Gram matrices (X.T @ X), hence PSD up to float64 roundoff. Use a
+    # scale-relative floor so the bound is meaningful (catches a genuinely
+    # indefinite reconstruction) yet robust to large-magnitude hypothesis draws.
+    floor_Sigma = -1e-8 * (1.0 + float(np.max(np.abs(eigenvalues_Sigma))))
+    floor_Lambda = -1e-8 * (1.0 + float(np.max(np.abs(eigenvalues_Lambda))))
+    assert np.all(eigenvalues_Sigma > floor_Sigma)
+    assert np.all(eigenvalues_Lambda > floor_Lambda)
 
-    # Both should be symmetric (relaxed tolerance for float32)
+    # Gram matrices are symmetric by construction; float64 holds them to ~1e-10.
     assert np.allclose(
-        Sigma_reconstructed, Sigma_reconstructed.T, rtol=1e-5, atol=1e-7
+        Sigma_reconstructed, Sigma_reconstructed.T, rtol=1e-9, atol=1e-10
     ), "Prior covariance should be symmetric"
     assert np.allclose(
-        Lambda_reconstructed, Lambda_reconstructed.T, rtol=1e-5, atol=1e-7
+        Lambda_reconstructed, Lambda_reconstructed.T, rtol=1e-9, atol=1e-10
     ), "Posterior covariance should be symmetric"

@@ -206,9 +206,10 @@ def test_sqr_marginalization_property_reconstruction(inputs):
         f"Min eigenvalue: {np.min(eigenvalues)}"
     )
 
-    # Reconstructed should be symmetric (relaxed tolerance for float32)
+    # A QR R-factor product Sigma_z_sqr.T @ Sigma_z_sqr is symmetric by
+    # construction; under the float64 conftest it holds to ~1e-10.
     assert np.allclose(
-        Sigma_z_reconstructed, Sigma_z_reconstructed.T, rtol=1e-5, atol=1e-7
+        Sigma_z_reconstructed, Sigma_z_reconstructed.T, rtol=1e-9, atol=1e-10
     ), "Reconstructed covariance should be symmetric"
 
 
@@ -239,9 +240,10 @@ def test_sqr_marginalization_property_square_root_reconstruction(inputs):
     # Reconstruct covariance from square-root: Sigma_z.T @ Sigma_z should equal the covariance
     Sigma_z_reconstructed = Sigma_z.T @ Sigma_z
 
-    # Reconstructed should be symmetric (relaxed tolerance for float32)
+    # A QR R-factor product Sigma_z_sqr.T @ Sigma_z_sqr is symmetric by
+    # construction; under the float64 conftest it holds to ~1e-10.
     assert np.allclose(
-        Sigma_z_reconstructed, Sigma_z_reconstructed.T, rtol=1e-5, atol=1e-7
+        Sigma_z_reconstructed, Sigma_z_reconstructed.T, rtol=1e-9, atol=1e-10
     ), "Reconstructed covariance should be symmetric"
 
     # Reconstructed should be positive definite
