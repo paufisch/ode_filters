@@ -22,9 +22,8 @@ no Jacobian -- and is the classic `EK0` / `ts0` solver.
 forward pass in which *each step's update* relinearizes at the updated mean for
 `k` fixed Gauss-Newton passes (`max_iters=1` reproduces EK1). This reduces local
 linearization error on nonlinear problems. The fixed iteration count keeps it
-reverse-mode differentiable, so it works inside [parameter estimation](parameter-estimation.md).
-(The whole-trajectory iterated *smoother*, IEKS, is a separate construct and is
-not yet implemented.)
+reverse-mode differentiable. (The whole-trajectory iterated *smoother*, IEKS, is a
+separate construct and is not yet implemented.)
 
 ## Choosing a correction
 
@@ -74,12 +73,11 @@ schemes will use.
 
 ## Status
 
-EK0, EK1, and IEKF ship today, selectable on `gaussian_filter` and the inference
-API (`ODEFilter` / `marginal_loglik`). Sigma-point (UKF/SLR) corrections, the
-whole-trajectory IEKS, and `correction=` on the *preconditioned* path are
-planned.
+EK0, EK1, and IEKF ship today, selectable on `gaussian_filter`. Sigma-point
+(UKF/SLR) corrections, the whole-trajectory IEKS, and `correction=` on the
+*preconditioned* path are planned.
 
 ## See also
 
-- [Parameter Estimation](parameter-estimation.md)
+- [How to choose](how-to-choose.md) — picking the prior, order, and correction.
 - API reference for `ode_filters.filters` (`Correction`, `TaylorCorrection`).

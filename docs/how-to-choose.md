@@ -71,7 +71,7 @@ Sizes the uncertainty. Full treatment in [Diffusion calibration](calibration.md)
 | Mode | Use when |
 | --- | --- |
 | **`"dynamic"`** | per-step quasi-MLE — the default for a plain solve |
-| **`"none"`** | **parameter inference** (a fixed `Xi`, so the likelihood is not confounded) |
+| **`"none"`** | a fixed `Xi` is wanted, so the likelihood is not confounded by dynamic calibration |
 | **`"diagonal"` / `"diagonal_ekf0"`** | per-component scales; pair `diagonal_ekf0` with an EK0 correction |
 | post-hoc (`posthoc_mle_sigma_sqr`) | a single global scale after a fixed-step run |
 
@@ -91,4 +91,3 @@ What the filter conditions on — see the [measurement API](api/measurement/inde
 
 - [What is a probabilistic ODE solver?](probabilistic-ode-solvers.md)
 - [Linearization schemes](corrections.md) · [Diffusion calibration](calibration.md) · [Adaptive steps](adaptive-steps.md)
-- [Parameter estimation](parameter-estimation.md)

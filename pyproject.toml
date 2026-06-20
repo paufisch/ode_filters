@@ -10,21 +10,18 @@ packages = ["ode_filters"]
 name = "ode-filters"
 authors = [{name="Paul Fischer"}]
 version = "0.6.6"
-description = "Basic ODE filtering and smooting implementation."
+description = "Probabilistic ODE solvers using square-root Gaussian filtering and smoothing in JAX."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE*"]
 requires-python = ">=3.13"
+# Keep the runtime footprint minimal: only what the `ode_filters` package
+# actually imports. Plotting/notebook deps live in the `examples` extra and the
+# `docs` group; experiment-only deps (numpyro, optax, ...) live in `dev`.
 dependencies = [
-    "autograd>=1.8.0",
     "equinox>=0.11",
-    "jax[cpu]>=0.8.0",
-    "matplotlib>=3.10.7",
+    "jax>=0.8.0",  # no [cpu] extra: let consumers choose the accelerator backend
     "numpy>=2.3.4",
-    "pyproject-toml>=0.1.0",
-    "scikit-learn>=1.7.2",
-    "tqdm>=4.67.1",
-    "tueplots>=0.2.1",
 ]
 classifiers = [
     "License :: OSI Approved :: MIT License",
@@ -33,22 +30,36 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 
+[project.optional-dependencies]
+# `pip install ode-filters[examples]` to run the example notebooks locally.
+examples = ["matplotlib>=3.10.7"]
+
+[project.urls]
+Homepage = "https://github.com/paufisch/ode_filters"
+Documentation = "https://paufisch.github.io/ode_filters/"
+Repository = "https://github.com/paufisch/ode_filters"
+Issues = "https://github.com/paufisch/ode_filters/issues"
+
 [dependency-groups]
 dev = [
+    "beartype>=0.19",  # runtime type checking (paired with jaxtyping)
     "blackjax>=1.2.0",
     "coverage>=7.11.0",
     "hypothesis>=6.142.5",
     "ipykernel>=7.1.0",
+    "jaxtyping>=0.2.20",  # shape/dtype-aware array annotations
     "nbconvert>=7.16.6",
     "numpyro>=0.16.0",
     "optax>=0.2.0",
     "pre-commit>=4.3.0",
     "probdiffeq>=0.8.0",
+    "pyright>=1.1.390",  # static type checker (run in CI; see [tool.pyright])
     "pytest>=8.4.2",
     "pytest-cases>=3.9.1",
     "pytest-cov>=7.0.0",
 ]
 docs = [
+    "matplotlib>=3.10.7",  # required: example notebooks execute during the build
     "mkdocs>=1.5,<1.6",
     "mkdocs-jupyter>=0.24.1",
     "mkdocs-material>=9.5,<9.6",
@@ -82,3 +93,9 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["ode_filters"]
+
+[tool.pyright]
+include = ["ode_filters"]
+pythonVersion = "3.13"
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false

@@ -9,8 +9,7 @@
 **`ode_filters` is `solve_ivp`, but it returns a mean *and* a calibrated
 uncertainty.** It is a pure-JAX library of *probabilistic* ODE solvers: instead of
 a single trajectory, you get a Gaussian posterior over the solution, computed by
-numerically stable square-root Kalman filtering and smoothing — and a
-differentiable likelihood you can use to fit ODE parameters to data.
+numerically stable square-root Kalman filtering and smoothing.
 
 ```python
 import jax.numpy as np
@@ -45,7 +44,6 @@ for the intuition, then run the **[Quickstart](examples/quickstart.ipynb)**.
 | run your first solve | [Quickstart](examples/quickstart.ipynb) |
 | look up a symbol or convention | [Notation & conventions](notation.md) |
 | pick a prior / order / correction | [How to choose](how-to-choose.md) |
-| fit ODE parameters to data | [Parameter estimation](parameter-estimation.md) |
 | avoid common pitfalls | [Sharp bits & FAQ](sharp-bits.md) |
 | browse the API | [API Reference](api/index.md) |
 
@@ -56,7 +54,6 @@ for the intuition, then run the **[Quickstart](examples/quickstart.ipynb)**.
 - **Pluggable linearization** — EK0 / EK1 [corrections](corrections.md), selectable per solve.
 - **Flexible priors** — IWP, Matern, and joint priors.
 - **First- and second-order ODEs**, conservation laws, and time-varying measurements.
-- **Parameter & latent-force estimation** — a differentiable [marginal likelihood](parameter-estimation.md) with an Optax-friendly `fit` API.
 - **Diffusion calibration** and **adaptive step-size control**.
 
 ## Installation

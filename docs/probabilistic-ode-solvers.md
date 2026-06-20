@@ -80,15 +80,11 @@ shaded band in the Quickstart meaningful. See [Diffusion calibration](calibratio
 ## Why bother (vs `scipy` / Diffrax)?
 
 - **Uncertainty quantification** — a calibrated error band, for free, in one pass.
-- **A differentiable likelihood** — the solver returns a marginal log-likelihood of
-  the solution, so you can *fit ODE parameters to data* by gradient descent or MCMC.
-  See [Parameter estimation](parameter-estimation.md).
 - **Structured information** — conservation laws, partial/noisy observations, and
   hidden parameters all enter as additional measurements in the same machinery.
 
 If you only need a fast point trajectory for a well-behaved ODE, a classical solver
-is the right tool. Reach for a probabilistic solver when you need the *uncertainty*
-or the *likelihood*.
+is the right tool. Reach for a probabilistic solver when you need the *uncertainty*.
 
 ## From concept to code
 
@@ -101,7 +97,6 @@ or the *likelihood*.
 | Forward filtering pass | `gaussian_filter(...)` (or `gaussian_filter_adaptive(...)`) |
 | Backward smoothing pass | `rts_smoother(prior, result)` |
 | Size the error bars | `calibration=` / `ode_filters.calibration` |
-| Fit parameters to data | `marginal_loglik` / `ODEFilter` + `fit` |
 
 The symbols (`q`, `d`, `E0`/`E1`, `Xi`, `sigma^2`, the square-root convention) are
 defined in [Notation & conventions](notation.md).

@@ -16,12 +16,11 @@ up, and assumes the [notation](../notation.md).
 | choose a prior | [`IWP` / `MaternPrior` / `JointPrior`](priors/index.md) |
 | initialize the state | [`taylor_mode_initialization`](priors/index.md) |
 | calibrate uncertainty | [calibration guide](../calibration.md) |
-| fit parameters to data | [`marginal_loglik` / `ODEFilter` / `fit`](inference/index.md) |
 
 ## Subpackages
 
 - **[Filters](filters/index.md)** — filtering / smoothing loops, corrections, adaptive control.
-- **[Inference](inference/index.md)** — square-root Gaussian algebra and the parameter-inference layer.
+- **[Inference](inference/index.md)** — square-root Gaussian algebra.
 - **[Measurement](measurement/index.md)** — ODE-information and observation models.
 - **[Priors](priors/index.md)** — Gauss–Markov process priors.
 

@@ -22,7 +22,7 @@ named fields (recover a covariance with `P = P_sqr.T @ P_sqr`; see
 | `t` | time grid |
 | `m`, `P_sqr` | **filtered** posterior mean and square-root covariance |
 | `log_likelihood` | scalar ODE-information log-marginal-likelihood |
-| `log_likelihood_obs` | observation log-likelihood (`None` without `obs_model`) — the parameter-inference target |
+| `log_likelihood_obs` | observation log-likelihood (`None` without `obs_model`) |
 | `m_pred`, `P_pred_sqr` | one-step predictions (before each update) |
 | `G_back`, `d_back`, `P_back_sqr` | backward transitions consumed by `rts_smoother` |
 | `sigma_sqr` | per-step calibrated diffusion `sigma_hat^2` |

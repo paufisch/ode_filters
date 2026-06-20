@@ -37,18 +37,17 @@ The prior, measurement model, integer `N`, and `tspan` are static configuration 
 construct them in Python and mark them static (the loops already do this for you via
 `static_argnums`). Only arrays (`mu_0`, `Sigma_0_sqr`, parameters) are traced.
 
-### Gradient-based inference is differentiable on both stepping modes
+### A solve is differentiable on both stepping modes
 
 Both `gaussian_filter` (fixed grid) and `gaussian_filter_adaptive` (save-at-grid)
-are `jit`/`grad`/`vmap`-compatible, so `marginal_loglik` / `fit` and any `jax.grad`
-over a solve work either way. (See [Parameter estimation](parameter-estimation.md).)
+are `jit`/`grad`/`vmap`-compatible, so any `jax.grad` over a solve works either way.
 
-### Calibration is opt-in, and should be off during parameter inference
+### Dynamic calibration absorbs model–data misfit
 
 Diffusion calibration sizes the uncertainty, but a *dynamic* calibration absorbs
-model–data misfit into `sigma^2` and confounds the likelihood over parameters. Use
-`calibration="none"` (the default in the inference layer) when fitting parameters,
-and set the prior scale `Xi` deliberately. See [Diffusion calibration](calibration.md).
+model–data misfit into `sigma^2`. When you want the misfit to stay visible (e.g. in
+a likelihood), use `calibration="none"` and set the prior scale `Xi` deliberately.
+See [Diffusion calibration](calibration.md).
 
 ## FAQ
 
@@ -71,8 +70,8 @@ well-calibrated filter has `||z_n||^2 / d ≈ 1`. Too tight ≫ 1, too wide ≪ 
 `ode_filters`, [probdiffeq](https://github.com/pnkraemer/probdiffeq), and
 [ProbNum](https://probnum.readthedocs.io/) are *probabilistic* solvers (Gaussian
 posterior + likelihood). `ode_filters` focuses on a transparent square-root
-EKF/RTS substrate with first-class custom measurement models and a parameter-/
-latent-force-inference layer. See [What is a probabilistic ODE solver?](probabilistic-ode-solvers.md).
+EKF/RTS substrate with first-class custom measurement models. See
+[What is a probabilistic ODE solver?](probabilistic-ode-solvers.md).
 
 ### Which function do I call?
 

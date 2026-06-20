@@ -13,17 +13,54 @@ on:
       - main
       - development
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  lint:
+    name: Lint & format (pre-commit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.13"
+      - name: Run pre-commit
+        run: uv run --group dev pre-commit run --all-files --show-diff-on-failure
+
+  type-check:
+    name: Type check (pyright)
+    runs-on: ubuntu-latest
+    # Advisory for now: there is a baseline of pre-existing pyright findings
+    # being burned down. Flip continue-on-error to false once it reaches zero.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.13"
+      - name: Run pyright
+        run: uv run --group dev pyright
+
+  test:
+    name: Tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
       - name: Sync dependencies
         run: uv sync --group dev
       - name: Run tests
@@ -35,3 +72,16 @@ jobs:
           flags: unit
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: paufisch/ode_filters
+
+  docs:
+    name: Build docs (strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.13"
+      - name: Build MkDocs site
+        run: uv run --group docs mkdocs build --strict
