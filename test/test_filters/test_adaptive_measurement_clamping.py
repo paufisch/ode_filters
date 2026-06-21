@@ -7,7 +7,7 @@ observation at its time visibly shapes the filtered posterior.
 
 The mechanics of the (removed) embedded-``Measurement``-in-measure clamping --
 ``measure.measurement_times()`` snapping, ``find_index`` tolerance, the Python
-``ekf1_sqr_adaptive_loop`` landing on embedded-measurement times -- have no
+``sqr_adaptive_loop`` landing on embedded-measurement times -- have no
 analog in the public save-at API and are covered for the obs-model path by
 ``test/test_filters/test_adaptive_solve.py`` (the ``test_obs_model_*`` tests).
 """

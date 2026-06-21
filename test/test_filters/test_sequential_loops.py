@@ -2,7 +2,7 @@
 
 These exercise the public ``gaussian_filter(obs_model=...)`` path, which folds
 in external observations on top of the ODE-information update. (Cross-checks of
-the historical for-loop/scan/sequential ``ekf1_sqr_loop*`` variants against each
+the historical for-loop/scan/sequential ``sqr_loop*`` variants against each
 other were dropped when those variants were consolidated into
 ``gaussian_filter``; the remaining behavioural coverage lives here.)
 """

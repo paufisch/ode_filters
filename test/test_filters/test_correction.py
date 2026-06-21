@@ -4,12 +4,12 @@ W1 proves:
 
 1. ``TaylorCorrection(order=1)`` reproduces the historical EK1 update -- computed
    here from the raw square-root primitives, so the anchor is independent of
-   :func:`ekf1_sqr_filter_step` (which delegates to a Correction after W2).
+   :func:`sqr_filter_step` (which delegates to a Correction after W2).
 2. ``TaylorCorrection(order=0)`` is a genuine EK0 model: the ODE-defect rows of
    its effective Jacobian equal the selection matrix ``E_constraint``, and it
    agrees with EK1 exactly when the vector field is constant.
 
-W2 proves ``ekf1_sqr_filter_step`` delegates to a Correction without changing
+W2 proves ``sqr_filter_step`` delegates to a Correction without changing
 its default (EK1) numerics, and that a non-default correction (EK0) is reachable
 through the step.
 
@@ -30,8 +30,8 @@ from ode_filters.filters import (
     IteratedTaylorCorrection,
     TaylorCorrection,
 )
-from ode_filters.filters.ode_filter_loop import ekf1_sqr_loop_dynamic_scan
-from ode_filters.filters.ode_filter_step import ekf1_sqr_filter_step
+from ode_filters.filters.ode_filter_loop import sqr_loop_dynamic_scan
+from ode_filters.filters.ode_filter_step import sqr_filter_step
 from ode_filters.inference import sqr_inversion, sqr_marginalization
 from ode_filters.measurement import (
     Measurement,
@@ -261,11 +261,11 @@ def test_base_correction_is_abstract():
 
 
 def test_step_default_matches_raw_ek1():
-    """ekf1_sqr_filter_step (default correction) reproduces the raw EK1 update."""
+    """sqr_filter_step (default correction) reproduces the raw EK1 update."""
     prior, measure, m0, P0_sqr = _decay_ode()
     A, b, Q_sqr = _step_inputs(prior)
 
-    (m_pred, P_pred_sqr), _, (m_z, P_z_sqr), (m_t, P_t_sqr) = ekf1_sqr_filter_step(
+    (m_pred, P_pred_sqr), _, (m_z, P_z_sqr), (m_t, P_t_sqr) = sqr_filter_step(
         A, b, Q_sqr, m0, P0_sqr, measure, T_EVAL
     )
     (rmz, rPz), (rm_t, rP_t) = _reference_ek1_update(measure, m_pred, P_pred_sqr)
@@ -280,10 +280,10 @@ def test_step_explicit_ek1_equals_default():
     prior, measure, m0, P0_sqr = _decay_ode()
     A, b, Q_sqr = _step_inputs(prior)
 
-    _, _, (mz_d, _), (mt_d, Pt_d) = ekf1_sqr_filter_step(
+    _, _, (mz_d, _), (mt_d, Pt_d) = sqr_filter_step(
         A, b, Q_sqr, m0, P0_sqr, measure, T_EVAL
     )
-    _, _, (mz_e, _), (mt_e, Pt_e) = ekf1_sqr_filter_step(
+    _, _, (mz_e, _), (mt_e, Pt_e) = sqr_filter_step(
         A, b, Q_sqr, m0, P0_sqr, measure, T_EVAL, correction=TaylorCorrection(order=1)
     )
     assert np.allclose(mt_d, mt_e, atol=1e-12)
@@ -296,10 +296,10 @@ def test_step_ek0_changes_update():
     prior, measure, m0, P0_sqr = _decay_ode()
     A, b, Q_sqr = _step_inputs(prior)
 
-    (mp1, _), _, _, (mt1, _) = ekf1_sqr_filter_step(
+    (mp1, _), _, _, (mt1, _) = sqr_filter_step(
         A, b, Q_sqr, m0, P0_sqr, measure, T_EVAL, correction=TaylorCorrection(order=1)
     )
-    (mp0, _), _, _, (mt0, _) = ekf1_sqr_filter_step(
+    (mp0, _), _, _, (mt0, _) = sqr_filter_step(
         A, b, Q_sqr, m0, P0_sqr, measure, T_EVAL, correction=TaylorCorrection(order=0)
     )
     assert np.allclose(mp0, mp1, atol=1e-12)  # prediction is correction-independent
@@ -313,7 +313,7 @@ def test_step_is_jittable_with_correction():
 
     @jax.jit
     def run(m, P):
-        return ekf1_sqr_filter_step(
+        return sqr_filter_step(
             A, b, Q_sqr, m, P, measure, T_EVAL, correction=correction
         )
 
@@ -322,7 +322,7 @@ def test_step_is_jittable_with_correction():
 
 
 # --------------------------------------------------------------------------- #
-# 6. Loop wiring: ekf1_sqr_loop_dynamic_scan (W3)                             #
+# 6. Loop wiring: sqr_loop_dynamic_scan (W3)                             #
 # --------------------------------------------------------------------------- #
 
 
@@ -331,8 +331,8 @@ def test_loop_explicit_ek1_equals_default():
     prior, measure, m0, P0_sqr = _decay_ode()
     tspan, n = (0.0, 2.0), 50
 
-    default = ekf1_sqr_loop_dynamic_scan(m0, P0_sqr, prior, measure, tspan, n)
-    explicit = ekf1_sqr_loop_dynamic_scan(
+    default = sqr_loop_dynamic_scan(m0, P0_sqr, prior, measure, tspan, n)
+    explicit = sqr_loop_dynamic_scan(
         m0, P0_sqr, prior, measure, tspan, n, correction=TaylorCorrection(order=1)
     )
     assert np.allclose(default[0], explicit[0], atol=1e-12)  # m_seq
@@ -343,10 +343,10 @@ def test_loop_ek0_differs_from_ek1_nonlinear():
     prior, measure, m0, P0_sqr = _decay_ode()  # nonlinear vf
     tspan, n = (0.0, 1.0), 50
 
-    m_seq0 = ekf1_sqr_loop_dynamic_scan(
+    m_seq0 = sqr_loop_dynamic_scan(
         m0, P0_sqr, prior, measure, tspan, n, correction=TaylorCorrection(order=0)
     )[0]
-    m_seq1 = ekf1_sqr_loop_dynamic_scan(
+    m_seq1 = sqr_loop_dynamic_scan(
         m0, P0_sqr, prior, measure, tspan, n, correction=TaylorCorrection(order=1)
     )[0]
     assert np.all(np.isfinite(m_seq0))
@@ -363,7 +363,7 @@ def test_loop_ek0_solves_linear_decay():
     m0, P0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
     measure = ODEInformation(vf, prior.E0, prior.E1)
 
-    m_seq = ekf1_sqr_loop_dynamic_scan(
+    m_seq = sqr_loop_dynamic_scan(
         m0,
         P0_sqr,
         prior,
@@ -461,14 +461,14 @@ def test_loop_correction_with_obs_model_works():
     P0_sqr = 0.3 * np.eye(state_dim)
     args = (m0, P0_sqr, joint, measure, (0.0, 1.0), n)
 
-    default = ekf1_sqr_loop_dynamic_scan(*args, obs_model=obs_model)
-    ek1 = ekf1_sqr_loop_dynamic_scan(
+    default = sqr_loop_dynamic_scan(*args, obs_model=obs_model)
+    ek1 = sqr_loop_dynamic_scan(
         *args, obs_model=obs_model, correction=TaylorCorrection(order=1)
     )
-    ek0 = ekf1_sqr_loop_dynamic_scan(
+    ek0 = sqr_loop_dynamic_scan(
         *args, obs_model=obs_model, correction=TaylorCorrection(order=0)
     )
-    iekf = ekf1_sqr_loop_dynamic_scan(
+    iekf = sqr_loop_dynamic_scan(
         *args, obs_model=obs_model, correction=IteratedTaylorCorrection(max_iters=5)
     )
 

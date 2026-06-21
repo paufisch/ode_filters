@@ -85,13 +85,13 @@ result = gaussian_filter_adaptive(
 ```
 
 For the per-step `sigma_sqr_seq` diagnostics on the accepted-step trajectory,
-use the lower-level trajectory driver `ekf1_sqr_adaptive_loop` from the
+use the lower-level trajectory driver `sqr_adaptive_loop` from the
 submodule (see [Adaptive Step-Size Control](adaptive-steps.md)):
 
 ```python
-from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
 
-traj = ekf1_sqr_adaptive_loop(
+traj = sqr_adaptive_loop(
     mu_0, S0, prior, measure, (0.0, 5.0), atol=1e-5, rtol=1e-3,
 )
 # traj.sigma_sqr_seq holds the per-step estimates.

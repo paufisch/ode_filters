@@ -10,8 +10,8 @@ from ode_filters import (
     prepare_observations,
     taylor_mode_initialization,
 )
-from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_solve
-from ode_filters.filters.ode_filter_loop import ekf1_sqr_loop_dynamic_scan
+from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_solve
+from ode_filters.filters.ode_filter_loop import sqr_loop_dynamic_scan
 from ode_filters.measurement.measurement_models import Measurement
 
 SAVE_AT = np.linspace(0.0, 2.0, 5)
@@ -30,7 +30,7 @@ def _logistic_problem(x0_val=0.5, theta=1.0):
 
 def test_accuracy_vs_analytic_logistic():
     prior, measure, mu_0, S0_sqr = _logistic_problem()
-    res = ekf1_sqr_adaptive_solve(
+    res = sqr_adaptive_solve(
         mu_0, S0_sqr, prior, measure, SAVE_AT, atol=1e-8, rtol=1e-8
     )
     x_true = 1.0 / (1.0 + np.exp(-SAVE_AT))  # x0 = 0.5
@@ -40,7 +40,7 @@ def test_accuracy_vs_analytic_logistic():
 
 def test_grid_shapes_and_initial_state():
     prior, measure, mu_0, S0_sqr = _logistic_problem()
-    res = ekf1_sqr_adaptive_solve(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    res = sqr_adaptive_solve(mu_0, S0_sqr, prior, measure, SAVE_AT)
     assert res.t.shape == SAVE_AT.shape
     assert res.m.shape == (SAVE_AT.shape[0], mu_0.shape[0])
     assert res.P_sqr.shape == (SAVE_AT.shape[0], mu_0.shape[0], mu_0.shape[0])
@@ -52,8 +52,8 @@ def test_grid_shapes_and_initial_state():
 def test_jit_matches_eager():
     prior, measure, mu_0, S0_sqr = _logistic_problem()
     args = (mu_0, S0_sqr, prior, measure, SAVE_AT)
-    eager = ekf1_sqr_adaptive_solve(*args)
-    jitted = jax.jit(ekf1_sqr_adaptive_solve, static_argnums=(2, 3))(*args)
+    eager = sqr_adaptive_solve(*args)
+    jitted = jax.jit(sqr_adaptive_solve, static_argnums=(2, 3))(*args)
     assert np.allclose(eager.m, jitted.m, atol=1e-10)
     assert np.allclose(eager.log_likelihood, jitted.log_likelihood, atol=1e-9)
 
@@ -68,7 +68,7 @@ def test_vmap_over_initial_conditions():
 
     def solve(x0):
         mu_0, S0_sqr = taylor_mode_initialization(vf, x0, q=2)
-        return ekf1_sqr_adaptive_solve(mu_0, S0_sqr, prior, measure, SAVE_AT).m[-1, 0]
+        return sqr_adaptive_solve(mu_0, S0_sqr, prior, measure, SAVE_AT).m[-1, 0]
 
     x0_batch = np.array([[0.3], [0.5], [0.7]])
     out = jax.vmap(solve)(x0_batch)
@@ -88,7 +88,7 @@ def test_reverse_grad_matches_finite_difference():
         x0 = np.array([0.5])
         mu_0, S0_sqr = taylor_mode_initialization(vf, x0, q=2)
         measure = ODEInformation(vf, prior.E0, prior.E1)
-        res = ekf1_sqr_adaptive_solve(
+        res = sqr_adaptive_solve(
             mu_0, S0_sqr, prior, measure, save_at, atol=1e-7, rtol=1e-7
         )
         return res.m[-1, 0]
@@ -104,7 +104,7 @@ def test_reverse_grad_matches_finite_difference():
 @pytest.mark.parametrize("calibration", ["dynamic", "none", "diagonal_ekf0"])
 def test_calibration_modes_run(calibration):
     prior, measure, mu_0, S0_sqr = _logistic_problem()
-    res = ekf1_sqr_adaptive_solve(
+    res = sqr_adaptive_solve(
         mu_0, S0_sqr, prior, measure, SAVE_AT, calibration=calibration
     )
     x_true = 1.0 / (1.0 + np.exp(-SAVE_AT))
@@ -121,7 +121,7 @@ def test_obs_model_matches_fixed_grid_obs_scan():
     meas = Measurement(np.eye(1), np.array([[0.55]]), np.array([1.0]), noise=1e-3)
     obs = prepare_observations([meas], prior.E0, save_at)
 
-    ad = ekf1_sqr_adaptive_solve(
+    ad = sqr_adaptive_solve(
         mu_0,
         S0_sqr,
         prior,
@@ -132,22 +132,67 @@ def test_obs_model_matches_fixed_grid_obs_scan():
         rtol=1e-5,
         calibration="none",
     )
-    fx = ekf1_sqr_loop_dynamic_scan(
+    fx = sqr_loop_dynamic_scan(
         mu_0, S0_sqr, prior, measure, (0.0, 2.0), 8, obs_model=obs, calibration="none"
     )
     assert np.max(np.abs(ad.m[:, 0] - fx[0][:, 0])) < 5e-3
+
+
+def test_adaptive_surfaces_obs_innovation_matching_fixed_grid():
+    """The adaptive obs-innovation sequence (mz_obs / Pz_obs_sqr) is surfaced and
+    agrees with the trusted fixed-grid obs-scan loop on the same grid (difference
+    = adaptive vs fixed ODE discretisation), and the ODE-defect innovation
+    (mz / Pz_sqr) is surfaced with the right shape."""
+    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    save_at = np.linspace(0.0, 2.0, 9)  # save_at[4] == 1.0 (obs time)
+    meas = Measurement(np.eye(1), np.array([[0.55]]), np.array([1.0]), noise=1e-3)
+    obs = prepare_observations([meas], prior.E0, save_at)
+
+    ad = sqr_adaptive_solve(
+        mu_0,
+        S0_sqr,
+        prior,
+        measure,
+        save_at,
+        obs_model=obs,
+        atol=1e-5,
+        rtol=1e-5,
+        calibration="none",
+    )
+    fx = sqr_loop_dynamic_scan(
+        mu_0, S0_sqr, prior, measure, (0.0, 2.0), 8, obs_model=obs, calibration="none"
+    )
+    # DynamicObsScanLoopResult: mz_obs_seq is index 9, Pz_obs_seq_sqr is index 10.
+    mz_obs_fx, Pz_obs_fx = fx[9], fx[10]
+    assert ad.mz_obs.shape == mz_obs_fx.shape == (8, 1)
+    assert ad.Pz_obs_sqr.shape == Pz_obs_fx.shape == (8, 1, 1)
+    assert np.max(np.abs(ad.mz_obs - mz_obs_fx)) < 5e-3
+    # ODE-defect innovation is surfaced too (meas_dim == 1: ODE rows only).
+    assert ad.mz.shape == (8, 1)
+    assert ad.Pz_sqr.shape == (8, 1, 1)
+    assert np.all(np.isfinite(ad.mz)) and np.all(np.isfinite(ad.Pz_sqr))
+
+
+def test_adaptive_no_obs_surfaces_ode_innovation_only():
+    """Without an obs_model the ODE-defect innovation is surfaced and the
+    observation channel stays None (no observations to innovate against)."""
+    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    res = sqr_adaptive_solve(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    assert res.mz.shape == (SAVE_AT.shape[0] - 1, 1)
+    assert res.Pz_sqr.shape == (SAVE_AT.shape[0] - 1, 1, 1)
+    assert res.mz_obs is None and res.Pz_obs_sqr is None
 
 
 def test_obs_model_assimilation_pulls_state():
     """A precise observation at a save time pulls the filtered state toward it."""
     prior, measure, mu_0, S0_sqr = _logistic_problem()
     save_at = np.linspace(0.0, 2.0, 5)  # save_at[2] == 1.0; free x(1.0) ~ 0.731
-    free = ekf1_sqr_adaptive_solve(
+    free = sqr_adaptive_solve(
         mu_0, S0_sqr, prior, measure, save_at, atol=1e-2, rtol=1e-2, calibration="none"
     )
     meas = Measurement(np.eye(1), np.array([[0.55]]), np.array([1.0]), noise=1e-8)
     obs = prepare_observations([meas], prior.E0, save_at)
-    pulled = ekf1_sqr_adaptive_solve(
+    pulled = sqr_adaptive_solve(
         mu_0,
         S0_sqr,
         prior,
@@ -173,7 +218,7 @@ def test_obs_model_grad_matches_finite_difference():
 
         mu_0, S0_sqr = taylor_mode_initialization(vf, np.array([0.5]), q=2)
         measure = ODEInformation(vf, prior.E0, prior.E1)
-        res = ekf1_sqr_adaptive_solve(
+        res = sqr_adaptive_solve(
             mu_0,
             S0_sqr,
             prior,
@@ -201,9 +246,7 @@ def test_obs_model_wrong_length_raises():
     # obs_model built against a DIFFERENT grid length -> mismatch
     obs_wrong = prepare_observations([meas], prior.E0, np.linspace(0.0, 2.0, 9))
     with pytest.raises(ValueError, match="save_at"):
-        ekf1_sqr_adaptive_solve(
-            mu_0, S0_sqr, prior, measure, save_at, obs_model=obs_wrong
-        )
+        sqr_adaptive_solve(mu_0, S0_sqr, prior, measure, save_at, obs_model=obs_wrong)
 
 
 def _blowup_problem(x0_val=1.0):
@@ -222,7 +265,7 @@ def _blowup_problem(x0_val=1.0):
 
 def test_success_flag_true_on_normal_solve():
     prior, measure, mu_0, S0_sqr = _logistic_problem()
-    res = ekf1_sqr_adaptive_solve(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    res = sqr_adaptive_solve(mu_0, S0_sqr, prior, measure, SAVE_AT)
     assert bool(res.success)
     assert np.all(np.isfinite(res.m))
 
@@ -233,7 +276,7 @@ def test_blowup_fails_gracefully_without_nan():
     success=False while leaving the output finite (the last accepted state)."""
     prior, measure, mu_0, S0_sqr = _blowup_problem(x0_val=1.0)
     save_at = np.linspace(0.0, 2.0, 5)  # blow-up at t=1.0 is inside the grid
-    res = ekf1_sqr_adaptive_solve(mu_0, S0_sqr, prior, measure, save_at, max_steps=200)
+    res = sqr_adaptive_solve(mu_0, S0_sqr, prior, measure, save_at, max_steps=200)
     assert not bool(res.success)
     # Crucially, no NaN leaks into the returned arrays.
     assert np.all(np.isfinite(res.m))
@@ -248,7 +291,7 @@ def test_blowup_failure_is_jittable():
     prior, measure, mu_0, S0_sqr = _blowup_problem(x0_val=1.0)
     save_at = np.linspace(0.0, 2.0, 5)
     f = jax.jit(
-        ekf1_sqr_adaptive_solve, static_argnums=(2, 3), static_argnames=("max_steps",)
+        sqr_adaptive_solve, static_argnums=(2, 3), static_argnames=("max_steps",)
     )
     res = f(mu_0, S0_sqr, prior, measure, save_at, max_steps=200)
     assert not bool(res.success)

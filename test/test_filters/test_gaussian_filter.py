@@ -21,12 +21,12 @@ from ode_filters import (
     rts_smoother,
     taylor_mode_initialization,
 )
-from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_solve
+from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_solve
 from ode_filters.filters.ode_filter_loop import (
-    ekf1_sqr_loop_dynamic_scan,
-    ekf1_sqr_loop_preconditioned_dynamic_scan,
     rts_sqr_smoother_loop,
     rts_sqr_smoother_loop_preconditioned,
+    sqr_loop_dynamic_scan,
+    sqr_loop_preconditioned_dynamic_scan,
 )
 from ode_filters.measurement.measurement_models import Measurement
 
@@ -47,7 +47,7 @@ def _logistic(prior_cls=IWP):
 def test_plain_matches_dynamic_scan():
     prior, measure, mu_0, P0_sqr = _logistic()
     res = gaussian_filter(mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="dynamic")
-    ref = ekf1_sqr_loop_dynamic_scan(
+    ref = sqr_loop_dynamic_scan(
         mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="dynamic"
     )
     assert np.allclose(res.m, ref[0])
@@ -72,7 +72,7 @@ def test_observations_dispatch_and_loglik():
     res = gaussian_filter(
         mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="none", obs_model=obs
     )
-    ref = ekf1_sqr_loop_dynamic_scan(
+    ref = sqr_loop_dynamic_scan(
         mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="none", obs_model=obs
     )
     assert np.allclose(res.m, ref[0])
@@ -85,7 +85,7 @@ def test_correction_ek0_passes_through():
     res = gaussian_filter(
         mu_0, P0_sqr, prior, measure, TSPAN, N, correction=TaylorCorrection(order=0)
     )
-    ref = ekf1_sqr_loop_dynamic_scan(
+    ref = sqr_loop_dynamic_scan(
         mu_0, P0_sqr, prior, measure, TSPAN, N, correction=TaylorCorrection(order=0)
     )
     assert np.allclose(res.m, ref[0])
@@ -94,7 +94,7 @@ def test_correction_ek0_passes_through():
 def test_preconditioned_dispatch_matches_loop():
     prior, measure, mu_0, P0_sqr = _logistic(PrecondIWP)
     res = gaussian_filter(mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="dynamic")
-    ref = ekf1_sqr_loop_preconditioned_dynamic_scan(
+    ref = sqr_loop_preconditioned_dynamic_scan(
         mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="dynamic"
     )
     assert np.allclose(res.m, ref[0])
@@ -222,7 +222,7 @@ def test_adaptive_matches_solve_and_has_no_backward_pass():
     res = gaussian_filter_adaptive(
         mu_0, P0_sqr, prior, measure, save_at, atol=1e-6, rtol=1e-6
     )
-    ref = ekf1_sqr_adaptive_solve(
+    ref = sqr_adaptive_solve(
         mu_0, P0_sqr, prior, measure, save_at, atol=1e-6, rtol=1e-6
     )
     assert np.allclose(res.m, ref.m)

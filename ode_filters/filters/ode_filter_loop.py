@@ -17,11 +17,11 @@ from ..measurement.measurement_models import (
 from ..priors.gmp_priors import BasePrior
 from .correction import Correction, TaylorCorrection
 from .ode_filter_step import (
-    ekf1_sqr_filter_step,
-    ekf1_sqr_filter_step_preconditioned,
-    ekf1_sqr_filter_step_sequential_scan,
     rts_sqr_smoother_step,
     rts_sqr_smoother_step_preconditioned,
+    sqr_filter_step,
+    sqr_filter_step_preconditioned,
+    sqr_filter_step_sequential_scan,
 )
 
 StateFunction = Callable[[Array], Array]
@@ -88,7 +88,8 @@ def rts_sqr_smoother_loop(
         Tuple of smoothed state means and covariances (square-root form).
     """
     del N  # the number of steps is inferred from the backward sequences
-    # Accept either stacked arrays or the Python lists the non-scan loops return.
+    # Normalize to stacked arrays: jax.lax.scan needs stacked inputs, and a
+    # caller may hand-build the backward sequences as a Python list of arrays.
     G_back_seq = np.asarray(G_back_seq)
     d_back_seq = np.asarray(d_back_seq)
     P_back_seq_sqr = np.asarray(P_back_seq_sqr)
@@ -138,7 +139,8 @@ def rts_sqr_smoother_loop_preconditioned(
         Smoothed state means and covariances (square-root form, original space).
     """
     del N  # the number of steps is inferred from the backward sequences
-    # Accept either stacked arrays or the Python lists the non-scan loops return.
+    # Normalize to stacked arrays: jax.lax.scan needs stacked inputs, and a
+    # caller may hand-build the backward sequences as a Python list of arrays.
     G_back_seq_bar = np.asarray(G_back_seq_bar)
     d_back_seq_bar = np.asarray(d_back_seq_bar)
     P_back_seq_sqr_bar = np.asarray(P_back_seq_sqr_bar)
@@ -270,7 +272,7 @@ DynamicObsScanLoopResult = tuple[
 ]
 
 
-def _ekf1_sqr_loop_dynamic_obs_scan(
+def _sqr_loop_dynamic_obs_scan(
     mu_0: Array,
     Sigma_0_sqr: Array,
     prior: BasePrior,
@@ -282,13 +284,13 @@ def _ekf1_sqr_loop_dynamic_obs_scan(
     min_sigma_sqr: float,
     correction: Correction | None = None,
 ) -> DynamicObsScanLoopResult:
-    """Observation-update branch of :func:`ekf1_sqr_loop_dynamic_scan`.
+    """Observation-update branch of :func:`sqr_loop_dynamic_scan`.
 
     Per step: (1) estimate ``sigma_hat^2`` from the ODE-defect residual at
     the provisional prediction and bake it into the process noise (same
     calibration semantics as the no-observation path -- observation rows
     never drive sigma); (2) run the combined ODE + masked-observation
-    update of :func:`ekf1_sqr_filter_step_sequential_scan`.
+    update of :func:`sqr_filter_step_sequential_scan`.
     """
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     A_h = prior.A(h)
@@ -327,7 +329,7 @@ def _ekf1_sqr_loop_dynamic_obs_scan(
             (mz_ode, Pz_ode_sqr),
             (mz_obs, Pz_obs_sqr),
             (m_new, P_new_sqr),
-        ) = ekf1_sqr_filter_step_sequential_scan(
+        ) = sqr_filter_step_sequential_scan(
             A_h,
             b_h,
             Q_step_sqr,
@@ -406,7 +408,7 @@ def _ekf1_sqr_loop_dynamic_obs_scan(
     )
 
 
-def ekf1_sqr_loop_dynamic_scan(
+def sqr_loop_dynamic_scan(
     mu_0: Array,
     Sigma_0_sqr: Array,
     prior: BasePrior,
@@ -470,7 +472,7 @@ def ekf1_sqr_loop_dynamic_scan(
         _check_state_xi_diagonal(prior, calibration)
 
     if obs_model is not None:
-        return _ekf1_sqr_loop_dynamic_obs_scan(
+        return _sqr_loop_dynamic_obs_scan(
             mu_0,
             Sigma_0_sqr,
             prior,
@@ -516,7 +518,7 @@ def ekf1_sqr_loop_dynamic_scan(
             (G_back, d_back, P_back_sqr),
             (mz, Pz_sqr),
             (m_new, P_new_sqr),
-        ) = ekf1_sqr_filter_step(
+        ) = sqr_filter_step(
             A_h,
             b_h,
             Q_step_sqr,
@@ -596,7 +598,7 @@ PrecondDynamicScanLoopResult = tuple[
 ]
 
 
-def ekf1_sqr_loop_preconditioned_dynamic_scan(
+def sqr_loop_preconditioned_dynamic_scan(
     mu_0: Array,
     P_0_sqr: Array,
     prior: BasePrior,
@@ -686,7 +688,7 @@ def ekf1_sqr_loop_preconditioned_dynamic_scan(
             (mz, Pz_sqr),
             (m_new_bar, P_new_sqr_bar),
             (m_new, P_new_sqr),
-        ) = ekf1_sqr_filter_step_preconditioned(
+        ) = sqr_filter_step_preconditioned(
             A_bar,
             b_bar,
             Q_step_sqr_bar,

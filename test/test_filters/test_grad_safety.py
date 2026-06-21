@@ -9,7 +9,7 @@ These tests pin grad == central-finite-difference (in float64, via conftest) so 
 future refactor that breaks reverse-AD (e.g. a plain lax.while_loop, a Python
 branch on a traced value, or an IEKF convergence while-loop) fails loudly. They
 also pin the one *intentionally* non-differentiable entry point -- the Python
-while-driver ``ekf1_sqr_adaptive_loop`` -- as not traceable.
+while-driver ``sqr_adaptive_loop`` -- as not traceable.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from ode_filters import (
     rts_smoother,
     taylor_mode_initialization,
 )
-from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
 from ode_filters.filters.ode_filter_loop import _calibrate_diffusion
 from ode_filters.measurement.measurement_models import Measurement
 
@@ -300,9 +300,9 @@ def test_diagonal_calibration_zero_denominator_floors_without_nan(mode):
 
 
 def test_python_while_driver_is_not_traceable():
-    """ekf1_sqr_adaptive_loop has data-dependent Python control flow + variable
+    """sqr_adaptive_loop has data-dependent Python control flow + variable
     output length, so it cannot be jit/grad'd. Pin the limitation (and the fact
-    that ekf1_sqr_adaptive_solve / gaussian_filter_adaptive is the AD-safe
+    that sqr_adaptive_solve / gaussian_filter_adaptive is the AD-safe
     alternative) so a refactor cannot silently change this contract."""
     prior = IWP(q=2, d=1)
 
@@ -312,7 +312,7 @@ def test_python_while_driver_is_not_traceable():
     mu_0, S0_sqr = taylor_mode_initialization(vf, np.array([0.5]), q=2)
     measure = ODEInformation(vf, prior.E0, prior.E1)
 
-    jitted = jax.jit(ekf1_sqr_adaptive_loop, static_argnums=(2, 3, 4))
+    jitted = jax.jit(sqr_adaptive_loop, static_argnums=(2, 3, 4))
     with pytest.raises(
         (jax.errors.ConcretizationTypeError, jax.errors.TracerBoolConversionError)
     ):
