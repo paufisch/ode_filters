@@ -71,15 +71,18 @@ want to plot.
 
 ## Calibrating the uncertainty
 
-The covariance is only honest if it is the right *size*. Its scale is set by a
+The covariance is only useful if it is the right *size*. Its scale is set by a
 diffusion parameter $\sigma^2$ on top of the prior. `ode_filters` estimates
-$\sigma^2$ from the observed residuals (a quasi-MLE), so the error bars match the
-actual discretization error rather than being arbitrary. This is what makes the
-shaded band in the Quickstart meaningful. See [Diffusion calibration](calibration.md).
+$\sigma^2$ per step from the observed ODE residuals with an approximate quasi-MLE
+(Bosch et al. 2021), rescaling the error bars toward the observed residual
+magnitude rather than leaving them at an arbitrary fixed scale. The estimate is
+approximate — it conditions on the local linearization and assumes the residual
+covariance scales with $\sigma^2$. See [Diffusion calibration](calibration.md).
 
 ## Why bother (vs `scipy` / Diffrax)?
 
-- **Uncertainty quantification** — a calibrated error band, for free, in one pass.
+- **Uncertainty quantification** — a calibrated error band as a byproduct of the
+  same forward solve (the smoothing band comes from the backward pass).
 - **Structured information** — conservation laws, partial/noisy observations, and
   hidden parameters all enter as additional measurements in the same machinery.
 

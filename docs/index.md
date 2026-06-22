@@ -9,7 +9,7 @@
 **`ode_filters` is `solve_ivp`, but it returns a mean *and* a calibrated
 uncertainty.** It is a pure-JAX library of *probabilistic* ODE solvers: instead of
 a single trajectory, you get a Gaussian posterior over the solution, computed by
-numerically stable square-root Kalman filtering and smoothing.
+numerically stable square-root extended Kalman filtering and RTS smoothing.
 
 ```python
 import jax.numpy as np

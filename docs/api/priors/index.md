@@ -7,13 +7,14 @@ it encodes the smoothness assumed before seeing the ODE. See
 | Prior | Process | Key parameters |
 | --- | --- | --- |
 | `IWP` | `q`-times integrated Wiener process (the default) | `q` (smoothness order), `d` (dimension), `Xi` (structural scale) |
-| `MaternPrior` | Matern process | smoothness + length scale |
+| `MaternPrior` | Matern process | `q` (smoothness order), `d` (dimension), `length_scale`, `Xi` (structural scale) |
 | `JointPrior` | a state block stacked with a hidden block | exposes `E0_x`, `E0_hidden` for joint state–parameter models |
 | `PrecondIWP`, `PrecondMaternPrior` | preconditioned variants | better conditioning at high `q` / small `h` |
 
 `q` sets the method's order of accuracy; `Xi` (together with the calibrated
 `sigma^2`) sets the size of the uncertainty. Initialize the state from `x0` with
-`taylor_mode_initialization(vf, x0, q)`. Symbols are defined in
+`taylor_mode_initialization(vf, x0, q)` (which returns the Taylor-mode mean and a
+zero/Dirac initial covariance). Symbols are defined in
 [Notation](../../notation.md).
 
 Every prior exposes the discrete-time transition `A(h)`, drift `b(h)`, process
