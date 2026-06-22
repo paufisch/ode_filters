@@ -20,8 +20,8 @@ import numpy as onp
 import pytest
 
 from ode_filters import gaussian_filter
-from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
-from ode_filters.filters.ode_filter_loop import ekf1_sqr_loop_dynamic_scan
+from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
+from ode_filters.filters.ode_filter_loop import sqr_loop_dynamic_scan
 from ode_filters.measurement.measurement_models import ODEInformation
 from ode_filters.priors.gmp_priors import IWP, taylor_mode_initialization
 
@@ -81,7 +81,7 @@ class TestSigmaFloorScan:
     def test_floor_keeps_sigma_above_threshold(self, trivial_zero_setup):
         prior, mu_0, S0, measure = trivial_zero_setup
         floor = 1e-30
-        r = ekf1_sqr_loop_dynamic_scan(
+        r = sqr_loop_dynamic_scan(
             mu_0,
             S0,
             prior,
@@ -104,7 +104,7 @@ class TestSigmaFloorAdaptive:
     def test_floor_keeps_sigma_above_threshold(self, trivial_zero_setup):
         prior, mu_0, S0, measure = trivial_zero_setup
         floor = 1e-30
-        r = ekf1_sqr_adaptive_loop(
+        r = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,

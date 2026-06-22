@@ -14,7 +14,7 @@ callable; the static configuration (prior, grid, calibration) lives in an
 is not itself a traceable argument).
 
 The likelihood is evaluated on the fixed-grid ``jax.lax.scan`` loop
-(:func:`ekf1_sqr_loop_dynamic_scan` with an ``obs_model``), which is the only
+(:func:`sqr_loop_dynamic_scan` with an ``obs_model``), which is the only
 jit/grad/vmap-safe path -- the Python-loop and adaptive drivers are not (ROADMAP
 rule R6). The returned scalar is the *observation* marginal log-likelihood: the
 data evidence under the ODE-constrained Gauss-Markov model (the Fenrir objective).

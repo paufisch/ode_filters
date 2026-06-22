@@ -90,7 +90,7 @@ from .ode_filter_loop import (
     _check_state_xi_diagonal,
     _log_likelihood_contrib,
 )
-from .ode_filter_step import ekf1_sqr_filter_step
+from .ode_filter_step import sqr_filter_step
 
 CalibrationMode = Literal["dynamic", "diagonal", "diagonal_ekf0", "none"]
 SigmaInError = Literal["per_step", "running_mean"]
@@ -98,7 +98,7 @@ _VALID_CALIBRATIONS = ("dynamic", "diagonal", "diagonal_ekf0", "none")
 
 
 class AdaptiveLoopResult(NamedTuple):
-    """Output of :func:`ekf1_sqr_adaptive_loop`.
+    """Output of :func:`sqr_adaptive_loop`.
 
     All sequences are aligned to *accepted* steps. ``t_seq`` has length
     ``N_accepted + 1`` (initial time plus one entry per accepted step); the
@@ -216,7 +216,7 @@ def _make_step_body(
             (G_back, d_back, P_back_sqr),
             (mz, Pz_sqr),
             (m, P_sqr),
-        ) = ekf1_sqr_filter_step(
+        ) = sqr_filter_step(
             A_h,
             b_h,
             Q_step_sqr,
@@ -263,7 +263,7 @@ def _make_step_body(
     return jax.jit(step_body)
 
 
-def ekf1_sqr_adaptive_loop(
+def sqr_adaptive_loop(
     mu_0: Array,
     Sigma_0_sqr: Array,
     prior: BasePrior,
@@ -286,7 +286,7 @@ def ekf1_sqr_adaptive_loop(
 
     .. note::
         **Internal driver -- not part of the public API.** The supported
-        adaptive entry point is :func:`ekf1_sqr_adaptive_solve` (wrapped by
+        adaptive entry point is :func:`sqr_adaptive_solve` (wrapped by
         ``gaussian_filter_adaptive``), which is ``jit`` / ``vmap`` / reverse-
         ``grad``-able and, with ``smoother=True``, also returns a fixed-point
         smoothing pass. This function is a plain Python ``while`` loop with a
@@ -548,7 +548,7 @@ def ekf1_sqr_adaptive_loop(
 
 
 class AdaptiveSolveResult(NamedTuple):
-    """Output of :func:`ekf1_sqr_adaptive_solve` (fixed-shape, save-at-grid).
+    """Output of :func:`sqr_adaptive_solve` (fixed-shape, save-at-grid).
 
     Attributes:
         t: The save grid (the ``save_at`` times), shape ``[K]``.
@@ -573,6 +573,24 @@ class AdaptiveSolveResult(NamedTuple):
         d_back: Per-interval backward-conditional offsets, shape ``[M, state_dim]``.
         P_back_sqr: Per-interval backward-conditional noise square roots, shape
             ``[M, state_dim, state_dim]``.
+        mz: ODE-defect innovation mean of the sub-step that lands on each save
+            time, shape ``[M, meas_dim]`` (``meas_dim`` = ODE-defect + Conservation
+            rows). The save-grid analog of the fixed-grid ``mz``: it is the
+            innovation of the *final* sub-step of each save interval (the one
+            clamped to land exactly on the save time), evaluated at that
+            sub-step's prediction. Because that last sub-step is shortened to hit
+            the save time, its ``h`` -- and hence the raw magnitude of ``mz`` /
+            ``Pz_sqr`` -- is not comparable across save points; the whitened
+            residual ``Pz_sqr^-T mz`` (and thus NIS) is unaffected.
+        Pz_sqr: Square-root innovation covariance for ``mz``, shape
+            ``[M, meas_dim, meas_dim]`` (calibrated, includes ``sigma_hat^2``).
+        mz_obs: External-observation innovation mean per save interval,
+            ``h(m) - y`` at the pre-observation marginal (after integrating to the
+            save time), shape ``[M, obs_dim]``. ``None`` when no ``obs_model`` was
+            given. Note the sign (``h(m) - y``, not ``y - h(m)``); NIS unaffected.
+        Pz_obs_sqr: Square-root predictive covariance ``S = H P H^T + R`` for
+            ``mz_obs``, shape ``[M, obs_dim, obs_dim]`` (``None`` without an
+            ``obs_model``).
     """
 
     t: Array
@@ -583,6 +601,10 @@ class AdaptiveSolveResult(NamedTuple):
     G_back: Array | None = None
     d_back: Array | None = None
     P_back_sqr: Array | None = None
+    mz: Array | None = None
+    Pz_sqr: Array | None = None
+    mz_obs: Array | None = None
+    Pz_obs_sqr: Array | None = None
 
 
 def _controller_coeffs(
@@ -607,7 +629,7 @@ def _controller_coeffs(
     )
 
 
-def ekf1_sqr_adaptive_solve(
+def sqr_adaptive_solve(
     mu_0: Array,
     Sigma_0_sqr: Array,
     prior: BasePrior,
@@ -627,7 +649,7 @@ def ekf1_sqr_adaptive_solve(
 ) -> AdaptiveSolveResult:
     """``jit`` / ``vmap`` / ``grad``-able adaptive EKF1, saved on a fixed grid.
 
-    Unlike :func:`ekf1_sqr_adaptive_loop` (a Python ``while`` driver that returns
+    Unlike :func:`sqr_adaptive_loop` (a Python ``while`` driver that returns
     *every* accepted step and feeds the smoother), this returns the **filtered
     solution at a fixed array of query times** ``save_at`` -- the shape is known at
     trace time, so the whole solve is jittable, vmappable, and reverse-mode
@@ -663,7 +685,7 @@ def ekf1_sqr_adaptive_solve(
     information and Conservation constraints.
 
     The per-step calibration, local-error estimate and log-likelihood are shared
-    with :func:`ekf1_sqr_adaptive_loop` (same ``_make_step_body``); the controller
+    with :func:`sqr_adaptive_loop` (same ``_make_step_body``); the controller
     uses the per-step error (the ``sigma_in_error="running_mean"`` variant of the
     Python loop is not reproduced here).
 
@@ -681,7 +703,7 @@ def ekf1_sqr_adaptive_solve(
         atol: Absolute tolerance for the normalised local-error estimate.
         rtol: Relative tolerance.
         h_init: Initial step. Defaults to ``(save_at[-1] - save_at[0]) / 100``.
-        calibration: Diffusion calibration mode (see :func:`ekf1_sqr_adaptive_loop`).
+        calibration: Diffusion calibration mode (see :func:`sqr_adaptive_loop`).
         controller: Step-size controller; defaults to ``PIController(order=prior.q)``.
         min_sigma_sqr: Lower bound on the per-step ``sigma_hat^2``.
         max_steps: Hard cap on sub-steps per save interval (bounds the checkpointed
@@ -740,6 +762,12 @@ def ekf1_sqr_adaptive_solve(
     # for the fixed-point smoother is reset to this at the start of each interval.
     state_dim = mu_0.shape[0]
     id_cond = (np.eye(state_dim), np.zeros(state_dim), np.zeros((state_dim, state_dim)))
+    # Measurement dimension (ODE-defect + Conservation rows) sizes the carried
+    # per-interval ODE innovation. Only the static shape is used, so a traced
+    # ``mu_0`` (under vmap / grad) is fine.
+    meas_dim = measure.linearize(mu_0, t=save_at[0])[0].shape[0]
+    mz_init = np.zeros(meas_dim)
+    Pz_init_sqr = np.zeros((meas_dim, meas_dim))
 
     def integrate_to(target, carry):
         rel_tol = 1e-10 * np.abs(target) + 1e-12
@@ -751,13 +779,14 @@ def ekf1_sqr_adaptive_solve(
         def body(c):
             c = cast("tuple[Array, ...]", c)  # arity is static via `smoother`
             if smoother:
-                t, m, P_sqr, h, ll, err_prev, Gc, dc, Pc = c
+                t, m, P_sqr, h, ll, err_prev, mzl, Pzl, Gc, dc, Pc = c
             else:
-                t, m, P_sqr, h, ll, err_prev = c
+                t, m, P_sqr, h, ll, err_prev, mzl, Pzl = c
             h_try = np.minimum(h, target - t)  # clamp so we land on `target`
             t_next = t + h_try
             out = step_body(h_try, t_next, m, P_sqr)
             m_new, P_new_sqr = out[7], out[8]
+            mz_step, Pz_step_sqr = out[5], out[6]
             err, loglik_step = out[10], out[11]
             # Reject non-finite errors (NaN/inf): never accept a NaN state, and
             # ``propose`` shrinks ``h`` so the loop can recover instead of
@@ -769,8 +798,13 @@ def ekf1_sqr_adaptive_solve(
             ll2 = np.where(accept, ll + loglik_step, ll)
             h2 = propose(h_try, err, np.where(accept, err_prev, -1.0))
             err_prev2 = np.where(accept, err, err_prev)
+            # Carry the ODE-defect innovation of the most recently accepted
+            # sub-step; after the loop this is the one clamped onto ``target``
+            # (the save time), so it is the innovation reported at the save grid.
+            mzl2 = np.where(accept, mz_step, mzl)
+            Pzl2 = np.where(accept, Pz_step_sqr, Pzl)
             if not smoother:
-                return (t2, m2, P2, h2, ll2, err_prev2)
+                return (t2, m2, P2, h2, ll2, err_prev2, mzl2, Pzl2)
             # Fixed-point smoothing: compose this accepted sub-step's predict
             # backward conditional p(u(t) | u(t_next)) into the running composite
             # p(u(s_k) | u(t)) -> p(u(s_k) | u(t_next)). out[2:5] is the step's
@@ -779,13 +813,22 @@ def ekf1_sqr_adaptive_solve(
             Gc2 = np.where(accept, comp[0], Gc)
             dc2 = np.where(accept, comp[1], dc)
             Pc2 = np.where(accept, comp[2], Pc)
-            return (t2, m2, P2, h2, ll2, err_prev2, Gc2, dc2, Pc2)
+            return (t2, m2, P2, h2, ll2, err_prev2, mzl2, Pzl2, Gc2, dc2, Pc2)
 
         return eqxi.while_loop(
             cond, body, carry, max_steps=max_steps, kind="checkpointed"
         )
 
-    base_init = (save_at[0], mu_0, Sigma_0_sqr, h0, np.array(0.0), np.array(-1.0))
+    base_init = (
+        save_at[0],
+        mu_0,
+        Sigma_0_sqr,
+        h0,
+        np.array(0.0),
+        np.array(-1.0),
+        mz_init,
+        Pz_init_sqr,
+    )
     init = (*base_init, *id_cond) if smoother else base_init
 
     def _reached(t, target):
@@ -799,12 +842,13 @@ def ekf1_sqr_adaptive_solve(
             carry = cast("tuple[Array, ...]", integrate_to(target, carry))
             reached = _reached(carry[0], target)
             if not smoother:
-                return carry, (carry[1], carry[2], reached)
+                # carry = (t, m, P_sqr, h, ll, err_prev, mzl, Pzl)
+                return carry, (carry[1], carry[2], reached, carry[6], carry[7])
             # Emit this interval's composite conditional p(u(s_prev) | u(target)),
             # then reset the composite to identity for the next interval.
-            t, m, P_sqr, h, ll, err_prev, Gc, dc, Pc = carry
-            carry_reset = (t, m, P_sqr, h, ll, err_prev, *id_cond)
-            return carry_reset, (m, P_sqr, reached, Gc, dc, Pc)
+            t, m, P_sqr, h, ll, err_prev, mzl, Pzl, Gc, dc, Pc = carry
+            carry_reset = (t, m, P_sqr, h, ll, err_prev, mzl, Pzl, *id_cond)
+            return carry_reset, (m, P_sqr, reached, mzl, Pzl, Gc, dc, Pc)
 
         final, ys = jax.lax.scan(scan_body_plain, init, save_at[1:])
     else:
@@ -821,13 +865,15 @@ def ekf1_sqr_adaptive_solve(
 
         def scan_body_obs(carry, step_data):
             target, c_obs, mask = step_data
-            t, m, P_sqr, h, ll, err_prev = cast(
+            t, m, P_sqr, h, ll, err_prev, mzl, Pzl = cast(
                 "tuple[Array, ...]", integrate_to(target, carry)
             )
             reached = _reached(t, target)
             # Exact (linear) observation update at the save time, masked off when
             # no observation is active there (same all-or-nothing convention as the
-            # dynamic-observation scan loop).
+            # dynamic-observation scan loop). The innovation (mz_obs, Pz_obs_sqr) is
+            # taken at the pre-observation marginal (m, P_sqr) -- the analog of the
+            # fixed-grid obs channel -- and surfaced alongside the ODE innovation.
             obs_active = mask.any()
             mz_obs, Pz_obs_sqr = sqr_marginalization(H_obs, c_obs, R_obs_sqr, m, P_sqr)
             _, m_obs, P_obs_sqr = sqr_inversion(
@@ -838,20 +884,51 @@ def ekf1_sqr_adaptive_solve(
             ll = ll + np.where(
                 obs_active, _log_likelihood_contrib(mz_obs, Pz_obs_sqr), 0.0
             )
-            return (t, m, P_sqr, h, ll, err_prev), (m, P_sqr, reached)
+            return (t, m, P_sqr, h, ll, err_prev, mzl, Pzl), (
+                m,
+                P_sqr,
+                reached,
+                mzl,
+                Pzl,
+                mz_obs,
+                Pz_obs_sqr,
+            )
 
         final, ys = jax.lax.scan(
             scan_body_obs, init, (save_at[1:], obs_model.c_seq, obs_model.mask)
         )
 
-    # ``smoother`` is a static Python bool, so only one of these unpackings is
-    # ever traced; the cast lets the type checker accept both arities.
+    # ``smoother`` and ``obs_model is None`` are static, so only one of these
+    # unpackings is ever traced; the cast lets the type checker accept the
+    # different arities. ``smoother`` and ``obs_model`` are mutually exclusive
+    # (enforced above), so the three cases are disjoint. ``mz_seq`` / ``Pz_seq_sqr``
+    # (the save-grid ODE innovation) are present on every path.
     ys = cast("tuple[Array, ...]", ys)
-    if smoother:
-        m_seq, P_seq_sqr, reached_seq, G_back, d_back, P_back_sqr = ys
+    G_back = d_back = P_back_sqr = None
+    mz_obs_seq = Pz_obs_seq_sqr = None
+    if obs_model is not None:
+        (
+            m_seq,
+            P_seq_sqr,
+            reached_seq,
+            mz_seq,
+            Pz_seq_sqr,
+            mz_obs_seq,
+            Pz_obs_seq_sqr,
+        ) = ys
+    elif smoother:
+        (
+            m_seq,
+            P_seq_sqr,
+            reached_seq,
+            mz_seq,
+            Pz_seq_sqr,
+            G_back,
+            d_back,
+            P_back_sqr,
+        ) = ys
     else:
-        m_seq, P_seq_sqr, reached_seq = ys
-        G_back = d_back = P_back_sqr = None
+        m_seq, P_seq_sqr, reached_seq, mz_seq, Pz_seq_sqr = ys
 
     m_seq = cast(Array, m_seq)
     P_seq_sqr = cast(Array, P_seq_sqr)
@@ -872,6 +949,10 @@ def ekf1_sqr_adaptive_solve(
         G_back=G_back,
         d_back=d_back,
         P_back_sqr=P_back_sqr,
+        mz=mz_seq,
+        Pz_sqr=Pz_seq_sqr,
+        mz_obs=mz_obs_seq,
+        Pz_obs_sqr=Pz_obs_seq_sqr,
     )
 
 

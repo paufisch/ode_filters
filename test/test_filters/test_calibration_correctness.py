@@ -31,7 +31,7 @@ from ode_filters.calibration.sigma import (
     quasi_mle_sigma_sqr,
 )
 from ode_filters.filters import PController
-from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
 from ode_filters.measurement.measurement_models import ODEInformation
 from ode_filters.priors.gmp_priors import (
     IWP,
@@ -116,7 +116,7 @@ class TestConvergenceOrderFixedStep:
         rtols = [1e-1, 1e-3, 1e-5]
         errs = []
         for rtol in rtols:
-            r = ekf1_sqr_adaptive_loop(
+            r = sqr_adaptive_loop(
                 mu_0, S0, prior, measure, tspan, atol=rtol * 1e-2, rtol=rtol
             )
             errs.append(abs(float((prior.E0 @ r.m_seq[-1])[0]) - x_true))
@@ -149,7 +149,7 @@ class TestDiagonalModesOffDiagonalJacobian:
     def _reference_endpoint(self):
         """Reference trajectory via a tight-tolerance run."""
         prior, mu_0, S0, measure = self._setup(q=4)
-        r = ekf1_sqr_adaptive_loop(
+        r = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -165,7 +165,7 @@ class TestDiagonalModesOffDiagonalJacobian:
         ref = self._reference_endpoint()
         prior, mu_0, S0, measure = self._setup()
         for mode in ("diagonal", "diagonal_ekf0"):
-            r = ekf1_sqr_adaptive_loop(
+            r = sqr_adaptive_loop(
                 mu_0,
                 S0,
                 prior,
@@ -187,7 +187,7 @@ class TestDiagonalModesOffDiagonalJacobian:
         difference: at loose tolerance the per-step sigma estimates are
         not identical."""
         prior, mu_0, S0, measure = self._setup()
-        r1 = ekf1_sqr_adaptive_loop(
+        r1 = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -197,7 +197,7 @@ class TestDiagonalModesOffDiagonalJacobian:
             rtol=1e-2,
             calibration="diagonal",
         )
-        r2 = ekf1_sqr_adaptive_loop(
+        r2 = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -362,7 +362,7 @@ class TestAdaptiveEqualsFixedStep:
             order=prior.q, safety=1.0, alpha=1.0, min_factor=1.0, max_factor=1.0
         )
 
-        r_adapt = ekf1_sqr_adaptive_loop(
+        r_adapt = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -452,7 +452,7 @@ class TestAdaptiveBoundaryRoundoff:
             min_factor=1.0,
             max_factor=1.0,
         )
-        r = ekf1_sqr_adaptive_loop(
+        r = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -472,7 +472,7 @@ class TestAdaptiveBoundaryRoundoff:
         anywhere *inside* the interval must still raise."""
         prior, mu_0, S0, measure = self._setup()
         with pytest.raises(RuntimeError, match="below h_min"):
-            ekf1_sqr_adaptive_loop(
+            sqr_adaptive_loop(
                 mu_0,
                 S0,
                 prior,

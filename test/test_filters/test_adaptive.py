@@ -15,11 +15,11 @@ from ode_filters.filters import (
     PIController,
     StepSizeController,
 )
-from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
 from ode_filters.filters.ode_filter_loop import (
-    ekf1_sqr_loop_dynamic_scan,
-    ekf1_sqr_loop_preconditioned_dynamic_scan,
     rts_sqr_smoother_loop,
+    sqr_loop_dynamic_scan,
+    sqr_loop_preconditioned_dynamic_scan,
 )
 from ode_filters.measurement.measurement_models import ODEInformation
 from ode_filters.priors.gmp_priors import IWP, PrecondIWP, taylor_mode_initialization
@@ -136,7 +136,7 @@ class TestAdaptiveLoopLogistic:
 
     def test_reaches_tspan_end(self):
         prior, mu_0, S0, measure = self._setup()
-        result = ekf1_sqr_adaptive_loop(
+        result = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -149,7 +149,7 @@ class TestAdaptiveLoopLogistic:
 
     def test_lengths_align(self):
         prior, mu_0, S0, measure = self._setup()
-        r = ekf1_sqr_adaptive_loop(
+        r = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -173,7 +173,7 @@ class TestAdaptiveLoopLogistic:
 
     def test_tighter_tolerance_reduces_error(self):
         prior, mu_0, S0, measure = self._setup()
-        r_loose = ekf1_sqr_adaptive_loop(
+        r_loose = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -182,7 +182,7 @@ class TestAdaptiveLoopLogistic:
             atol=1e-2,
             rtol=1e-1,
         )
-        r_tight = ekf1_sqr_adaptive_loop(
+        r_tight = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -202,7 +202,7 @@ class TestAdaptiveLoopLogistic:
 
     def test_smoother_consumes_adaptive_output(self):
         prior, mu_0, S0, measure = self._setup()
-        r = ekf1_sqr_adaptive_loop(
+        r = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -227,7 +227,7 @@ class TestAdaptiveLoopLogistic:
 
     def test_p_controller_run_reaches_tend(self):
         prior, mu_0, S0, measure = self._setup()
-        result = ekf1_sqr_adaptive_loop(
+        result = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -242,7 +242,7 @@ class TestAdaptiveLoopLogistic:
 
     def test_calibration_none_records_sigma_but_does_not_scale(self):
         prior, mu_0, S0, measure = self._setup()
-        r_on = ekf1_sqr_adaptive_loop(
+        r_on = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -252,7 +252,7 @@ class TestAdaptiveLoopLogistic:
             rtol=1e-2,
             calibration="dynamic",
         )
-        r_off = ekf1_sqr_adaptive_loop(
+        r_off = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -276,7 +276,7 @@ class TestAdaptiveLoopLogistic:
     def test_unknown_calibration_raises(self):
         prior, mu_0, S0, measure = self._setup()
         with pytest.raises(ValueError, match="calibration"):
-            ekf1_sqr_adaptive_loop(
+            sqr_adaptive_loop(
                 mu_0,
                 S0,
                 prior,
@@ -289,7 +289,7 @@ class TestAdaptiveLoopLogistic:
 
     def test_diagonal_mode_per_component_sigma_shape(self):
         prior, mu_0, S0, measure = self._setup()
-        r = ekf1_sqr_adaptive_loop(
+        r = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -307,7 +307,7 @@ class TestAdaptiveLoopLogistic:
         """Per-component sigma_hat^2_i = m_z[i]^2 / (H Q H.T)_ii. Verify on
         every accepted step."""
         prior, mu_0, S0, measure = self._setup()
-        r = ekf1_sqr_adaptive_loop(
+        r = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -338,7 +338,7 @@ class TestAdaptiveLoopLogistic:
         )
         measure = ODEInformation(lambda x, *, t: x, bad_prior.E0, bad_prior.E1)
         with pytest.raises(ValueError, match="diagonal"):
-            ekf1_sqr_adaptive_loop(
+            sqr_adaptive_loop(
                 mu_0,
                 S0,
                 bad_prior,
@@ -353,7 +353,7 @@ class TestAdaptiveLoopLogistic:
         """Running-mean sigma_in_error reduces step-size oscillations and
         the reject count, while reaching tspan_end with similar accuracy."""
         prior, mu_0, S0, measure = self._setup()
-        r_per = ekf1_sqr_adaptive_loop(
+        r_per = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -363,7 +363,7 @@ class TestAdaptiveLoopLogistic:
             rtol=1e-3,
             sigma_in_error="per_step",
         )
-        r_run = ekf1_sqr_adaptive_loop(
+        r_run = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -383,7 +383,7 @@ class TestAdaptiveLoopLogistic:
     def test_unknown_sigma_in_error_raises(self):
         prior, mu_0, S0, measure = self._setup()
         with pytest.raises(ValueError, match="sigma_in_error"):
-            ekf1_sqr_adaptive_loop(
+            sqr_adaptive_loop(
                 mu_0,
                 S0,
                 prior,
@@ -412,7 +412,7 @@ class TestAdaptiveLoopLogistic:
             1.0 + (1.0 / float(x0_vec[1]) - 1.0) * np.exp(-r_rate * tspan[1])
         )
 
-        r_diag = ekf1_sqr_adaptive_loop(
+        r_diag = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -432,7 +432,7 @@ class TestAdaptiveLoopLogistic:
         with ``m_z = H (A m_prev + b) + c`` -- linearised at the provisional
         predicted mean, before the EKF update."""
         prior, mu_0, S0, measure = self._setup()
-        r = ekf1_sqr_adaptive_loop(
+        r = sqr_adaptive_loop(
             mu_0,
             S0,
             prior,
@@ -575,9 +575,7 @@ class TestDynamicLoopVariantsAgree:
     def test_scan_matches_python_loop(self):
         prior, mu_0, S0, measure = self._setup_iwp()
         r_loop = gaussian_filter(mu_0, S0, prior, measure, self.tspan, self.N)
-        r_scan = ekf1_sqr_loop_dynamic_scan(
-            mu_0, S0, prior, measure, self.tspan, self.N
-        )
+        r_scan = sqr_loop_dynamic_scan(mu_0, S0, prior, measure, self.tspan, self.N)
         # Final filtered mean / cov agree to fp32-ish precision (jax default).
         assert np.allclose(r_loop.m[-1], r_scan[0][-1], atol=1e-6)
         assert np.allclose(r_loop.P_sqr[-1], r_scan[1][-1], atol=1e-6)
@@ -589,7 +587,7 @@ class TestDynamicLoopVariantsAgree:
     def test_preconditioned_scan_matches_python_loop(self):
         prior, mu_0, S0, measure = self._setup_precond_iwp()
         r_loop = gaussian_filter(mu_0, S0, prior, measure, self.tspan, self.N)
-        r_scan = ekf1_sqr_loop_preconditioned_dynamic_scan(
+        r_scan = sqr_loop_preconditioned_dynamic_scan(
             mu_0, S0, prior, measure, self.tspan, self.N
         )
         # m_seq is at index 0 in the scan result.
@@ -632,13 +630,13 @@ class TestDynamicLoopVariantsAgree:
         r1 = gaussian_filter(
             mu0, S0, prior_iwp, meas_iwp, tspan, N, calibration="diagonal"
         )
-        r2 = ekf1_sqr_loop_dynamic_scan(
+        r2 = sqr_loop_dynamic_scan(
             mu0, S0, prior_iwp, meas_iwp, tspan, N, calibration="diagonal"
         )
         r3 = gaussian_filter(
             mu0, S0, prior_pre, meas_pre, tspan, N, calibration="diagonal"
         )
-        r4 = ekf1_sqr_loop_preconditioned_dynamic_scan(
+        r4 = sqr_loop_preconditioned_dynamic_scan(
             mu0, S0, prior_pre, meas_pre, tspan, N, calibration="diagonal"
         )
         # Final filtered means agree to fp64 precision.
@@ -663,9 +661,9 @@ class TestDynamicLoopVariantsAgree:
         meas_pre = ODEInformation(vf, prior_pre.E0, prior_pre.E1)
         for func, prior, meas in [
             (gaussian_filter, prior_iwp, meas_iwp),
-            (ekf1_sqr_loop_dynamic_scan, prior_iwp, meas_iwp),
+            (sqr_loop_dynamic_scan, prior_iwp, meas_iwp),
             (gaussian_filter, prior_pre, meas_pre),
-            (ekf1_sqr_loop_preconditioned_dynamic_scan, prior_pre, meas_pre),
+            (sqr_loop_preconditioned_dynamic_scan, prior_pre, meas_pre),
         ]:
             r = func(mu0, S0, prior, meas, tspan, N, calibration="diagonal_ekf0")
             # Final x_2 should be near 0.999 (true value) -- the multi-scale
@@ -684,7 +682,7 @@ class TestDynamicLoopVariantsAgree:
         r_loop = gaussian_filter(
             mu_0, S0, prior, measure, self.tspan, self.N, calibration="none"
         )
-        r_scan = ekf1_sqr_loop_dynamic_scan(
+        r_scan = sqr_loop_dynamic_scan(
             mu_0, S0, prior, measure, self.tspan, self.N, calibration="none"
         )
         assert np.allclose(r_loop.m[-1], r_scan[0][-1], atol=1e-8)
@@ -727,7 +725,7 @@ class TestScanParityFullGrid:
             S0,
             measure,
             gaussian_filter,
-            ekf1_sqr_loop_dynamic_scan,
+            sqr_loop_dynamic_scan,
         )
 
     @staticmethod
@@ -743,7 +741,7 @@ class TestScanParityFullGrid:
             S0,
             measure,
             gaussian_filter,
-            ekf1_sqr_loop_preconditioned_dynamic_scan,
+            sqr_loop_preconditioned_dynamic_scan,
         )
 
     @staticmethod
@@ -775,7 +773,7 @@ class TestScanParityFullGrid:
             S0,
             measure,
             gaussian_filter,
-            ekf1_sqr_loop_dynamic_scan,
+            sqr_loop_dynamic_scan,
         )
 
     @staticmethod
@@ -807,7 +805,7 @@ class TestScanParityFullGrid:
             S0,
             measure,
             gaussian_filter,
-            ekf1_sqr_loop_preconditioned_dynamic_scan,
+            sqr_loop_preconditioned_dynamic_scan,
         )
 
     @pytest.mark.parametrize(
@@ -869,7 +867,7 @@ class TestScanLoopIsGradTraceable:
         measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
 
         _ = jax.value_and_grad(
-            lambda x: ekf1_sqr_loop_dynamic_scan(
+            lambda x: sqr_loop_dynamic_scan(
                 x, S0, prior, measure, (0.0, 1.0), 10, calibration=calibration
             )[-1]
         )(mu_0)
@@ -887,7 +885,7 @@ class TestScanLoopIsGradTraceable:
         def loss(xi_diag):
             prior = IWP(q=2, d=1, Xi=np.diag(xi_diag))
             measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
-            r = ekf1_sqr_loop_dynamic_scan(
+            r = sqr_loop_dynamic_scan(
                 mu_0, S0, prior, measure, (0.0, 1.0), 5, calibration=calibration
             )
             return r[-1]
@@ -909,7 +907,7 @@ class TestScanLoopIsGradTraceable:
 
         measure = ODEInformation(vf, prior.E0, prior.E1)
         with pytest.raises(ValueError, match="Xi to be diagonal"):
-            ekf1_sqr_loop_dynamic_scan(
+            sqr_loop_dynamic_scan(
                 mu_0, S0, prior, measure, (0.0, 1.0), 5, calibration="diagonal"
             )
 
@@ -944,7 +942,7 @@ class TestScanParityWithStackedResidual:
         r_loop = gaussian_filter(
             mu_0, S0, prior, measure, (0.0, 2.0), 30, calibration="dynamic"
         )
-        r_scan = ekf1_sqr_loop_dynamic_scan(
+        r_scan = sqr_loop_dynamic_scan(
             mu_0, S0, prior, measure, (0.0, 2.0), 30, calibration="dynamic"
         )
         sigma_loop = np.asarray(r_loop.sigma_sqr)

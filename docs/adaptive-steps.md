@@ -66,7 +66,7 @@ m_smooth, P_smooth_sqr = rts_smoother(prior, result)
 
 `gaussian_filter_adaptive` reports the solution on `save_at` only; it does not
 expose the accepted step sizes, the reject count, or the per-accepted-step
-diffusion trace. For those diagnostics, drop down to `ekf1_sqr_adaptive_loop`.
+diffusion trace. For those diagnostics, drop down to `sqr_adaptive_loop`.
 This is an **internal driver** (not part of the public API and *not*
 `jit`/`grad`-able — it is a plain Python `while` loop with a data-dependent step
 count); it is retained for these dense per-step diagnostics and for the
@@ -74,9 +74,9 @@ count); it is retained for these dense per-step diagnostics and for the
 smoother on a fixed grid, prefer `gaussian_filter_adaptive`.
 
 ```python
-from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
 
-traj = ekf1_sqr_adaptive_loop(
+traj = sqr_adaptive_loop(
     mu_0, S0, prior, measure, (0.0, 5.0),
     atol=1e-5, rtol=1e-3,
 )

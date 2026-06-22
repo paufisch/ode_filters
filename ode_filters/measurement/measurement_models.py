@@ -137,7 +137,7 @@ def prepare_observations(
             "fixed-shape masked update: at some time step only a subset of the "
             "stacked measurements fire, which would corrupt the inactive rows. "
             "Use measurements that share the same observation times, or the "
-            "embedded-Measurement Python path (ekf1_sqr_adaptive_loop). "
+            "embedded-Measurement Python path (sqr_adaptive_loop). "
             "Per-dimension masking is planned."
         )
 
