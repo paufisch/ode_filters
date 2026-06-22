@@ -1,22 +1,43 @@
 """Work-precision benchmark: accuracy vs runtime, with calibration check.
 
 Unlike ``benchmark_ode_solvers.py`` (wallclock only), this measures *accuracy*
-against a high-accuracy reference and plots work-precision diagrams (error vs
-runtime) comparing:
+against a high-accuracy reference and plots work-precision diagrams (relative
+**trajectory RMSE** vs runtime -- not a single endpoint, which is noisy and phase-
+sensitive on oscillatory problems). To keep the comparison apples-to-apples it
+produces **two** diagrams, each holding the stepping strategy fixed across *all*
+solvers:
 
-- **ode_filters** EK1 / EK0 (via the pluggable ``TaylorCorrection``),
-- **probdiffeq** ts1 / ts0 (the JAX probabilistic-solver oracle), and
-- **Diffrax** Tsit5 (a classical adaptive JAX solver, the speed baseline).
+- ``work_precision.png`` -- **all adaptive** (the headline). Every solver sweeps
+  its tolerance and runs its own step-size controller:
+  ``ode_filters`` EK1 / EK0 (``gaussian_filter_adaptive``, PI controller),
+  ``probdiffeq`` ts1 / ts0 (``solve_adaptive_save_at``), and **Diffrax**
+  Tsit5 (PID controller). This is what a user actually runs, and it lets the
+  probabilistic solvers use the adaptive stepping they ship with. The solution is
+  scored on a common dense save grid (via each solver's dense output, so the save
+  points do not force extra steps).
+- ``work_precision_fixed.png`` -- **all fixed grid**. Every solver runs on the
+  same uniform grid (``N`` sweep), including Diffrax Tsit5 forced onto a constant
+  step (``ConstantStepSize``); the RMSE is over that native grid.
 
-The reference is Diffrax ``Dopri8`` at ``rtol=1e-9`` (a tolerance achievable in
-float64 for these problems, and 2+ orders tighter than the best method measured).
-A second figure is a **chi-squared calibration sweep**: for a well-calibrated
+Mixing the two (fixed-grid probabilistic vs adaptive classical) conflates the
+probabilistic-vs-classical axis with the fixed-vs-adaptive axis, so we keep them
+in separate figures.
+
+NOTE: this script enables ``jax_enable_x64`` itself. Standalone scripts do not
+see ``conftest.py`` (which is what turns on float64 for the test suite); in float32
+the probabilistic solvers hit a ~1e-6 round-off floor that *grows* with step count,
+which would show up as spurious "error increases with runtime" curves.
+
+All solvers (probabilistic and classical) use ``Q=3`` smoothness / matched order.
+The reference is Diffrax ``Dopri8`` at ``rtol=1e-12`` (a tolerance achievable in
+float64 for these problems, and 2-3 orders tighter than the best method measured).
+A third figure is a **chi-squared calibration sweep**: for a well-calibrated
 probabilistic solver the standardized residual
 ``(x_true - mean)^T P^{-1} (x_true - mean) / d`` should hover near 1 (much larger =
 over-confident, much smaller = under-confident). Coarse grids where a solver
 diverges are dropped (the convergent branch is what a work-precision diagram shows).
 
-Run with: ``uv run python benchmarks/work_precision.py``
+Run with: ``uv run --extra benchmarks python benchmarks/work_precision.py``
 """
 
 from __future__ import annotations
@@ -32,12 +53,22 @@ import matplotlib.pyplot as plt
 import numpy as np
 from probdiffeq import ivpsolve, ivpsolvers, taylor
 
-from ode_filters.filters import TaylorCorrection
-from ode_filters.filters.ode_filter_loop import ekf1_sqr_loop_dynamic_scan
+from ode_filters.filters import (
+    TaylorCorrection,
+    gaussian_filter,
+    gaussian_filter_adaptive,
+)
 from ode_filters.measurement import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
 
+# Standalone benchmark scripts do not see `conftest.py`, which is what enables
+# float64 for the test suite. Without this, JAX defaults to float32 and the
+# probabilistic solvers hit a ~1e-6 round-off floor that *grows* with step count
+# -- producing spurious "error increases with runtime" work-precision curves.
+jax.config.update("jax_enable_x64", True)
+
 Q = 3  # smoothness order for the probabilistic solvers (matched across them)
+N_EVAL = 100  # save points for the adaptive trajectory-RMSE evaluation grid
 
 
 @dataclass
@@ -80,7 +111,7 @@ def _problems() -> list[ODEProblem]:
 
 
 # --------------------------------------------------------------------------- #
-# Reference (Diffrax Dopri8 @ 1e-13)                                          #
+# Reference (Diffrax Dopri8 @ 1e-12)                                          #
 # --------------------------------------------------------------------------- #
 
 
@@ -89,6 +120,9 @@ def _diffrax_term(problem: ODEProblem):
 
 
 def reference_trajectory(problem: ODEProblem, ts: jnp.ndarray) -> jnp.ndarray:
+    # rtol=1e-12 (achievable in float64) keeps the reference 2-3 orders tighter
+    # than the best method measured, so even the tightest sweep point is not
+    # reference-limited.
     sol = diffrax.diffeqsolve(
         _diffrax_term(problem),
         diffrax.Dopri8(),
@@ -97,18 +131,29 @@ def reference_trajectory(problem: ODEProblem, ts: jnp.ndarray) -> jnp.ndarray:
         dt0=None,
         y0=problem.x0,
         saveat=diffrax.SaveAt(ts=ts),
-        stepsize_controller=diffrax.PIDController(rtol=1e-9, atol=1e-11),
+        stepsize_controller=diffrax.PIDController(rtol=1e-12, atol=1e-14),
         max_steps=2_000_000,
     )
     return sol.ys
 
 
+def _dense_grid(problem: ODEProblem) -> jnp.ndarray:
+    """Common save grid for the adaptive trajectory-RMSE comparison."""
+    return jnp.linspace(problem.tspan[0], problem.tspan[1], N_EVAL + 1)
+
+
 # --------------------------------------------------------------------------- #
-# Solvers -- each `make_*` returns a no-arg callable returning the final state #
+# Solvers -- each `make_*` returns a no-arg callable returning the *trajectory* #
+# (the solution sampled on its evaluation grid), so the caller can score it     #
+# with a trajectory RMSE rather than a single endpoint.                         #
+#                                                                              #
+# `*_fixed`    take a grid size N; the trajectory is the N+1 native grid points.#
+# `*_adaptive` take a tolerance `tol` (atol = rtol = tol) and run a controller, #
+#              saving on the common dense `_dense_grid(problem)`.               #
 # --------------------------------------------------------------------------- #
 
 
-def make_ode_filters(problem: ODEProblem, N: int, order: int) -> Callable:
+def make_ode_filters_fixed(problem: ODEProblem, N: int, order: int) -> Callable:
     prior = IWP(Q, problem.dim, Xi=0.5 * jnp.eye(problem.dim))
     mu_0, S0 = taylor_mode_initialization(problem.vf, problem.x0, Q)
     measure = ODEInformation(problem.vf, prior.E0, prior.E1)
@@ -117,7 +162,7 @@ def make_ode_filters(problem: ODEProblem, N: int, order: int) -> Callable:
 
     @jax.jit
     def run():
-        res = ekf1_sqr_loop_dynamic_scan(
+        res = gaussian_filter(
             mu_0,
             S0,
             prior,
@@ -127,14 +172,42 @@ def make_ode_filters(problem: ODEProblem, N: int, order: int) -> Callable:
             correction=corr,
             calibration="dynamic",
         )
-        return (res[0] @ e0.T)[-1]
+        return res.m @ e0.T  # [N+1, d]
 
     return run
 
 
-def make_probdiffeq(problem: ODEProblem, N: int, kind: str) -> Callable:
-    grid = jnp.linspace(problem.tspan[0], problem.tspan[1], N + 1)
+def make_ode_filters_adaptive(problem: ODEProblem, tol: float, order: int) -> Callable:
+    prior = IWP(Q, problem.dim, Xi=0.5 * jnp.eye(problem.dim))
+    mu_0, S0 = taylor_mode_initialization(problem.vf, problem.x0, Q)
+    measure = ODEInformation(problem.vf, prior.E0, prior.E1)
+    corr = TaylorCorrection(order=order)
+    e0 = prior.E0
+    save_at = _dense_grid(problem)
 
+    @jax.jit
+    def run():
+        res = gaussian_filter_adaptive(
+            mu_0,
+            S0,
+            prior,
+            measure,
+            save_at,
+            correction=corr,
+            atol=tol,
+            rtol=tol,
+            calibration="dynamic",
+            max_steps=8192,
+        )
+        traj = res.m @ e0.T  # [N_EVAL+1, d]
+        # A solve that fails to reach every save time is a divergence -- emit NaN
+        # so it drops out of the plotted (convergent) branch.
+        return jnp.where(res.success, traj, jnp.nan)
+
+    return run
+
+
+def _probdiffeq_setup(problem: ODEProblem, kind: str):
     def vf(y, *, t):
         return problem.vf(y, t=t)
 
@@ -150,19 +223,48 @@ def make_probdiffeq(problem: ODEProblem, N: int, kind: str) -> Callable:
     )
     strategy = ivpsolvers.strategy_filter(ssm=ssm)
     solver = ivpsolvers.solver(strategy, prior=ibm, correction=correction, ssm=ssm)
+    return init, solver, ssm
+
+
+def make_probdiffeq_fixed(problem: ODEProblem, N: int, kind: str) -> Callable:
+    grid = jnp.linspace(problem.tspan[0], problem.tspan[1], N + 1)
+    init, solver, ssm = _probdiffeq_setup(problem, kind)
 
     @jax.jit
     def solve():
         return ivpsolve.solve_fixed_grid(init, grid=grid, solver=solver, ssm=ssm)
 
     def run():
-        return solve().u[0][-1]
+        # `u` is the list of Taylor coefficients per grid point; `u[0]` is the
+        # state trajectory, shape [N+1, d].
+        return solve().u[0]
 
     return run
 
 
-def make_diffrax(problem: ODEProblem, tol: float) -> Callable:
+def make_probdiffeq_adaptive(problem: ODEProblem, tol: float, kind: str) -> Callable:
+    init, solver, ssm = _probdiffeq_setup(problem, kind)
+    adaptive = ivpsolvers.adaptive(solver, ssm=ssm, atol=tol, rtol=tol)
+    save_at = _dense_grid(problem)
+    dt0 = (problem.tspan[1] - problem.tspan[0]) / 100.0
+
+    @jax.jit
+    def solve():
+        # `save_at` uses the solver's dense output (interpolation), so it does not
+        # force extra steps -- the runtime still reflects the natural adaptive cost.
+        return ivpsolve.solve_adaptive_save_at(
+            init, save_at=save_at, adaptive_solver=adaptive, dt0=dt0, ssm=ssm
+        )
+
+    def run():
+        return solve().u[0]  # [N_EVAL+1, d]
+
+    return run
+
+
+def make_diffrax_adaptive(problem: ODEProblem, tol: float) -> Callable:
     term = _diffrax_term(problem)
+    save_at = _dense_grid(problem)
 
     @jax.jit
     def run():
@@ -173,11 +275,35 @@ def make_diffrax(problem: ODEProblem, tol: float) -> Callable:
             t1=problem.tspan[1],
             dt0=None,
             y0=problem.x0,
-            saveat=diffrax.SaveAt(t1=True),
+            saveat=diffrax.SaveAt(ts=save_at),  # dense output, no forced steps
             stepsize_controller=diffrax.PIDController(rtol=tol, atol=tol),
             max_steps=1_000_000,
         )
-        return sol.ys[-1]
+        return sol.ys  # [N_EVAL+1, d]
+
+    return run
+
+
+def make_diffrax_fixed(problem: ODEProblem, N: int) -> Callable:
+    term = _diffrax_term(problem)
+    t0, t1 = problem.tspan
+    grid = jnp.linspace(t0, t1, N + 1)
+    dt0 = (t1 - t0) / N
+
+    @jax.jit
+    def run():
+        sol = diffrax.diffeqsolve(
+            term,
+            diffrax.Tsit5(),
+            t0=t0,
+            t1=t1,
+            dt0=dt0,
+            y0=problem.x0,
+            saveat=diffrax.SaveAt(ts=grid),
+            stepsize_controller=diffrax.ConstantStepSize(),
+            max_steps=N + 16,  # constant step lands ~N steps; small buffer for rounding
+        )
+        return sol.ys  # [N+1, d]
 
     return run
 
@@ -198,68 +324,102 @@ def median_time_ms(run: Callable, n_warmup: int = 2, n_runs: int = 7) -> float:
     return float(np.median(samples)) * 1000.0
 
 
-def rel_error(x: jnp.ndarray, ref: jnp.ndarray) -> float:
-    return float(jnp.linalg.norm(x - ref) / jnp.linalg.norm(ref))
+def rel_trmse(traj: jnp.ndarray, ref: jnp.ndarray) -> float:
+    """Relative trajectory RMSE between a solution and the reference.
+
+    Both are ``[K, d]`` (solution sampled on the evaluation grid). Averaging the
+    error over the whole trajectory -- rather than reading a single endpoint --
+    is robust to the phase sensitivity of oscillatory problems and is the metric
+    used across the probabilistic-ODE literature.
+    """
+    num = jnp.sqrt(jnp.mean(jnp.sum((traj - ref) ** 2, axis=-1)))
+    den = jnp.sqrt(jnp.mean(jnp.sum(ref**2, axis=-1)))
+    return float(num / den)
 
 
-METHODS = [
-    ("ode_filters EK1", "C0", "o", lambda p, n: make_ode_filters(p, n, 1)),
-    ("ode_filters EK0", "C4", "v", lambda p, n: make_ode_filters(p, n, 0)),
-    ("probdiffeq ts1", "C1", "s", lambda p, n: make_probdiffeq(p, n, "ts1")),
-    ("probdiffeq ts0", "C2", "D", lambda p, n: make_probdiffeq(p, n, "ts0")),
+# (label, color, marker, make(problem, knob) -> run). `make` takes a grid size N
+# for the fixed methods and a tolerance for the adaptive methods.
+FIXED_METHODS = [
+    ("ode_filters EK1", "C0", "o", lambda p, n: make_ode_filters_fixed(p, n, 1)),
+    ("ode_filters EK0", "C4", "v", lambda p, n: make_ode_filters_fixed(p, n, 0)),
+    ("probdiffeq ts1", "C1", "s", lambda p, n: make_probdiffeq_fixed(p, n, "ts1")),
+    ("probdiffeq ts0", "C2", "D", lambda p, n: make_probdiffeq_fixed(p, n, "ts0")),
+    ("Diffrax Tsit5", "C3", "^", make_diffrax_fixed),
+]
+ADAPTIVE_METHODS = [
+    ("ode_filters EK1", "C0", "o", lambda p, tol: make_ode_filters_adaptive(p, tol, 1)),
+    ("ode_filters EK0", "C4", "v", lambda p, tol: make_ode_filters_adaptive(p, tol, 0)),
+    (
+        "probdiffeq ts1",
+        "C1",
+        "s",
+        lambda p, tol: make_probdiffeq_adaptive(p, tol, "ts1"),
+    ),
+    (
+        "probdiffeq ts0",
+        "C2",
+        "D",
+        lambda p, tol: make_probdiffeq_adaptive(p, tol, "ts0"),
+    ),
+    ("Diffrax Tsit5", "C3", "^", make_diffrax_adaptive),
 ]
 N_VALUES = [80, 160, 320, 640, 1280]
-DIFFRAX_TOLS = [1e-3, 1e-5, 1e-7, 1e-9]
-# A probabilistic solver at too-coarse a grid diverges; we plot only the
-# convergent branch (finite error below this threshold).
+TOLS = [1e-3, 1e-5, 1e-7, 1e-9]
+# A probabilistic solver at too-coarse a grid / loose a tolerance diverges; we
+# plot only the convergent branch (finite error below this threshold).
 _CONVERGED = 1.0
 
 
-def work_precision(problems: list[ODEProblem], save_path: str) -> None:
+def work_precision(
+    problems: list[ODEProblem],
+    methods: list,
+    sweep: list,
+    eval_grid: Callable[[ODEProblem, object], jnp.ndarray],
+    save_path: str,
+    title: str,
+) -> None:
+    """Plot trajectory-RMSE-vs-runtime for `methods`, swept over `sweep`.
+
+    `eval_grid(problem, knob)` returns the save grid that each method's `run()`
+    samples (and on which the reference is evaluated): the native N+1 grid for the
+    fixed methods, a common dense grid for the adaptive ones.
+    """
     fig, axes = plt.subplots(1, len(problems), figsize=(5 * len(problems), 4.2))
     if len(problems) == 1:
         axes = [axes]
 
     for ax, problem in zip(axes, problems, strict=True):
-        ref_final = reference_trajectory(problem, jnp.array(list(problem.tspan)))[-1]
         print(f"\n{problem.name}")
+        # The reference depends only on the eval grid, which (per knob) is shared
+        # across methods -- compute it once per knob.
+        refs = {
+            knob: reference_trajectory(problem, eval_grid(problem, knob))
+            for knob in sweep
+        }
 
-        for name, color, marker, make in METHODS:
+        for name, color, marker, make in methods:
             times, errs = [], []
-            for n in N_VALUES:
-                run = make(problem, n)
-                err = rel_error(run(), ref_final)
+            for knob in sweep:
+                run = make(problem, knob)
+                err = rel_trmse(run(), refs[knob])
                 t = median_time_ms(run)
-                print(f"  {name:18s} N={n:4d}  err={err:.2e}  t={t:7.3f} ms")
+                print(f"  {name:18s} {knob!s:>8s}  tRMSE={err:.2e}  t={t:8.3f} ms")
                 if np.isfinite(err) and err < _CONVERGED:  # drop diverged points
                     times.append(t)
                     errs.append(err)
             if times:
                 ax.plot(times, errs, color=color, marker=marker, label=name)
 
-        # Diffrax (classical, adaptive): sweep tolerance.
-        d_times, d_errs = [], []
-        for tol in DIFFRAX_TOLS:
-            run = make_diffrax(problem, tol)
-            err = rel_error(run(), ref_final)
-            t = median_time_ms(run)
-            print(f"  {'Diffrax Tsit5':18s} tol={tol:.0e} err={err:.2e}  t={t:7.3f} ms")
-            if np.isfinite(err) and err < _CONVERGED:
-                d_times.append(t)
-                d_errs.append(err)
-        if d_times:
-            ax.plot(d_times, d_errs, color="C3", marker="^", label="Diffrax Tsit5")
-
         ax.set(
             xlabel="runtime (ms)",
-            ylabel="relative error (final state)",
+            ylabel="relative trajectory RMSE",
             title=problem.name,
             xscale="log",
             yscale="log",
         )
         ax.legend(fontsize="small")
 
-    fig.suptitle("Work-precision: accuracy vs runtime (lower-left is better)")
+    fig.suptitle(title)
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     print(f"\nsaved {save_path}")
@@ -274,7 +434,7 @@ def _ode_filters_mean_cov(problem: ODEProblem, N: int):
     prior = IWP(Q, problem.dim, Xi=0.5 * jnp.eye(problem.dim))
     mu_0, S0 = taylor_mode_initialization(problem.vf, problem.x0, Q)
     measure = ODEInformation(problem.vf, prior.E0, prior.E1)
-    res = ekf1_sqr_loop_dynamic_scan(
+    res = gaussian_filter(
         mu_0,
         S0,
         prior,
@@ -285,8 +445,8 @@ def _ode_filters_mean_cov(problem: ODEProblem, N: int):
         calibration="dynamic",
     )
     e0 = prior.E0
-    m = res[0] @ e0.T  # [N+1, d]
-    p_full = jnp.einsum("nij,nik->njk", res[1], res[1])  # P = P_sqr.T @ P_sqr
+    m = res.m @ e0.T  # [N+1, d]
+    p_full = jnp.einsum("nij,nik->njk", res.P_sqr, res.P_sqr)  # P = P_sqr.T @ P_sqr
     p_x = jnp.einsum("ai,nij,bj->nab", e0, p_full, e0)  # [N+1, d, d]
     return m, p_x
 
@@ -335,7 +495,24 @@ def calibration_sweep(problems: list[ODEProblem], save_path: str) -> None:
 
 def main() -> None:
     problems = _problems()
-    work_precision(problems, "benchmarks/work_precision.png")
+    # Adaptive methods all save on the common dense grid; fixed methods save on
+    # their own native N+1 grid (the resolution *is* the sweep knob).
+    work_precision(
+        problems,
+        ADAPTIVE_METHODS,
+        TOLS,
+        lambda p, _tol: _dense_grid(p),
+        "benchmarks/work_precision.png",
+        "Work-precision (all adaptive): trajectory RMSE vs runtime (lower-left is better)",
+    )
+    work_precision(
+        problems,
+        FIXED_METHODS,
+        N_VALUES,
+        lambda p, n: jnp.linspace(p.tspan[0], p.tspan[1], n + 1),
+        "benchmarks/work_precision_fixed.png",
+        "Work-precision (all fixed-grid): trajectory RMSE vs runtime (lower-left is better)",
+    )
     calibration_sweep(problems, "benchmarks/calibration_chi2.png")
 
 
