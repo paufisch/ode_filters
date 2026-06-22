@@ -1,11 +1,10 @@
-"""Work-precision benchmark: accuracy vs runtime, with calibration check.
+"""Work-precision benchmark: accuracy vs runtime across libraries.
 
-Unlike ``benchmark_ode_solvers.py`` (wallclock only), this measures *accuracy*
-against a high-accuracy reference and plots work-precision diagrams (relative
-**trajectory RMSE** vs runtime -- not a single endpoint, which is noisy and phase-
-sensitive on oscillatory problems). To keep the comparison apples-to-apples it
-produces **two** diagrams, each holding the stepping strategy fixed across *all*
-solvers:
+Measures *accuracy* against a high-accuracy reference and plots work-precision
+diagrams (relative **trajectory RMSE** vs runtime -- not a single endpoint, which
+is noisy and phase-sensitive on oscillatory problems), comparing ode_filters to
+probdiffeq and Diffrax. To keep the comparison apples-to-apples it produces
+**two** diagrams, each holding the stepping strategy fixed across *all* solvers:
 
 - ``work_precision.png`` -- **all adaptive** (the headline). Every solver sweeps
   its tolerance and runs its own step-size controller:
@@ -31,11 +30,12 @@ which would show up as spurious "error increases with runtime" curves.
 All solvers (probabilistic and classical) use ``Q=3`` smoothness / matched order.
 The reference is Diffrax ``Dopri8`` at ``rtol=1e-12`` (a tolerance achievable in
 float64 for these problems, and 2-3 orders tighter than the best method measured).
-A third figure is a **chi-squared calibration sweep**: for a well-calibrated
-probabilistic solver the standardized residual
-``(x_true - mean)^T P^{-1} (x_true - mean) / d`` should hover near 1 (much larger =
-over-confident, much smaller = under-confident). Coarse grids where a solver
-diverges are dropped (the convergent branch is what a work-precision diagram shows).
+Coarse grids / loose tolerances where a solver diverges are dropped (the convergent
+branch is what a work-precision diagram shows). Calibration quality (whether the
+posterior uncertainty is honest) is an *internal* ode_filters concern rather than a
+cross-library comparison, so it lives in the docs --
+``docs/examples/adaptive-and-calibration.ipynb`` and ``docs/calibration.md`` -- not
+here.
 
 Run with: ``uv run --extra benchmarks python benchmarks/work_precision.py``
 """
@@ -425,74 +425,6 @@ def work_precision(
     print(f"\nsaved {save_path}")
 
 
-# --------------------------------------------------------------------------- #
-# Chi-squared calibration sweep                                               #
-# --------------------------------------------------------------------------- #
-
-
-def _ode_filters_mean_cov(problem: ODEProblem, N: int):
-    prior = IWP(Q, problem.dim, Xi=0.5 * jnp.eye(problem.dim))
-    mu_0, S0 = taylor_mode_initialization(problem.vf, problem.x0, Q)
-    measure = ODEInformation(problem.vf, prior.E0, prior.E1)
-    res = gaussian_filter(
-        mu_0,
-        S0,
-        prior,
-        measure,
-        problem.tspan,
-        N,
-        correction=TaylorCorrection(order=1),
-        calibration="dynamic",
-    )
-    e0 = prior.E0
-    m = res.m @ e0.T  # [N+1, d]
-    p_full = jnp.einsum("nij,nik->njk", res.P_sqr, res.P_sqr)  # P = P_sqr.T @ P_sqr
-    p_x = jnp.einsum("ai,nij,bj->nab", e0, p_full, e0)  # [N+1, d, d]
-    return m, p_x
-
-
-def chi2_statistic(problem: ODEProblem, N: int) -> float:
-    """Mean standardized squared residual over the grid (~1 when calibrated)."""
-    ts = jnp.linspace(problem.tspan[0], problem.tspan[1], N + 1)
-    ref = reference_trajectory(problem, ts)  # [N+1, d]
-    m, p_x = _ode_filters_mean_cov(problem, N)
-    err = ref - m  # [N+1, d]
-    jitter = 1e-12 * jnp.eye(problem.dim)
-    # quadratic form err_i^T P_i^{-1} err_i, skipping the (exact) initial point
-    quad = jax.vmap(lambda e, P: e @ jnp.linalg.solve(P + jitter, e))(err[1:], p_x[1:])
-    return float(jnp.mean(quad) / problem.dim)
-
-
-def calibration_sweep(problems: list[ODEProblem], save_path: str) -> None:
-    fig, ax = plt.subplots(figsize=(6, 4.2))
-    # Use the convergent regime; coarse grids on the fast 2D problems are
-    # numerically unstable (non-PD covariance) and are skipped.
-    n_values = [160, 320, 640, 1280]
-    print("\nChi-squared calibration (ode_filters EK1, dynamic calibration):")
-    for problem, color in zip(problems, ["C0", "C1", "C2"], strict=False):
-        ns, chi2 = [], []
-        for n in n_values:
-            c = chi2_statistic(problem, n)
-            print(f"  {problem.name:20s} N={n:4d}  chi2/d={c:.3f}")
-            if np.isfinite(c) and c > 0:
-                ns.append(n)
-                chi2.append(c)
-        if ns:
-            ax.plot(ns, chi2, marker="o", color=color, label=problem.name)
-    ax.axhline(1.0, color="k", linestyle="--", linewidth=1, label="ideal (= 1)")
-    ax.set(
-        xlabel="grid size N",
-        ylabel=r"$\chi^2 / d$  (standardized residual)",
-        title="Calibration: standardized residual vs resolution",
-        xscale="log",
-        yscale="log",
-    )
-    ax.legend(fontsize="small")
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    print(f"\nsaved {save_path}")
-
-
 def main() -> None:
     problems = _problems()
     # Adaptive methods all save on the common dense grid; fixed methods save on
@@ -513,7 +445,6 @@ def main() -> None:
         "benchmarks/work_precision_fixed.png",
         "Work-precision (all fixed-grid): trajectory RMSE vs runtime (lower-left is better)",
     )
-    calibration_sweep(problems, "benchmarks/calibration_chi2.png")
 
 
 if __name__ == "__main__":
