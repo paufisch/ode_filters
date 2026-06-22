@@ -49,7 +49,7 @@ class AbstractParameter(eqx.Module):
     @abc.abstractmethod
     def unwrap(self) -> Array:
         """Return the constrained value."""
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover - abstract method
 
 
 class Real(AbstractParameter):

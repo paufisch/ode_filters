@@ -89,7 +89,9 @@ class FilterResult(NamedTuple):
         sigma_sqr: Per-step calibrated diffusion ``sigma_hat^2``.
         log_likelihood_obs: Marginal log-likelihood of the external observations
             (``None`` when no ``obs_model`` was given) -- the quantity to maximize
-            for data-driven parameter inference.
+            for data-driven parameter inference. **Fixed-grid path only:** the
+            adaptive solver always returns ``None`` here and folds the observation
+            contribution into the combined ``log_likelihood`` instead.
         m_bar: Preconditioned-space means (``None`` unless the prior is
             preconditioned); internal, consumed by :func:`rts_smoother`.
         P_bar_sqr: Preconditioned-space square-root covariances (``None`` for plain).
@@ -314,6 +316,11 @@ def gaussian_filter_adaptive(
     ``correction`` selects the linearization (EK0/EK1/IEKF), matching
     :func:`gaussian_filter`; ``result.success`` reports whether the adaptive
     sub-stepping reached every save time.
+
+    With an ``obs_model`` the observation likelihood is folded into the combined
+    ``result.log_likelihood`` (summed over accepted steps); unlike the fixed-grid
+    :func:`gaussian_filter`, ``result.log_likelihood_obs`` is always ``None`` on
+    the adaptive path.
 
     With ``smoother=True`` the result carries a fixed-point-smoothing backward
     pass (one composite conditional per save interval, O(#save points) memory),

@@ -1575,7 +1575,7 @@ wheels = [
 
 [[package]]
 name = "ode-filters"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "." }
 dependencies = [
     { name = "equinox" },
@@ -1590,6 +1590,11 @@ benchmarks = [
 ]
 examples = [
     { name = "matplotlib" },
+]
+inference = [
+    { name = "blackjax" },
+    { name = "numpyro" },
+    { name = "optax" },
 ]
 
 [package.dev-dependencies]
@@ -1622,14 +1627,17 @@ docs = [
 
 [package.metadata]
 requires-dist = [
+    { name = "blackjax", marker = "extra == 'inference'", specifier = ">=1.2.0" },
     { name = "diffrax", marker = "extra == 'benchmarks'", specifier = ">=0.6" },
     { name = "equinox", specifier = ">=0.11" },
     { name = "jax", specifier = ">=0.8.0" },
     { name = "matplotlib", marker = "extra == 'benchmarks'", specifier = ">=3.10.7" },
     { name = "matplotlib", marker = "extra == 'examples'", specifier = ">=3.10.7" },
     { name = "numpy", specifier = ">=2.3.4" },
+    { name = "numpyro", marker = "extra == 'inference'", specifier = ">=0.16.0" },
+    { name = "optax", marker = "extra == 'inference'", specifier = ">=0.2.0" },
 ]
-provides-extras = ["examples", "benchmarks"]
+provides-extras = ["examples", "inference", "benchmarks"]
 
 [package.metadata.requires-dev]
 dev = [
