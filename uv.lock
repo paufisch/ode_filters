@@ -1587,7 +1587,6 @@ dependencies = [
 benchmarks = [
     { name = "diffrax" },
     { name = "matplotlib" },
-    { name = "scipy" },
 ]
 examples = [
     { name = "matplotlib" },
@@ -1629,7 +1628,6 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'benchmarks'", specifier = ">=3.10.7" },
     { name = "matplotlib", marker = "extra == 'examples'", specifier = ">=3.10.7" },
     { name = "numpy", specifier = ">=2.3.4" },
-    { name = "scipy", marker = "extra == 'benchmarks'", specifier = ">=1.13" },
 ]
 provides-extras = ["examples", "benchmarks"]
 
