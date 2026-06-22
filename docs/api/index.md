@@ -15,12 +15,13 @@ up, and assumes the [notation](../notation.md).
 | define the ODE / observations | [Measurement](measurement/index.md) models |
 | choose a prior | [`IWP` / `MaternPrior` / `JointPrior`](priors/index.md) |
 | initialize the state | [`taylor_mode_initialization`](priors/index.md) |
-| calibrate uncertainty | [calibration guide](../calibration.md) |
+| calibrate posterior uncertainty (diffusion `sigma^2`) | [calibration guide](../calibration.md) |
+| fit ODE parameters to data (max-likelihood) | [`ODEFilter` / `fit` / `marginal_loglik`](inference/index.md) |
 
 ## Subpackages
 
 - **[Filters](filters/index.md)** — filtering / smoothing loops, corrections, adaptive control.
-- **[Inference](inference/index.md)** — square-root Gaussian algebra.
+- **[Inference](inference/index.md)** — ODE-parameter inference (`fit`, `marginal_loglik`, `ODEFilter`) and the square-root Gaussian algebra it builds on.
 - **[Measurement](measurement/index.md)** — ODE-information and observation models.
 - **[Priors](priors/index.md)** — Gauss–Markov process priors.
 

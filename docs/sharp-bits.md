@@ -46,7 +46,7 @@ are `jit`/`grad`/`vmap`-compatible, so any `jax.grad` over a solve works either 
 
 Diffusion calibration sizes the uncertainty, but a *dynamic* calibration absorbs
 model–data misfit into `sigma^2`. When you want the misfit to stay visible (e.g. in
-a likelihood), use `calibration="none"` and set the prior scale `Xi` deliberately.
+a likelihood), use `calibration="none"` and set the prior scale matrix `Xi` deliberately.
 See [Diffusion calibration](calibration.md).
 
 ## FAQ
@@ -55,7 +55,8 @@ See [Diffusion calibration](calibration.md).
 
 In order: (1) enable float64; (2) check `q` is not too high for the step size (very
 high order on a coarse grid is ill-conditioned); (3) make sure the initial
-covariance is sensible (`taylor_mode_initialization` gives a good one); (4) for
+covariance is sensible (`taylor_mode_initialization` pairs the mean with a
+zero/Dirac covariance); (4) for
 stiff problems, take smaller steps or use adaptive stepping.
 
 ### The uncertainty band looks far too tight (or too wide)

@@ -39,8 +39,9 @@ $$ A = A_{\text{sqr}}^{\top}\, A_{\text{sqr}}. $$
 To recover a covariance, multiply back: `P = P_sqr.T @ P_sqr`. To extract a standard
 deviation, take `np.sqrt(np.diag(P_sqr.T @ P_sqr))`. The filter never forms `P`
 explicitly — predictions and updates are QR-based operations on the factors
-(Krämer & Hennig 2024), which keeps covariances positive-definite and well
-conditioned even at high order `q`.
+(Krämer & Hennig 2024), which keeps the represented covariance positive-*semi*definite
+by construction (`P = P_sqr.T @ P_sqr` is a Gram matrix) and avoids ever forming the
+ill-conditioned dense `Q`, so the factors stay well conditioned even at high order `q`.
 
 ## Other conventions
 

@@ -5,7 +5,10 @@ The consolidated solver API: `gaussian_filter` (fixed grid),
 backward smoothing pass — all returning a single `FilterResult`. The
 linearization is a pluggable [`Correction`](../../corrections.md) (EK0 / EK1 /
 IEKF), and adaptive stepping uses a step-size controller (`PController` /
-`PIController`). See [How to choose](../../how-to-choose.md).
+`PIController`). Diffusion is calibrated per step by default
+(`calibration="dynamic"`, a scalar quasi-MLE), so the process noise is rescaled
+each step; pass `calibration="none"` for a fixed diffusion. See
+[How to choose](../../how-to-choose.md).
 
 Dispatch is automatic: a `PrecondIWP` / `PrecondMaternPrior` prior selects the
 preconditioned square-root recursion, and passing `obs_model=` adds a masked
@@ -21,12 +24,12 @@ named fields (recover a covariance with `P = P_sqr.T @ P_sqr`; see
 | --- | --- |
 | `t` | time grid |
 | `m`, `P_sqr` | **filtered** posterior mean and square-root covariance |
-| `log_likelihood` | scalar ODE-information log-marginal-likelihood |
+| `log_likelihood` | scalar **post-calibration** ODE-information log-marginal-likelihood (not comparable across `calibration` modes — each defines a different generative model) |
 | `log_likelihood_obs` | observation log-likelihood (`None` without `obs_model`) |
-| `m_pred`, `P_pred_sqr` | one-step predictions (before each update) |
+| `m_pred`, `P_pred_sqr` | one-step predictions before each update (`None` for the adaptive save-at solver) |
 | `G_back`, `d_back`, `P_back_sqr` | backward transitions consumed by `rts_smoother` |
-| `sigma_sqr` | per-step calibrated diffusion `sigma_hat^2` |
-| `success` | adaptive only: whether sub-stepping reached every save time (`None` for the fixed grid) |
+| `sigma_sqr` | per-step calibrated diffusion `sigma_hat^2` (`None` for the adaptive solver) |
+| `success` | adaptive only: whether sub-stepping reached every save time **and** the log-likelihood is finite (`None` for the fixed grid) |
 | `m_bar`, `P_bar_sqr`, `T` | preconditioned-space internals (`None` for a plain prior) |
 
 `gaussian_filter_adaptive` is **filtering-only by default** (`smoother=False`):

@@ -51,7 +51,11 @@ class FilterResult(NamedTuple):
         m: Filtered state means at ``t``, shape ``[K, state_dim]``.
         P_sqr: Square-root covariances at ``t``, shape
             ``[K, state_dim, state_dim]`` (``P = P_sqr.T @ P_sqr``).
-        log_likelihood: Marginal log-likelihood of the ODE-information residuals.
+        log_likelihood: Marginal log-likelihood of the ODE-information residuals,
+            taken *after* diffusion calibration. Because each ``calibration`` mode
+            defines a different generative model, this value is not comparable
+            across calibration modes (for data-driven model comparison use
+            ``log_likelihood_obs``).
         m_pred: Predicted (prior) means per step, ``[K-1, state_dim]`` (``None`` for
             the adaptive save-at solver, which keeps no backward pass).
         P_pred_sqr: Predicted square-root covariances per step.
@@ -91,10 +95,10 @@ class FilterResult(NamedTuple):
         P_bar_sqr: Preconditioned-space square-root covariances (``None`` for plain).
         T: Preconditioner matrix (``None`` for plain); presence selects the
             preconditioned smoother.
-        success: Scalar boolean -- whether an adaptive solve reached the final
-            save time (see :class:`AdaptiveSolveResult`). ``None`` for the
-            fixed-grid paths, which run a deterministic number of steps and
-            always complete.
+        success: Scalar boolean -- whether an adaptive solve reached every save
+            time *and* produced a finite log-likelihood (see
+            :class:`AdaptiveSolveResult`). ``None`` for the fixed-grid paths,
+            which run a deterministic number of steps and always complete.
     """
 
     t: Array

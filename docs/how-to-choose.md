@@ -1,8 +1,13 @@
 # How to choose
 
-`ode_filters` is a small menu of interchangeable components. This page turns that
-menu into decisions: for each axis, a default, when to deviate, and a comparison
-table. When in doubt, the defaults are good.
+`ode_filters` is a small menu of components. This page turns that menu into
+decisions: for each axis, a default, when to deviate, and a comparison table.
+When in doubt, the defaults are good.
+
+Not every combination is supported: preconditioned priors (`PrecondIWP` /
+`PrecondMaternPrior`) and the adaptive smoother (`smoother=True`) do not yet accept
+external observations (`obs_model`), and the `"diagonal"` / `"diagonal_ekf0"`
+calibration modes require the prior's `Xi` to be diagonal. See [Sharp bits](sharp-bits.md).
 
 ## TL;DR defaults
 
@@ -51,7 +56,7 @@ How the nonlinear vector field is linearized in the update — a pluggable
 
 | Correction | Cost | Use when |
 | --- | --- | --- |
-| **`TaylorCorrection(order=1)` (EK1)** | Jacobian per step | the default — most accurate |
+| **`TaylorCorrection(order=1)` (EK1)** | Jacobian per step | the default — generally more accurate per step (uses the full vector-field Jacobian) |
 | **`TaylorCorrection(order=0)` (EK0)** | no Jacobian | high-dimensional or expensive Jacobians; very robust |
 
 ## Stepping
