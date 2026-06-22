@@ -43,7 +43,7 @@ from scipy.integrate import solve_ivp
 from ode_filters import gaussian_filter
 from ode_filters.calibration import posthoc_mle_sigma_sqr, rescale_sqr_seq
 from ode_filters.filters import PIController
-from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
 from ode_filters.measurement import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
 
@@ -168,7 +168,7 @@ print(f"  endpoint L2 error = {err_diag:.3e}")
 # ---------------------------------------------------------------------------
 print("\nMode 4: adaptive step + online dynamic per-step")
 prior, mu0, S0, measure = _setup()
-r_adapt = ekf1_sqr_adaptive_loop(
+r_adapt = sqr_adaptive_loop(
     mu0,
     S0,
     prior,
@@ -200,7 +200,7 @@ print(f"  endpoint L2 error = {err_adapt:.3e}")
 # ---------------------------------------------------------------------------
 print("\nMode 5: adaptive step + online diagonal per-component")
 prior, mu0, S0, measure = _setup()
-r_adapt_diag = ekf1_sqr_adaptive_loop(
+r_adapt_diag = sqr_adaptive_loop(
     mu0,
     S0,
     prior,

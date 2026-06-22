@@ -18,7 +18,7 @@ Fair comparison notes:
 Run with: python benchmarks/benchmark_ode_solvers.py
 """
 
-from __future__ import annotations  # noqa: I001
+from __future__ import annotations
 
 import time
 from collections.abc import Callable
@@ -34,6 +34,10 @@ from scipy.integrate import solve_ivp
 from ode_filters import gaussian_filter
 from ode_filters.measurement import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
+
+# Standalone scripts do not see `conftest.py` (which enables float64 for tests);
+# without this the solvers run in float32 and hit a ~1e-6 round-off floor.
+jax.config.update("jax_enable_x64", True)
 
 
 # =============================================================================
