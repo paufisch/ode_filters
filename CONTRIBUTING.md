@@ -1,9 +1,9 @@
 # Contributing to ode_filters
 
-Contributions are very welcome! This guide covers the development setup and the
-conventions enforced by CI. The authoritative style rules live in
-[`CLAUDE.md`](CLAUDE.md); this file focuses on *how to get set up and submit a
-change*.
+Contributions are very welcome! This guide covers the development setup, the
+code conventions, and how to submit a change. The same checks run locally and
+in CI, so `uv run pre-commit run --all-files` together with `uv run pytest` is
+the whole story.
 
 ## Development setup
 
@@ -19,6 +19,27 @@ uv run pre-commit install    # install the git hook so checks run on every commi
 
 That's it -- `uv run <cmd>` always executes inside the managed environment, so
 you never need to activate a venv manually.
+
+## Code conventions
+
+Ruff (lint + format, line length 88) and pyright are the source of truth for
+mechanical style -- formatting, import order, and types are all checked by
+pre-commit, so you rarely need to think about them. A few conventions the tools
+do not enforce, but reviewers do:
+
+- **Python 3.13+ with JAX**: import the numpy API as `import jax.numpy as np`.
+- **Type hints**: `Array` for outputs, `ArrayLike` for array/scalar inputs
+  (see [Type checking](#type-checking)).
+- **Google-style docstrings, ASCII only** -- no Unicode math symbols.
+- **Keyword-only arguments** for anything that is not a primary positional
+  input: `def f(x, *, t):`.
+- **Naming**: `PascalCase` classes, `snake_case` functions and modules, a
+  leading underscore for private attributes.
+- **Covariances in square-root form**: store `A_sqr` where
+  `A = A_sqr.T @ A_sqr`.
+- **Immutable arrays**: update with `.at[idx].set(...)`, never in place.
+- **Prefer `E0`/`E1` projection matrices over `q`/`d` integers** in public API
+  signatures.
 
 ## Branching workflow
 
