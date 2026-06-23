@@ -1,28 +1,103 @@
-name: Publish
+# Automated release: tag + build + publish to PyPI + GitHub Release, triggered
+# by a merge to `main`.
+#
+# Flow (fully hands-off after the release PR merges):
+#   1. A release PR bumps `version` in pyproject.toml and dates the matching
+#      CHANGELOG section, then merges into `main`.
+#   2. CI ("CI" workflow) runs on the `main` push. THIS workflow is triggered by
+#      `workflow_run` only after CI *succeeds* -- so publishing is gated on green
+#      CI (lint, the full test matrix at 100% coverage, and a strict docs build).
+#   3. `detect` reads the pyproject version. If a `v<version>` tag already exists
+#      (every ordinary push to `main`), it stops -- idempotent, no double publish.
+#   4. `release` builds, smoke-tests the wheel + sdist, publishes to PyPI via
+#      trusted publishing (OIDC, no API token), then creates the `v<version>` tag
+#      and a GitHub Release whose notes are sliced from the CHANGELOG section.
+#
+# Notes for maintainers:
+#   * Keep this file named `pypi-publish.yml`: the PyPI trusted-publisher config
+#     pins the workflow *filename*. The trigger type does not matter to PyPI.
+#   * `workflow_run` only fires from the copy of this file on the DEFAULT branch
+#     (`main`), which is exactly where releases land.
+#   * The `release` job runs in the `pypi` environment. Add protection rules in
+#     repo Settings -> Environments -> pypi to gate the publish: a required
+#     reviewer (a human approval -- not hands-off) or a wait timer (a hands-off
+#     cancellation window). With no rules configured it is a no-op that still
+#     scopes the OIDC publish. Optionally pin the environment on PyPI too.
+#   * Edge case: if PyPI publish succeeds but the GitHub Release step fails, the
+#     tag is not created, so a re-run will retry the (now duplicate) upload and
+#     fail. Recover by creating the release/tag manually:
+#       gh release create v<version> --notes-file <(python .github/scripts/changelog_section.py <version>)
+
+name: Release
 
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
 
 concurrency:
-  group: publish-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
-  publish:
+  detect:
+    name: Detect new version
     runs-on: ubuntu-latest
+    # Gate on green CI: only a *successful* CI run from a *push* to `main`.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event == 'push'
     permissions:
-      id-token: write
       contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should_release: ${{ steps.tag.outputs.should_release }}
     steps:
-      - name: Checkout
+      - name: Checkout (the exact commit CI validated)
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Read version from pyproject.toml
+        id: version
+        run: |
+          VERSION=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "pyproject version: $VERSION"
+
+      - name: Decide whether to release (idempotency guard)
+        id: tag
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "Tag v${{ steps.version.outputs.version }} already exists; nothing to release."
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "No tag v${{ steps.version.outputs.version }} yet; will release."
+          fi
+
+  release:
+    name: Build, publish, and release
+    needs: detect
+    if: needs.detect.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    # Protection rules on this environment (if configured) gate the publish.
+    environment: pypi
+    permissions:
+      id-token: write # trusted publishing to PyPI (OIDC)
+      contents: write # push the tag + create the GitHub Release
+    steps:
+      - name: Checkout (the exact commit CI validated)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
-
-      - name: Install Python 3.13
-        run: uv python install 3.13
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
 
       - name: Build
         run: uv build
@@ -33,5 +108,15 @@ jobs:
       - name: Smoke test (source distribution)
         run: uv run --isolated --no-project --with dist/*.tar.gz python -c "import ode_filters"
 
-      - name: Publish
+      - name: Publish to PyPI
         run: uv publish
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/changelog_section.py "${{ needs.detect.outputs.version }}" > release-notes.md
+          gh release create "v${{ needs.detect.outputs.version }}" \
+            --target "${{ github.event.workflow_run.head_sha }}" \
+            --title "v${{ needs.detect.outputs.version }}" \
+            --notes-file release-notes.md

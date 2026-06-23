@@ -45,6 +45,7 @@ Homepage = "https://github.com/paufisch/ode_filters"
 Documentation = "https://paufisch.github.io/ode_filters/"
 Repository = "https://github.com/paufisch/ode_filters"
 Issues = "https://github.com/paufisch/ode_filters/issues"
+Changelog = "https://github.com/paufisch/ode_filters/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
