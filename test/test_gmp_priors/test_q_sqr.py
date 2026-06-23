@@ -11,6 +11,7 @@ import pytest
 
 from ode_filters.priors.gmp_priors import (
     IWP,
+    BasePrior,
     JointPrior,
     MaternPrior,
     PrecondIWP,
@@ -101,3 +102,70 @@ def test_precond_iwp_q_sqr_is_constant():
     prior = PrecondIWP(q=3, d=2)
     assert np.allclose(prior.Q_sqr(0.1), prior.Q_sqr(2.0))
     assert np.allclose(prior.Q_sqr().T @ prior.Q_sqr(), prior.Q())
+
+
+@pytest.mark.parametrize("prior_cls", [MaternPrior, PrecondMaternPrior])
+@pytest.mark.parametrize("q", [6, 8, 10, 12])
+@pytest.mark.parametrize("d", [1, 2])
+def test_matern_q_sqr_stable_at_high_order(prior_cls, q, d):
+    """Matern Q_sqr stays finite + upper-triangular well past q = 6.
+
+    The dense process-noise Q(h) loses positive-definiteness in float64 around
+    q >= 6, so the old dense-Cholesky Q_sqr returned NaN there. The square-root
+    matrix-fraction decomposition builds the factor directly (never factorizing
+    the dense Q) and stays finite up to the float64 order ceiling (~q = 18).
+    Regression for that NaN cliff.
+    """
+    prior = prior_cls(q=q, d=d, length_scale=1.0)
+    Q_sqr = prior.Q_sqr(0.1)
+    assert Q_sqr.shape == ((q + 1) * d, (q + 1) * d)
+    assert np.all(np.isfinite(Q_sqr)), f"{prior_cls.__name__} q={q} d={d}"
+    assert _is_upper_triangular(Q_sqr), f"{prior_cls.__name__} q={q} d={d}"
+
+
+class _DenseDefaultPrior(BasePrior):
+    """Minimal prior that does NOT override ``Q_sqr``.
+
+    Exercises the ``BasePrior.Q_sqr`` dense-Cholesky default, the documented
+    fallback for custom priors that lack a closed-form / structured square root
+    (every shipped prior overrides it).
+    """
+
+    def A(self, h):  # pragma: no cover - not exercised by the Q_sqr test
+        n = (self.q + 1) * self._dim
+        return np.eye(n)
+
+    def b(self, h):  # pragma: no cover - not exercised by the Q_sqr test
+        return self._b
+
+    def Q(self, h):
+        n = (self.q + 1) * self._dim
+        return h * np.eye(n)
+
+
+def test_base_prior_q_sqr_default_is_dense_cholesky():
+    """BasePrior.Q_sqr factorizes the dense Q (fallback for custom priors)."""
+    prior = _DenseDefaultPrior(q=2, d=1)
+    h = 0.3
+    Q_sqr = prior.Q_sqr(h)
+    assert _is_upper_triangular(Q_sqr)
+    assert np.allclose(Q_sqr.T @ Q_sqr, prior.Q(h))
+
+
+@pytest.mark.parametrize("q", [8, 12])
+def test_matern_q_sqr_quadrature_converged(q):
+    """The square-root MFD is converged in the quadrature node count ``n_quad``.
+
+    At high order the dense Q(h) is NaN, so it cannot serve as a reference; we
+    check self-consistency instead -- the reconstructed Q = Q_sqr.T @ Q_sqr must be
+    insensitive to ``n_quad`` (the default vs a finer rule agree to ~1e-12),
+    evidence that the quadrature has converged to the true integral. Also
+    exercises the ``n_quad`` constructor argument.
+    """
+    h = 0.1
+    coarse = MaternPrior(q=q, d=1, length_scale=1.0, n_quad=64).Q_sqr(h)
+    fine = MaternPrior(q=q, d=1, length_scale=1.0, n_quad=100).Q_sqr(h)
+    rel = np.linalg.norm(coarse.T @ coarse - fine.T @ fine) / np.linalg.norm(
+        fine.T @ fine
+    )
+    assert rel < 1e-9
