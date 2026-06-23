@@ -5,7 +5,7 @@ All notable changes to **ode-filters** are documented here. The format is based 
 to [Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes ship in a
 minor bump, non-breaking changes in a patch bump).
 
-## [0.7.1] - Unreleased
+## [0.7.1] - 2026-06-23
 
 Documentation, packaging, and API-surface polish on top of the 0.7.0 refactor.
 No breaking changes.
@@ -140,5 +140,5 @@ single consolidated solver API and a differentiable parameter-inference layer.
 part of the public API and is not jit/grad-able. Prefer `gaussian_filter_adaptive`.
 
 [res]: https://paufisch.github.io/ode_filters/api/filters/
-[0.7.1]: https://github.com/paufisch/ode_filters/compare/v0.7.0...HEAD
+[0.7.1]: https://github.com/paufisch/ode_filters/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/paufisch/ode_filters/compare/v0.6.6...v0.7.0
