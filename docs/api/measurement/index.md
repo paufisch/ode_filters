@@ -44,7 +44,10 @@ Additional constraints are added via frozen dataclasses:
 - **`Measurement`**: Time-varying observations `A @ x = z[t]` at specified times.
   These are *not* measure constraints; build an observation model with
   `prepare_observations([Measurement(...)], E0, ts)` and pass it as
-  `obs_model=` to the solver.
+  `obs_model=` to the solver. Note: `prepare_observations` requires all stacked
+  measurements to share the same observation times; a step where only some
+  measurements fire raises `NotImplementedError` (per-dimension masking is not
+  yet supported).
 
 ## Usage Examples
 
@@ -157,7 +160,7 @@ R = model.get_noise(t=0.0)
 
 ### Transformed Measurement Models
 
-`TransformedMeasurement` wraps any existing measurement model with a nonlinear state transformation `sigma(state)`. The Jacobian is computed correctly via the chain rule: `J_total = J_g(sigma(state)) @ J_sigma(state)`.
+`TransformedMeasurement` wraps any existing measurement model with a nonlinear state transformation `sigma(state)`. The Jacobian of the mean is composed correctly via the chain rule: `J_total = J_g(sigma(state)) @ J_sigma(state)`. Note, however, that only the mean/linearization is transformed: the measurement-noise covariance `R` is delegated to and taken unchanged from the base model (see `get_noise`), and is *not* propagated through `sigma`. `R` must therefore already be expressed in the base model's post-transform coordinates.
 
 **Use cases:**
 

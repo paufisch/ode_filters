@@ -137,7 +137,7 @@ def prepare_observations(
             "fixed-shape masked update: at some time step only a subset of the "
             "stacked measurements fire, which would corrupt the inactive rows. "
             "Use measurements that share the same observation times, or the "
-            "embedded-Measurement Python path (ekf1_sqr_adaptive_loop). "
+            "embedded-Measurement Python path (sqr_adaptive_loop). "
             "Per-dimension masking is planned."
         )
 
@@ -295,11 +295,11 @@ class BaseODEInformation(ABC):
     _d: int
     _state_dim: int
     _base_R: Array
-    _constraints: list[Conservation | Measurement]
+    _constraints: list[Conservation]
 
     def _init_constraints(
         self,
-        constraints: list[Conservation | Measurement] | None,
+        constraints: list[Conservation] | None,
     ) -> None:
         """Initialize constraint list and validate.
 
@@ -528,7 +528,9 @@ class ODEInformation(BaseODEInformation):
         vf: Vector field function vf(x, *, t) -> dx/dt.
         E0: State extraction matrix (shape [d, D]).
         E1: First derivative extraction matrix (shape [d, D]).
-        constraints: Optional list of Conservation and/or Measurement constraints.
+        constraints: Optional list of Conservation constraints. (Data observations
+            are *not* measure constraints -- pass them as an ``obs_model`` built
+            with ``prepare_observations``; a ``Measurement`` here raises TypeError.)
     """
 
     def __init__(
@@ -536,7 +538,7 @@ class ODEInformation(BaseODEInformation):
         vf: Callable[..., Array],
         E0: ArrayLike,
         E1: ArrayLike,
-        constraints: list[Conservation | Measurement] | None = None,
+        constraints: list[Conservation] | None = None,
     ):
         self._vf = vf
         self._E0 = np.asarray(E0)
@@ -570,7 +572,9 @@ class ODEInformationWithHidden(BaseODEInformation):
         E0: State extraction matrix for x (shape [d_x, D]).
         E1: First derivative extraction matrix (shape [d_x, D]).
         E0_hidden: Hidden state extraction matrix for u (shape [d_u, D]).
-        constraints: Optional list of Conservation and/or Measurement constraints.
+        constraints: Optional list of Conservation constraints. (Data observations
+            are *not* measure constraints -- pass them as an ``obs_model`` built
+            with ``prepare_observations``; a ``Measurement`` here raises TypeError.)
     """
 
     def __init__(
@@ -579,7 +583,7 @@ class ODEInformationWithHidden(BaseODEInformation):
         E0: ArrayLike,
         E1: ArrayLike,
         E0_hidden: ArrayLike,
-        constraints: list[Conservation | Measurement] | None = None,
+        constraints: list[Conservation] | None = None,
     ):
         self._vf = vf
         self._E0 = np.asarray(E0)
@@ -620,7 +624,9 @@ class SecondOrderODEInformation(BaseODEInformation):
         E0: State extraction matrix (shape [d, D]).
         E1: First derivative extraction matrix (shape [d, D]).
         E2: Second derivative extraction matrix (shape [d, D]).
-        constraints: Optional list of Conservation and/or Measurement constraints.
+        constraints: Optional list of Conservation constraints. (Data observations
+            are *not* measure constraints -- pass them as an ``obs_model`` built
+            with ``prepare_observations``; a ``Measurement`` here raises TypeError.)
     """
 
     def __init__(
@@ -629,7 +635,7 @@ class SecondOrderODEInformation(BaseODEInformation):
         E0: ArrayLike,
         E1: ArrayLike,
         E2: ArrayLike,
-        constraints: list[Conservation | Measurement] | None = None,
+        constraints: list[Conservation] | None = None,
     ):
         self._vf = vf
         self._E0 = np.asarray(E0)
@@ -669,7 +675,9 @@ class SecondOrderODEInformationWithHidden(BaseODEInformation):
         E1: First derivative extraction matrix (shape [d_x, D]).
         E2: Second derivative extraction matrix (shape [d_x, D]).
         E0_hidden: Hidden state extraction matrix for u (shape [d_u, D]).
-        constraints: Optional list of Conservation and/or Measurement constraints.
+        constraints: Optional list of Conservation constraints. (Data observations
+            are *not* measure constraints -- pass them as an ``obs_model`` built
+            with ``prepare_observations``; a ``Measurement`` here raises TypeError.)
     """
 
     def __init__(
@@ -679,7 +687,7 @@ class SecondOrderODEInformationWithHidden(BaseODEInformation):
         E1: ArrayLike,
         E2: ArrayLike,
         E0_hidden: ArrayLike,
-        constraints: list[Conservation | Measurement] | None = None,
+        constraints: list[Conservation] | None = None,
     ):
         self._vf = vf
         self._E0 = np.asarray(E0)

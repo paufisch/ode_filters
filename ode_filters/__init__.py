@@ -13,6 +13,8 @@ smoothers, and related utilities for inference in ordinary differential equation
 - ``priors``: Gaussian Markov process prior models.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from .calibration import (
     aggregate_sigma_sqr,
     posthoc_mle_sigma_sqr,
@@ -57,9 +59,15 @@ from .priors import (
     JointPrior,
     MaternPrior,
     PrecondIWP,
+    PrecondJointPrior,
     PrecondMaternPrior,
     taylor_mode_initialization,
 )
+
+try:
+    __version__ = version("ode-filters")
+except PackageNotFoundError:  # pragma: no cover - source checkout without metadata
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     "IWP",
@@ -79,10 +87,12 @@ __all__ = [
     "PIController",
     "PositiveReal",
     "PrecondIWP",
+    "PrecondJointPrior",
     "PrecondMaternPrior",
     "Real",
     "StepSizeController",
     "TaylorCorrection",
+    "__version__",
     "aggregate_sigma_sqr",
     "fit",
     "gaussian_filter",

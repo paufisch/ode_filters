@@ -28,7 +28,7 @@ import numpy as onp
 import pytest
 
 from ode_filters import gaussian_filter
-from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
 from ode_filters.measurement.measurement_models import (
     Conservation,
     ODEInformation,
@@ -166,10 +166,10 @@ class TestConservationInvariance:
         m_b = _sir_measure(prior, with_conservation=True)
         mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_sir, x0, prior.q)
 
-        res_a = ekf1_sqr_adaptive_loop(
+        res_a = sqr_adaptive_loop(
             mu_0, Sigma_0_sqr, prior, m_a, tspan, atol=1e-5, rtol=1e-3
         )
-        res_b = ekf1_sqr_adaptive_loop(
+        res_b = sqr_adaptive_loop(
             mu_0, Sigma_0_sqr, prior, m_b, tspan, atol=1e-5, rtol=1e-3
         )
 
@@ -333,7 +333,7 @@ class TestJointPriorDiagonalCalibration:
     @pytest.mark.parametrize("mode", ["diagonal", "diagonal_ekf0"])
     def test_adaptive_runs_and_shapes_correct(self, mode):
         joint, measure, mu_0, Sigma_0_sqr = _joint_setup()
-        result = ekf1_sqr_adaptive_loop(
+        result = sqr_adaptive_loop(
             mu_0,
             Sigma_0_sqr,
             joint,

@@ -109,7 +109,7 @@ class Correction(eqx.Module):
             P_pred_sqr: Predicted state covariance, square-root form.
             t: Current time.
         """
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover - abstract method
 
 
 class TaylorCorrection(Correction):

@@ -32,7 +32,7 @@ PreconditionedFilterStepResult = tuple[
 
 # All covariance matrices are saved and propagated in square-root form.
 # E.g. A = A_sqr.T @ A_sqr
-def ekf1_sqr_filter_step(
+def sqr_filter_step(
     A_t: Array,
     b_t: Array,
     Q_t_sqr: Array,
@@ -148,11 +148,11 @@ class _BarMeasure:
         return self._measure.ode_dim
 
 
-# Preconditioned version of ekf1_sqr_filter_step
+# Preconditioned version of sqr_filter_step
 # T is a preconditioner with x_bar = T^-1 x
 # A, Q and b are stepsize-independent in the transformed space
 # The stepsize dependence is essentially absorbed into T
-def ekf1_sqr_filter_step_preconditioned(
+def sqr_filter_step_preconditioned(
     A_bar: Array,
     b_bar: Array,
     Q_sqr_bar: Array,
@@ -255,7 +255,7 @@ def rts_sqr_smoother_step_preconditioned(
 # scheduling.
 
 
-def ekf1_sqr_filter_step_sequential_scan(
+def sqr_filter_step_sequential_scan(
     A_t: Array,
     b_t: Array,
     Q_t_sqr: Array,

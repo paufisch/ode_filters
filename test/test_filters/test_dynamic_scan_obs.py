@@ -1,4 +1,4 @@
-"""Tests for ekf1_sqr_loop_dynamic_scan with external observations (obs_model).
+"""Tests for sqr_loop_dynamic_scan with external observations (obs_model).
 
 The obs_model branch combines online sigma^2 calibration with masked
 observation updates -- the construction used for joint state-parameter
@@ -14,7 +14,7 @@ import jax.random as jrandom
 import numpy as onp
 import pytest
 
-from ode_filters.filters.ode_filter_loop import ekf1_sqr_loop_dynamic_scan
+from ode_filters.filters.ode_filter_loop import sqr_loop_dynamic_scan
 from ode_filters.measurement import (
     Measurement,
     ODEInformationWithHidden,
@@ -67,7 +67,7 @@ def test_hidden_parameter_converges(calibration):
     """The hidden decay rate is identified from noisy x-observations."""
     joint, measure, obs_model, mu_0, S_0 = _decay_setup()
 
-    result = ekf1_sqr_loop_dynamic_scan(
+    result = sqr_loop_dynamic_scan(
         mu_0,
         S_0,
         joint,
@@ -93,7 +93,7 @@ def test_obs_result_layout_and_likelihoods():
     """Obs branch returns the 14-element layout with finite likelihoods."""
     joint, measure, obs_model, mu_0, S_0 = _decay_setup()
 
-    result = ekf1_sqr_loop_dynamic_scan(
+    result = sqr_loop_dynamic_scan(
         mu_0,
         S_0,
         joint,
@@ -116,7 +116,7 @@ def test_no_obs_backward_compatible():
     """obs_model=None keeps the original 11-element DynamicScanLoopResult."""
     joint, measure, _obs, mu_0, S_0 = _decay_setup()
 
-    result = ekf1_sqr_loop_dynamic_scan(
+    result = sqr_loop_dynamic_scan(
         mu_0, S_0, joint, measure, TSPAN, N, calibration="dynamic"
     )
     assert len(result) == 11

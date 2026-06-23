@@ -1,8 +1,9 @@
 # Linearization Schemes (Corrections)
 
 A probabilistic ODE filter step has two independent concerns: *what* to observe
-(the measurement model -- the ODE residual, conservation laws, data) and *how* to
-linearize it for the Gaussian update. `ode_filters` separates these. The
+(the measurement model -- the ODE residual and conservation laws; external data
+observations are a separate `obs_model` path built with `prepare_observations`)
+and *how* to linearize it for the Gaussian update. `ode_filters` separates these. The
 measurement model owns the residual `g` and its Jacobian; a **`Correction`**
 strategy owns the predicted-mean -> updated-posterior transition. Any measurement
 model composes with any correction.
@@ -15,7 +16,8 @@ reproduces the historical behavior exactly.
 
 `TaylorCorrection(order=0)` -- the zeroth-order linearization (EK0): the vector
 field is treated as locally constant, so the ODE-defect rows of the Jacobian
-reduce to the selection matrix `E1` (no vector-field Jacobian). EK0 is cheaper --
+reduce to the selection matrix `E_constraint` (`E1` for first-order systems, `E2`
+for second-order; no vector-field Jacobian). EK0 is cheaper --
 no Jacobian -- and is the classic `EK0` / `ts0` solver.
 
 `IteratedTaylorCorrection(max_iters=k)` -- the iterated EKF (IEKF): a single

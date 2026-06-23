@@ -4,11 +4,15 @@ A worked example of the Layer-2 inference API: fit the decay rate ``lam`` in
 ``dx/dt = -lam * x`` to noisy observations of ``x(t)`` by maximizing the data
 marginal log-likelihood with Optax.
 
+Requires the inference extra: ``pip install ode-filters[inference]`` (or
+``uv sync --group dev`` in a source checkout).
+
 Run with: ``uv run python examples/parameter_estimation.py``
 """
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as np
 import jax.random as jrandom
 import optax
@@ -16,6 +20,8 @@ import optax
 from ode_filters import ODEFilter, fit
 from ode_filters.measurement import Measurement, prepare_observations
 from ode_filters.priors import IWP
+
+jax.config.update("jax_enable_x64", True)
 
 X0 = 2.0
 LAM_TRUE = 0.8

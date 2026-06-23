@@ -1,11 +1,41 @@
 # Changelog
 
-All notable changes to **ode-filters** are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
-[Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes ship in a
-minor bump).
+All notable changes to **ode-filters** are documented here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
+to [Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes ship in a
+minor bump, non-breaking changes in a patch bump).
 
-## [0.7.0] - Unreleased
+## [0.7.1] - 2026-06-23
+
+Documentation, packaging, and API-surface polish on top of the 0.7.0 refactor.
+No breaking changes.
+
+### Added
+
+- `PrecondJointPrior` is now exported from the top-level `ode_filters` namespace
+  (previously importable only from `ode_filters.priors`, even though the solver
+  already dispatched on it).
+- `ode_filters.__version__`.
+- An `inference` optional-dependency extra (`pip install ode-filters[inference]` --
+  NumPyro / BlackJAX / Optax) for the `examples/` parameter-inference scripts, which
+  now also enable `jax_enable_x64`.
+
+### Changed
+
+- Narrowed the ODE-information `constraints=` parameter type to
+  `list[Conservation] | None` (a `Measurement` was already rejected at runtime).
+
+### Fixed
+
+- Documentation accuracy: `FilterResult.log_likelihood` is documented as the
+  post-calibration ODE-residual marginal likelihood (not comparable across
+  calibration modes); `success` also requires a finite log-likelihood; the adaptive
+  solver's `log_likelihood_obs` is always `None` (its observation likelihood is
+  folded into `log_likelihood`). Documented the Matern high-smoothness (`q >= 6`)
+  dense-`Q` limitation. Removed overclaiming / "calibrated-guarantee" framing across
+  the guides and example notebooks.
+
+## [0.7.0] - 2026-06-20
 
 A major refactor that re-scopes the library from "a square-root EK1 + RTS solver"
 into a **pluggable Gaussian-filtering inference substrate**: the measurement
@@ -13,38 +43,40 @@ model and the linearization scheme are now independent, pluggable axes, with a
 single consolidated solver API and a differentiable parameter-inference layer.
 
 > **Upgrading:** this release intentionally makes a clean break (no deprecation
-> aliases). See **Migration** below.
+> aliases) -- every entry under **Changed** and **Removed** below is breaking. The
+> Python requirement is unchanged (`>=3.13`). See **Migration** at the end.
 
-### Breaking
+### Changed
 
 - **Consolidated solver API.** The `ekf1_sqr_loop*` family
   (`{plain/preconditioned} x {joint/sequential} x {for-loop/scan}`) is replaced
   by three auto-dispatching entry points returning a single
   [`FilterResult`][res] NamedTuple:
-  - `ekf1_sqr_loop*` → **`gaussian_filter`** (preconditioning is selected from
+  - `ekf1_sqr_loop*` -> **`gaussian_filter`** (preconditioning is selected from
     the prior type; observations via `obs_model=`; linearization via
     `correction=`).
-  - `ekf1_sqr_adaptive_loop` → **`gaussian_filter_adaptive`** (jit/vmap/grad-safe
+  - `ekf1_sqr_adaptive_loop` -> **`gaussian_filter_adaptive`** (jit/vmap/grad-safe
     save-at-grid solver).
-  - `rts_sqr_smoother_loop*` → **`rts_smoother(prior, result)`**.
-- **Return types changed** from wide positional tuples to the named
+  - `rts_sqr_smoother_loop*` -> **`rts_smoother(prior, result)`**.
+- **Return types** changed from wide positional tuples to the named
   `FilterResult`. Index results by name (`result.m`, `result.P_sqr`,
   `result.log_likelihood`, ...) instead of by position. `AdaptiveLoopResult` is
   no longer a public export.
+
+### Removed
+
 - **Low-level loop variants removed entirely** (not just de-exported): the
   non-scan and sequential `ekf1_sqr_loop*` variants no longer exist, even via
   submodule import. The surviving internal scan loops live in
   `ode_filters.filters.{ode_filter_loop,ode_filter_step,ode_filter_adaptive}`
   and are implementation detail, not public API.
-- **Measurement factory family removed:** `ODEmeasurement`,
-  `ODEconservationmeasurement`, `SecondOrderODEmeasurement`,
-  `SecondOrderODEconservationmeasurement`, and `build_obs_at_time`. Use
-  `ODEInformation` / `ODEconservation` for the model, and `prepare_observations`
-  → `ObsModel` for data.
-- **`calibration="cumulative"` removed** (non-Markovian global-sigma
-  post-multiply; superseded by `diagonal_ekf0`). Valid modes are now
-  `"dynamic"` / `"diagonal"` / `"diagonal_ekf0"` / `"none"`.
-- **Python requirement** remains `>=3.13`.
+- **Measurement factory family:** `ODEmeasurement`, `ODEconservationmeasurement`,
+  `SecondOrderODEmeasurement`, `SecondOrderODEconservationmeasurement`, and
+  `build_obs_at_time`. Use `ODEInformation` / `ODEconservation` for the model,
+  and `prepare_observations` -> `ObsModel` for data.
+- **`calibration="cumulative"`** (non-Markovian global-sigma post-multiply;
+  superseded by `diagonal_ekf0`). Valid modes are now `"dynamic"` / `"diagonal"`
+  / `"diagonal_ekf0"` / `"none"`.
 
 ### Added
 
@@ -62,13 +94,18 @@ single consolidated solver API and a differentiable parameter-inference layer.
   (Not supported together with `obs_model` yet.)
 - **`FilterResult.success`** — whether an adaptive solve reached every save time.
 - **Square-root process noise `prior.Q_sqr(h)`** (closed form for `IWP` /
-  `PrecondIWP`); the filter no longer Choleskys a dense, ill-conditioned `Q(h)`.
+  `PrecondIWP`); the IWP filter path no longer Choleskys a dense, ill-conditioned
+  `Q(h)`.
 - **Block-aware post-hoc calibration:** `rescale_sqr` / `rescale_sqr_seq` accept
   `prior=` to scale only the ODE-state block for `JointPrior` / `PrecondJointPrior`.
 - Matern (`MaternPrior`, `PrecondMaternPrior`) and `JointPrior` latent-force
   priors (+ preconditioned variants); conservation-law and black-box / transformed
   measurement models; work-precision benchmark vs probdiffeq / Diffrax.
 - A `benchmarks` optional-dependency extra (`pip install ode-filters[benchmarks]`).
+- **Reverse-mode autodiff is regression-tested** across the full
+  `{plain, preconditioned} x {EK0, EK1, IEKF}` matrix, the RTS smoother, the
+  adaptive solver, and `marginal_loglik` (`test/test_filters/test_grad_safety.py`);
+  square-root predict/update are pinned against a dense moment-form Kalman oracle.
 
 ### Fixed
 
@@ -85,13 +122,6 @@ single consolidated solver API and a differentiable parameter-inference layer.
   corrupting inactive channels. (The full per-dimension fix is on the backlog.)
 - Declared `scipy` (a test dependency) explicitly; dropped a defunct `polyfill.io`
   reference from the docs build.
-
-### Notes
-
-- Reverse-mode autodiff is now regression-tested across the full
-  `{plain, preconditioned} x {EK0, EK1, IEKF}` matrix, the RTS smoother, the
-  adaptive solver, and `marginal_loglik` (`test/test_filters/test_grad_safety.py`).
-- Square-root predict/update are pinned against a dense moment-form Kalman oracle.
 
 ### Migration
 
@@ -110,4 +140,5 @@ single consolidated solver API and a differentiable parameter-inference layer.
 part of the public API and is not jit/grad-able. Prefer `gaussian_filter_adaptive`.
 
 [res]: https://paufisch.github.io/ode_filters/api/filters/
-[0.7.0]: https://github.com/paufisch/ode_filters/compare/v0.6.6...HEAD
+[0.7.1]: https://github.com/paufisch/ode_filters/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/paufisch/ode_filters/compare/v0.6.6...v0.7.0

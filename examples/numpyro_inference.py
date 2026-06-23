@@ -5,11 +5,15 @@ observations. The differentiable :func:`ode_filters.marginal_loglik` enters the
 NumPyro model via ``numpyro.factor``; NumPyro handles the constrained ``LogNormal``
 prior and its reparameterization automatically.
 
+Requires the inference extra: ``pip install ode-filters[inference]`` (or
+``uv sync --group dev`` in a source checkout).
+
 Run with: ``uv run python examples/numpyro_inference.py``
 """
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as np
 import jax.random as jr
 import numpyro
@@ -19,6 +23,8 @@ from numpyro.infer import MCMC, NUTS
 from ode_filters import InferenceProblem, marginal_loglik
 from ode_filters.measurement import Measurement, ODEInformation, prepare_observations
 from ode_filters.priors import IWP
+
+jax.config.update("jax_enable_x64", True)
 
 X0, LAM_TRUE, TSPAN, N, NOISE = 2.0, 0.8, (0.0, 5.0), 100, 0.02
 

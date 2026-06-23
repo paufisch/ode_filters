@@ -4,8 +4,8 @@ Probabilistic ODE filters quantify uncertainty by propagating a Gaussian
 covariance. The *magnitude* of that covariance is governed by a scalar
 diffusion `sigma^2` on top of the prior's structural scale matrix `Xi`. The
 filter is correct in the mean even with `sigma = 1`, but the posterior
-uncertainty is honestly scaled only when `sigma^2` is calibrated from the
-observed ODE residuals.
+uncertainty is scaled to match the residual magnitude only when `sigma^2` is
+calibrated from the observed ODE residuals.
 
 The `ode_filters.calibration` subpackage provides three estimators that all
 consume the predicted-observation marginal `(m_z, P_z_sqr)` already returned
@@ -44,7 +44,7 @@ result = gaussian_filter(mu_0, S0, prior, measure, (0.0, 5.0), N=50, calibration
 
 sigma_sqr_hat = posthoc_mle_sigma_sqr(result.mz, result.Pz_sqr)
 
-# Rescale stored covariances in-place.
+# Rescale stored covariances (returns a new array; result.P_sqr is unchanged).
 P_seq_sqr_calibrated = rescale_sqr_seq(result.P_sqr, sigma_sqr_hat)
 ```
 
@@ -85,13 +85,13 @@ result = gaussian_filter_adaptive(
 ```
 
 For the per-step `sigma_sqr_seq` diagnostics on the accepted-step trajectory,
-use the lower-level trajectory driver `ekf1_sqr_adaptive_loop` from the
+use the lower-level trajectory driver `sqr_adaptive_loop` from the
 submodule (see [Adaptive Step-Size Control](adaptive-steps.md)):
 
 ```python
-from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
 
-traj = ekf1_sqr_adaptive_loop(
+traj = sqr_adaptive_loop(
     mu_0, S0, prior, measure, (0.0, 5.0), atol=1e-5, rtol=1e-3,
 )
 # traj.sigma_sqr_seq holds the per-step estimates.

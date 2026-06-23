@@ -9,7 +9,7 @@ packages = ["ode_filters"]
 [project]
 name = "ode-filters"
 authors = [{name="Paul Fischer"}]
-version = "0.7.0"
+version = "0.7.1"
 description = "Probabilistic ODE solvers using square-root Gaussian filtering and smoothing in JAX."
 readme = "README.md"
 license = "MIT"
@@ -33,16 +33,19 @@ classifiers = [
 [project.optional-dependencies]
 # `pip install ode-filters[examples]` to run the example notebooks locally.
 examples = ["matplotlib>=3.10.7"]
-# `pip install ode-filters[benchmarks]` to run the work-precision / calibration
-# benchmarks in `benchmarks/`, which compare against classical (Diffrax) and
-# reference (SciPy) solvers.
-benchmarks = ["diffrax>=0.6", "scipy>=1.13", "matplotlib>=3.10.7"]
+# `pip install ode-filters[inference]` to run the parameter-inference example
+# scripts in `examples/` (Optax-based `fit`, NumPyro / BlackJAX posterior sampling).
+inference = ["blackjax>=1.2.0", "numpyro>=0.16.0", "optax>=0.2.0"]
+# `pip install ode-filters[benchmarks]` to run the work-precision benchmark in
+# `benchmarks/`, which compares against probdiffeq and the classical Diffrax solver.
+benchmarks = ["diffrax>=0.6", "matplotlib>=3.10.7"]
 
 [project.urls]
 Homepage = "https://github.com/paufisch/ode_filters"
 Documentation = "https://paufisch.github.io/ode_filters/"
 Repository = "https://github.com/paufisch/ode_filters"
 Issues = "https://github.com/paufisch/ode_filters/issues"
+Changelog = "https://github.com/paufisch/ode_filters/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
@@ -74,7 +77,9 @@ docs = [
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
-addopts = "--cov=ode_filters --cov-report=term-missing"
+# --cov-fail-under=100 gates the suite at full line coverage (local + CI; the CI
+# command appends its own --cov-report=xml on top of these defaults).
+addopts = "--cov=ode_filters --cov-report=term-missing --cov-fail-under=100"
 
 [tool.ruff]
 target-version = "py313"

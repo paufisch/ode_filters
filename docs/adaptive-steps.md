@@ -66,7 +66,7 @@ m_smooth, P_smooth_sqr = rts_smoother(prior, result)
 
 `gaussian_filter_adaptive` reports the solution on `save_at` only; it does not
 expose the accepted step sizes, the reject count, or the per-accepted-step
-diffusion trace. For those diagnostics, drop down to `ekf1_sqr_adaptive_loop`.
+diffusion trace. For those diagnostics, drop down to `sqr_adaptive_loop`.
 This is an **internal driver** (not part of the public API and *not*
 `jit`/`grad`-able — it is a plain Python `while` loop with a data-dependent step
 count); it is retained for these dense per-step diagnostics and for the
@@ -74,9 +74,9 @@ count); it is retained for these dense per-step diagnostics and for the
 smoother on a fixed grid, prefer `gaussian_filter_adaptive`.
 
 ```python
-from ode_filters.filters.ode_filter_adaptive import ekf1_sqr_adaptive_loop
+from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
 
-traj = ekf1_sqr_adaptive_loop(
+traj = sqr_adaptive_loop(
     mu_0, S0, prior, measure, (0.0, 5.0),
     atol=1e-5, rtol=1e-3,
 )
@@ -185,12 +185,21 @@ Both controllers expose `safety`, `min_factor`, and `max_factor`. The
 step-ratio is clipped to `[min_factor, max_factor]` last, after all gain
 terms.
 
-## Step bounds
+## Step bounds and failure
 
-- `h_init`: first step. Defaults to one hundredth of the span.
-- `h_min`: integrating below this raises `RuntimeError`. Triggered when the
-  prior order is too low for the requested tolerance.
-- `h_max`: cap on any proposed step. Defaults to the full span.
+`gaussian_filter_adaptive` exposes a single step knob, `h_init` (the first step,
+defaulting to one hundredth of the span), alongside `max_steps`. It never raises on
+a stalled solve: if it cannot reach a save time within `max_steps`, it sets
+`result.success = False` and holds the last accepted state at the stalled time
+(`success` is `True` only when every save interval was reached *and* the
+log-likelihood is finite).
+
+The internal `sqr_adaptive_loop` driver additionally takes `h_min` (default
+`1e-10`) and `h_max` (default the full span): it caps every proposed step at
+`h_max` and raises `RuntimeError` if the controller proposes a step below `h_min`
+or if `max_steps` is exceeded. A sub-`h_min` step can arise whenever the controller
+keeps shrinking `h` to meet the tolerance — e.g. the prior order is too low for the
+requested tolerance, or during a stiff transient.
 
 ## Diagnostics
 
@@ -198,19 +207,23 @@ The per-step diagnostics live on the trajectory driver's `AdaptiveLoopResult`
 (`traj` above), not on the `FilterResult` from `gaussian_filter_adaptive`.
 
 Every accepted step records its per-step quasi-MLE in `traj.sigma_sqr_seq`.
-A well-specified problem produces $\widehat{\sigma}^2_n$ values that stay
-within an order of magnitude; large spikes indicate the prior is too smooth
-for that regime (often during a stiff transient -- this is fine; the
-controller responds by shrinking `h`).
+On well-behaved problems the $\widehat{\sigma}^2_n$ values tend to stay within
+roughly an order of magnitude, though the per-step spread grows for
+low-dimensional systems (the estimator has relative noise $\sim\!\sqrt{2/d}$).
+Large, persistent spikes often indicate the prior is too smooth for that regime
+(e.g. during a stiff transient -- this is fine; the controller responds by
+shrinking `h`).
 
 `traj.h_seq` plotted against `traj.t_seq[:-1]` shows how the controller
 adapted -- big steps on smooth stretches, small steps near features.
 
 ## Calibration off
 
-Pass `calibration="none"` to skip the rescaling of stored covariances. The
-per-step quasi-MLE is still computed and returned for diagnostics, but the
-posterior covariances are reported uncalibrated. Useful for testing.
+Pass `calibration="none"` to skip the rescaling of stored covariances; the
+posterior covariances are then reported uncalibrated. Useful for testing. Note
+that `gaussian_filter_adaptive` does not return the per-step estimates either way
+(`FilterResult.sigma_sqr` is `None` for the adaptive solver) — for the per-step
+quasi-MLE trace, drop down to `sqr_adaptive_loop`'s `traj.sigma_sqr_seq` (see above).
 
 ## See also
 

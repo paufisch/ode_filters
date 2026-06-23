@@ -5,6 +5,9 @@ observations, using the differentiable :func:`ode_filters.marginal_loglik` as th
 likelihood. BlackJAX samples in *unconstrained* space, so we parameterize
 ``lam = softplus(log_lam)`` with a standard-normal prior on ``log_lam``.
 
+Requires the inference extra: ``pip install ode-filters[inference]`` (or
+``uv sync --group dev`` in a source checkout).
+
 Run with: ``uv run python examples/blackjax_inference.py``
 """
 
@@ -18,6 +21,8 @@ import jax.random as jr
 from ode_filters import InferenceProblem, marginal_loglik
 from ode_filters.measurement import Measurement, ODEInformation, prepare_observations
 from ode_filters.priors import IWP
+
+jax.config.update("jax_enable_x64", True)
 
 X0, LAM_TRUE, TSPAN, N, NOISE = 2.0, 0.8, (0.0, 5.0), 100, 0.02
 

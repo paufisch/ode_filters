@@ -497,7 +497,16 @@ def _matern_companion_form(length_scale: float, q: int) -> tuple[Array, Array, A
 
 
 class MaternPrior(BasePrior):
-    """Matern Gaussian process prior model using block matrix exponential."""
+    """Matern Gaussian process prior model using block matrix exponential.
+
+    Note:
+        Unlike ``IWP``, the Matern process noise ``Q(h)`` is derived from a block
+        matrix exponential and factorized via a (jittered) Cholesky rather than a
+        closed-form square root. At high smoothness (roughly ``q >= 6``) that dense
+        ``Q`` loses positive-definiteness in float64 and ``Q_sqr`` can return
+        ``NaN``. Prefer ``q <= 4`` for Matern priors, or use ``IWP`` / ``PrecondIWP``
+        (closed-form ``Q_sqr``) when you need higher orders.
+    """
 
     def __init__(
         self,
@@ -625,6 +634,12 @@ class PrecondMaternPrior(BasePrior):
     Uses the same diagonal preconditioner D(h) as PrecondIWP, but the
     preconditioned transition A_bar(h) and diffusion Q_bar(h) are
     stepsize-dependent (they converge to the IWP constants as h -> 0).
+
+    Note:
+        Like ``MaternPrior``, the underlying ``expm``-derived ``Q`` is Cholesky-
+        factorized and can return ``NaN`` at high smoothness (roughly ``q >= 6``);
+        preconditioning does not rescue this. Prefer ``q <= 4``, or ``PrecondIWP``
+        for higher orders.
 
     Args:
         q: Smoothness order (nu = q + 1/2).
