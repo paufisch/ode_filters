@@ -5,6 +5,35 @@ All notable changes to **ode-filters** are documented here. The format is based 
 to [Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes ship in a
 minor bump, non-breaking changes in a patch bump).
 
+## [Unreleased]
+
+### Added
+
+- `MaternPrior` / `PrecondMaternPrior` accept an `n_quad` keyword argument
+  controlling the Gauss-Legendre node count of the new square-root process-noise
+  decomposition (default 64, robust to the float64 order ceiling).
+
+### Changed
+
+- `MaternPrior.Q_sqr` / `PrecondMaternPrior.Q_sqr` now compute the square-root
+  process noise by a square-root matrix-fraction decomposition (QR of the
+  Gauss-Legendre-propagated rank-1 diffusion) in length-scale-normalized
+  coordinates, instead of a Cholesky of the dense `expm`-derived `Q(h)`. The factor
+  the square-root filter consumes stays finite and accurate up to the float64 order
+  ceiling (~`q = 18`) rather than NaN-ing around `q >= 6`; results match the old
+  path (to ~1e-13) wherever it was valid. The dense `Q(h)` itself is unchanged
+  (still ill-conditioned at high `q` -- prefer `Q_sqr` downstream).
+
+### Fixed
+
+- `IWP` / `PrecondIWP` now factor the constant Hilbert `Q_bar` with a closed-form
+  square-root factor (exact integer-factorial formula, re-triangularized via QR)
+  instead of a numerical Cholesky that lost positive-definiteness and returned `NaN`
+  around `q >= 13`. The factor now stays finite and reconstructs `Q_bar` to machine
+  precision well past `q = 20` (matching `probdiffeq` and `ProbNumDiffEq.jl`, which
+  both use closed-form IWP factors); results are unchanged for `q <= 12`. A cheap
+  construction-time finiteness guard remains as a defensive backstop.
+
 ## [0.7.1] - 2026-06-23
 
 Documentation, packaging, and API-surface polish on top of the 0.7.0 refactor.
@@ -140,5 +169,6 @@ single consolidated solver API and a differentiable parameter-inference layer.
 part of the public API and is not jit/grad-able. Prefer `gaussian_filter_adaptive`.
 
 [res]: https://paufisch.github.io/ode_filters/api/filters/
+[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.7.1...HEAD
 [0.7.1]: https://github.com/paufisch/ode_filters/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/paufisch/ode_filters/compare/v0.6.6...v0.7.0
