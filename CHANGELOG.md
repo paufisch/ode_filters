@@ -9,6 +9,17 @@ minor bump, non-breaking changes in a patch bump).
 
 ### Added
 
+- `IOUPPrior` -- an integrated Ornstein-Uhlenbeck process prior (Bosch, Hennig &
+  Tronarp, *Probabilistic Exponential Integrators*, NeurIPS 2023), exported at the
+  top level. Its highest derivative follows linear dynamics `dY^(q) = R Y^(q) dt + dW`
+  with a constant `rate` `R` (scalar, per-dimension vector, or full `d x d` matrix);
+  baking the ODE's linear part into the prior turns the solver into a probabilistic
+  exponential integrator (markedly better on stiff / semi-linear problems). It is a
+  drop-in prior: the measurement model and the filter/smoother recursion are
+  unchanged, and `Q_sqr(h)` reuses the same square-root matrix-fraction decomposition
+  as `MaternPrior`. `IWP` is the `rate = 0` special case. (The re-linearized
+  exponential-Rosenbrock variant, which needs per-step re-discretisation, is not
+  included.)
 - `MaternPrior` / `PrecondMaternPrior` accept an `n_quad` keyword argument
   controlling the Gauss-Legendre node count of the new square-root process-noise
   decomposition (default 64, robust to the float64 order ceiling).

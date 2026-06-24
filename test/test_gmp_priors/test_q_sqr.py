@@ -12,6 +12,7 @@ import pytest
 from ode_filters.priors.gmp_priors import (
     IWP,
     BasePrior,
+    IOUPPrior,
     JointPrior,
     MaternPrior,
     PrecondIWP,
@@ -35,10 +36,24 @@ def _priors():
         ("Matern q=2 d=1", MaternPrior(q=2, d=1, length_scale=1.0), 0.3),
         ("Matern q=2 d=2", MaternPrior(q=2, d=2, length_scale=1.5), 0.25),
         ("PrecondMatern q=2 d=2", PrecondMaternPrior(q=2, d=2, length_scale=1.5), 0.2),
+        ("IOUP q=2 d=1 scalar", IOUPPrior(q=2, d=1, rate=-2.0), 0.25),
+        (
+            "IOUP q=2 d=2 matrix Xi",
+            IOUPPrior(q=2, d=2, rate=np.array([[-2.0, 1.0], [0.0, -3.0]]), Xi=xi_full),
+            0.2,
+        ),
         (
             "JointPrior IWP+IWP",
             JointPrior(IWP(q=2, d=2), IWP(q=1, d=1)),
             0.25,
+        ),
+        (
+            "JointPrior IOUP+IWP",
+            JointPrior(
+                IOUPPrior(q=2, d=2, rate=np.array([[-2.0, 0.5], [0.0, -3.0]])),
+                IWP(q=0, d=1, Xi=1e-3 * np.eye(1)),
+            ),
+            0.2,
         ),
         (
             "PrecondJointPrior",

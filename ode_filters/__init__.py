@@ -56,6 +56,7 @@ from .measurement import (
 )
 from .priors import (
     IWP,
+    IOUPPrior,
     JointPrior,
     MaternPrior,
     PrecondIWP,
@@ -75,6 +76,7 @@ __all__ = [
     "Correction",
     "CorrectionResult",
     "FilterResult",
+    "IOUPPrior",
     "InferenceProblem",
     "IteratedTaylorCorrection",
     "JointPrior",
