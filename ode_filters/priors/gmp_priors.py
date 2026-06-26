@@ -346,7 +346,11 @@ def _check_iwp_q_bar_factor(factor: Array, q: int) -> None:
     pathological non-finite factor fails loudly instead of silently propagating a
     ``NaN`` into a solve.
     """
-    if not bool(np.all(np.isfinite(factor))):  # pragma: no cover - defensive backstop
+    try:
+        all_finite = bool(np.all(np.isfinite(factor)))
+    except jax.errors.TracerBoolConversionError:
+        return  # inside a JIT trace; factor is abstract, skip the check
+    if not all_finite:  # pragma: no cover - defensive backstop
         raise ValueError(
             f"IWP order q={q} produced a non-finite square-root factor for the "
             "integrated-Wiener process noise. Reduce q (q <= 20 is reliable in "
@@ -587,7 +591,7 @@ def _make_matern_sqr_noise(
     ``gl_weights`` the Gauss-Legendre nodes/weights on ``[-1, 1]``.
     """
     D = q + 1
-    lam = float(np.sqrt((2.0 * q + 1.0) / length_scale))
+    lam = np.sqrt((2.0 * q + 1.0) / length_scale)
 
     M = np.zeros((D, D))
     for i in range(D - 1):
