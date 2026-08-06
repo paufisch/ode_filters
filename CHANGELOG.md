@@ -9,6 +9,21 @@ minor bump, non-breaking changes in a patch bump).
 
 ### Added
 
+- `marginal_loglik(..., channel=...)` selects which evidence channel to return:
+  `"obs"` (default, unchanged -- the data evidence / Fenrir objective), `"ode"`
+  (the ODE-defect residual evidence, which needs no observations), or `"both"`
+  (the `(ll_ode, ll_obs)` pair). Methods that weight the two channels separately
+  -- split / hybrid / tiered hyperparameter selection -- need the pair, and
+  previously had to call `gaussian_filter` directly to get it. Note the two are
+  sums over *different* numbers of terms (`N` filter steps vs `K` observations),
+  so the raw sum makes the residual channel's influence scale with grid density.
+- `InferenceProblem.prior_fn`, an optional `theta -> prior` callable for fitting
+  the *prior's* hyperparameters (diffusion scale, length scale) rather than --
+  or in addition to -- vector-field parameters. When set it takes precedence
+  over the static `prior` and is evaluated inside the traced region, so the
+  hyperparameters are differentiated. Defaults to `None` (static prior,
+  behaviour unchanged).
+
 - `IOUPPrior` -- an integrated Ornstein-Uhlenbeck process prior (Bosch, Hennig &
   Tronarp, *Probabilistic Exponential Integrators*, NeurIPS 2023), exported at the
   top level. Its highest derivative follows linear dynamics `dY^(q) = R Y^(q) dt + dW`
