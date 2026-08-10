@@ -26,6 +26,26 @@ minor bump, non-breaking changes in a patch bump).
 
 ### Fixed
 
+- **Every prior is constructible from traced hyperparameters again.** Two
+  construction-time defects introduced with the square-root process-noise work
+  above made `jax.jit` / `jax.grad` over a prior's own hyperparameters raise, which
+  breaks gradient-based hyperparameter inference — the library's primary use case —
+  for `IWP`, `PrecondIWP`, `MaternPrior`, `PrecondMaternPrior`, and any `JointPrior`
+  built from them. Eager construction was unaffected, which is why the suite did not
+  catch it.
+  - The `Q_bar` finiteness backstop tested a JAX array with a Python `bool()`,
+    raising `TracerBoolConversionError` for any traced `Xi`. It is now skipped under
+    tracing (where it cannot be evaluated) and keeps its eager behaviour, which is
+    where a pathological `q` would be introduced.
+  - `_make_matern_sqr_noise` cast `lambda = sqrt((2q+1)/length_scale)` with
+    `float()`, raising `ConcretizationTypeError` for a traced `length_scale`. The
+    cast was unnecessary — nothing downstream needs a concrete value — and is
+    removed, so `length_scale` is differentiable again.
+  - Regression coverage: `test/test_gmp_priors/test_traced_construction.py`
+    constructs every prior under `jit`/`grad` and pins `grad` against central finite
+    differences, so a future cast that silently *freezes* a hyperparameter (rather
+    than raising) fails too. This is the prior-construction analogue of
+    `test/test_filters/test_grad_safety.py`, which guards the solver loops.
 - `IWP` / `PrecondIWP` now factor the constant Hilbert `Q_bar` with a closed-form
   square-root factor (exact integer-factorial formula, re-triangularized via QR)
   instead of a numerical Cholesky that lost positive-definiteness and returned `NaN`
