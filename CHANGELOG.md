@@ -9,6 +9,34 @@ minor bump, non-breaking changes in a patch bump).
 
 ### Added
 
+- **Statistical linearization (`QuadratureCorrection`) as a `Correction` strategy.**
+  Fits the affine surrogate over the predictive *spread* rather than tangent to the
+  predicted mean, evaluating the Gaussian expectations by quadrature: `H` becomes
+  the expected Jacobian and the linearization-residual covariance `Omega` enters the
+  innovation covariance as inflated measurement noise (`H P H^T + Omega + R`). Both
+  differences vanish identically for an affine vector field, so the correction is a
+  no-op on linear problems and on well-resolved pure solves. Rules: `"gauss_hermite"`
+  (default, exactness `2 * n_nodes - 1`) and `"cubature"` (third-degree spherical,
+  `2p` nodes). `max_iters > 1` gives the iterated posterior-linearization filter
+  (IPLF). Works on the plain, sequential-observation, and preconditioned paths.
+- **`ipls_smoother`** — the iterated posterior-linearization smoother. Refits the
+  surrogate at every step over the *smoothed* marginal and re-runs filter and
+  smoother for a fixed number of passes; `n_iters=0` reproduces the one-shot SLR
+  filter plus RTS exactly. Fixed grid, plain priors, fixed process noise, with
+  optional `obs_model`. Also exports `affine_filter_scan`, the linear-Gaussian
+  filter over a precomputed per-step surrogate that drives it.
+- **`ode_filters.filters.statistical_linearization`** — the SLR primitives:
+  `slr_linearize`, `SLRModel`, `gauss_hermite_rule`, `cubature_rule`,
+  `quadrature_nodes`, and `check_arg_projection`. The quadrature runs over the
+  *projected* marginal `N(E_args m, E_args P E_args^T)`, so its dimension is the ODE
+  dimension rather than the `d (q+1)` state dimension — which is both what makes the
+  spectrally accurate rule affordable and why no square root of the ill-conditioned
+  full `P` is ever taken.
+- **`BaseODEInformation.E_args`** — selection matrix for the coordinates the vector
+  field reads (`E0` for first-order, `[E0; E1]` for second-order, plus `E0_hidden`
+  for the hidden-state variants). Custom subclasses whose residual reads more than
+  `E0 @ state` must override it; `check_arg_projection` validates a declaration by
+  perturbing along the null space of `E_args`.
 - `MaternPrior` / `PrecondMaternPrior` accept an `n_quad` keyword argument
   controlling the Gauss-Legendre node count of the new square-root process-noise
   decomposition (default 64, robust to the float64 order ceiling).

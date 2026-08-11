@@ -18,8 +18,16 @@ Shipped schemes:
   (Gauss-Newton on the per-step MAP). This reduces local linearization error on
   nonlinear problems. (The whole-trajectory iterated *smoother*, IEKS, is a separate
   outer-loop construct and is not a Correction.)
+- ``QuadratureCorrection`` -- statistical linearization (SLF / sigma-point family):
+  the affine surrogate is fitted over the predictive *spread* rather than tangent
+  to a point, with the required Gaussian expectations evaluated by quadrature.
+  With ``max_iters > 1`` it becomes the iterated posterior-linearization filter
+  (IPLF), which relinearizes with respect to the updated *density* -- the axis-2
+  counterpart of ``IteratedTaylorCorrection``'s axis-3 iteration.
 
-All schemes reuse the existing square-root algebra; this module adds no new numerics.
+The Taylor schemes reuse the existing square-root algebra;
+``QuadratureCorrection`` adds only the quadrature of
+:mod:`~ode_filters.filters.statistical_linearization` on top of the same update.
 """
 
 from __future__ import annotations
@@ -34,6 +42,7 @@ from jax.typing import ArrayLike
 
 from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
 from ..measurement.measurement_models import BaseODEInformation
+from .statistical_linearization import QuadratureRule, quadrature_nodes, slr_linearize
 
 
 class CorrectionResult(NamedTuple):
@@ -171,4 +180,81 @@ class IteratedTaylorCorrection(Correction):
             1, self.max_iters, lambda _i, c: update_from(c[0]), init
         )
         m, P_sqr, mz, Pz_sqr = carry
+        return CorrectionResult(m, P_sqr, mz, Pz_sqr)
+
+
+class QuadratureCorrection(Correction):
+    """Statistical linearization by quadrature (sigma-point / SLF family).
+
+    Replaces the Taylor tangent at the predicted mean with the affine map that
+    best fits the residual *over the predictive spread*, computing the required
+    Gaussian expectations by quadrature on the projected marginal (see
+    :mod:`~ode_filters.filters.statistical_linearization`). Two things change
+    relative to ``TaylorCorrection(order=1)``:
+
+    - ``H`` becomes the *expected* Jacobian rather than the Jacobian at the mean;
+    - the linearization-residual covariance ``Omega`` is added to the measurement
+      noise, so the innovation covariance is ``H P H^T + Omega + R`` -- exactly
+      the term a sigma-point filter's ``S`` carries and the EKF's omits.
+
+    Both differences vanish for an affine vector field, so this correction is a
+    no-op (up to floating point) on linear problems.
+
+    Where it matters: the closure error scales with the predictive spread of the
+    vector field's arguments. In a pure ODE solve that spread vanishes as
+    ``h -> 0`` and this reduces to EK1, but with a latent force it has a floor
+    set by the irreducible force uncertainty, and the resulting Jensen gap does
+    not vanish under grid refinement.
+
+    Attributes:
+        rule: ``"gauss_hermite"`` (default; tensor product, spectrally accurate,
+            ``n_nodes ** p`` nodes) or ``"cubature"`` (third-degree spherical,
+            ``2 p`` nodes, derivative-free-equivalent and dimension-linear).
+            ``p`` is the ODE dimension, not the state dimension.
+        n_nodes: Nodes per dimension for the Gauss-Hermite rule; exactness is
+            ``2 * n_nodes - 1``. A polynomial vector field of degree ``k`` needs
+            ``n_nodes >= ceil((k + 1) / 2)`` for ``H`` and ``c``, and
+            ``n_nodes >= ceil((2 k + 1) / 2)`` for ``Omega`` too -- so a cubic
+            (Duffing, van der Pol) is exactly reproduced at ``n_nodes = 4``, and
+            a quadratic (Lotka-Volterra, SIRD) at ``n_nodes = 3``. Ignored by
+            the cubature rule.
+        max_iters: Number of posterior-linearization passes. ``1`` (default) is
+            the one-shot filter; ``> 1`` is the iterated posterior-linearization
+            filter (IPLF), which refits the surrogate over the *updated* density.
+            Contrast :class:`IteratedTaylorCorrection`, which iterates the
+            linearization *point* at zero spread. The whole-trajectory version is
+            :func:`~ode_filters.filters.ipls.ipls_smoother`.
+    """
+
+    rule: QuadratureRule = eqx.field(static=True, default="gauss_hermite")
+    n_nodes: int = eqx.field(static=True, default=4)
+    max_iters: int = eqx.field(static=True, default=1)
+
+    def __check_init__(self):
+        if self.max_iters < 1:
+            raise ValueError(f"max_iters must be >= 1, got {self.max_iters!r}.")
+        # Validated eagerly so a bad rule name fails at construction rather than
+        # inside a traced scan body. dim=1 is enough to exercise the dispatch.
+        quadrature_nodes(self.rule, 1, self.n_nodes)
+
+    def correct(self, measure, m_pred, P_pred_sqr, *, t=0.0) -> CorrectionResult:
+        def update_from(m_lin, P_lin_sqr):
+            model = slr_linearize(
+                measure,
+                m_lin,
+                P_lin_sqr,
+                t=t,
+                rule=self.rule,
+                n_nodes=self.n_nodes,
+            )
+            return _affine_correct(
+                model.H, model.c, model.R_eff_sqr, m_pred, P_pred_sqr
+            )
+
+        # Pass 0 linearizes over the *predictive* density (the one-shot
+        # sigma-point update); each further pass refits over the updated one.
+        init = update_from(m_pred, P_pred_sqr)
+        m, P_sqr, mz, Pz_sqr = jax.lax.fori_loop(
+            1, self.max_iters, lambda _i, c: update_from(c[0], c[1]), init
+        )
         return CorrectionResult(m, P_sqr, mz, Pz_sqr)
