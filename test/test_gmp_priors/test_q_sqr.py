@@ -184,3 +184,27 @@ def test_matern_q_sqr_quadrature_converged(q):
         fine.T @ fine
     )
     assert rel < 1e-9
+
+
+@pytest.mark.parametrize("prior_cls", [MaternPrior, PrecondMaternPrior])
+@pytest.mark.parametrize("n_quad", [1, 5, 6])
+def test_matern_rejects_too_few_quadrature_nodes(prior_cls, n_quad):
+    """``n_quad <= q`` is rejected at construction, not deep inside a solve.
+
+    The Gauss-Legendre rule contributes one row per node to the QR, so fewer than
+    ``q + 1`` nodes silently produces a ``[n_quad, q + 1]`` factor instead of a
+    square one. That is a wrong *shape*, not a coarser approximation, and it used
+    to surface only later as an opaque "Q is expected to be of square shape"
+    error from inside the filter.
+    """
+    with pytest.raises(ValueError, match="n_quad must exceed q"):
+        prior_cls(q=6, d=1, length_scale=1.0, n_quad=n_quad)
+
+
+@pytest.mark.parametrize("prior_cls", [MaternPrior, PrecondMaternPrior])
+def test_matern_accepts_the_minimal_quadrature_node_count(prior_cls):
+    """``n_quad == q + 1`` is the boundary case and must be allowed."""
+    q = 6
+    Q_sqr = prior_cls(q=q, d=1, length_scale=1.0, n_quad=q + 1).Q_sqr(0.1)
+    assert Q_sqr.shape == (q + 1, q + 1)
+    assert _is_upper_triangular(Q_sqr)

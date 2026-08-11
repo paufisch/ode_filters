@@ -597,8 +597,22 @@ def _make_matern_sqr_noise(
 
     Returns ``(F_bar, g_bar, D_lam, gl_nodes, gl_weights)`` with ``gl_nodes`` /
     ``gl_weights`` the Gauss-Legendre nodes/weights on ``[-1, 1]``.
+
+    Raises:
+        ValueError: If ``n_quad <= q``. The QR stacks one row per node, so fewer
+            than ``q + 1`` nodes yields a ``[n_quad, q + 1]`` factor instead of a
+            square one -- which is not a mildly less accurate answer but a
+            structurally wrong shape, and it would otherwise surface only much
+            later as a confusing shape error from inside a solve.
     """
     D = q + 1
+    if n_quad <= q:
+        raise ValueError(
+            f"n_quad must exceed q to give a square [{D}, {D}] noise factor, got "
+            f"n_quad={n_quad!r} with q={q!r}. The Gauss-Legendre rule contributes "
+            "one row per node to the QR, so n_quad >= q + 1 is a shape "
+            "requirement, not an accuracy preference."
+        )
     lam = np.sqrt((2.0 * q + 1.0) / length_scale)
 
     M = np.zeros((D, D))

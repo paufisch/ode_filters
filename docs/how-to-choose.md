@@ -29,10 +29,22 @@ The prior encodes what you assume about the solution before seeing the ODE.
 | --- | --- | --- |
 | **`IWP(q, d)`** | a `q`-times integrated Wiener process (polynomial-like smoothness) | the default — almost always start here |
 | **`MaternPrior`** | Matern smoothness with a length scale | you have a characteristic correlation length / want stationary behaviour |
+| **`IOUPPrior(q, d, rate)`** | like `IWP`, but the highest derivative decays towards zero at `rate` instead of drifting freely | the ODE has a known linear part — pass it as `rate` and the solver becomes a probabilistic *exponential integrator* |
 | **`JointPrior(prior_x, prior_u)`** | a state block **and** a hidden block | joint state–parameter or latent-force inference (`*WithHidden` models) |
 
 Preconditioned variants (`PrecondIWP`, `PrecondMaternPrior`) trade a coordinate
 change for better conditioning at high `q` / small step size.
+
+`IOUPPrior` is worth reaching for on **stiff or semi-linear** problems. Writing
+the field as `f(x) = R x + g(x)`, passing `rate=R` bakes the linear part into the
+prior, so the prior mean integrates it *exactly* and the filter only has to
+correct the nonlinear remainder `g` (Bosch, Hennig & Tronarp, NeurIPS 2023).
+`rate` may be a scalar, a length-`d` vector (per-dimension), or a `d × d` matrix
+(the linear part or a reference Jacobian). `IWP` is exactly the `rate=0` case, so
+it is a drop-in swap — the measurement model and the filter recursion are
+unchanged. One caveat: `"dynamic"` / `"diagonal"` calibration then estimates the
+diffusion on the *remainder* rather than the full field, so the fitted `sigma^2`
+is not on the same scale as under `IWP`.
 
 ## Smoothness order `q`
 
