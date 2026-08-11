@@ -11,7 +11,8 @@ minor bump, non-breaking changes in a patch bump).
 
 - `marginal_loglik(..., channel=...)` selects which evidence channel to return:
   `"obs"` (default, unchanged -- the data evidence / Fenrir objective), `"ode"`
-  (the ODE-defect residual evidence, which needs no observations), or `"both"`
+  (the ODE-defect residual evidence, which needs no observations, and so is the
+  one channel whose overload accepts `data=None`), or `"both"`
   (the `(ll_ode, ll_obs)` pair). Methods that weight the two channels separately
   -- split / hybrid / tiered hyperparameter selection -- need the pair, and
   previously had to call `gaussian_filter` directly to get it. Note the two are
@@ -65,7 +66,11 @@ minor bump, non-breaking changes in a patch bump).
   perturbing along the null space of `E_args`.
 - `MaternPrior` / `PrecondMaternPrior` accept an `n_quad` keyword argument
   controlling the Gauss-Legendre node count of the new square-root process-noise
-  decomposition (default 64, robust to the float64 order ceiling).
+  decomposition (default 64, robust to the float64 order ceiling). `n_quad <= q`
+  is rejected at construction: the rule contributes one row per node to the QR, so
+  too few nodes yield a non-square `[n_quad, q+1]` factor -- a wrong shape rather
+  than a coarser approximation, which otherwise surfaced only later as an opaque
+  shape error from inside a solve.
 
 ### Changed
 

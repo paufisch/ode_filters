@@ -85,7 +85,19 @@ def marginal_loglik(
     data: ObsModel,
     *,
     model: InferenceProblem,
-    channel: Literal["obs", "ode"] = ...,
+    channel: Literal["obs"] = ...,
+) -> Array: ...
+
+
+# The ODE channel is the one mode that needs no observations, so it is the only
+# overload accepting ``data=None``; the other two keep observations mandatory.
+@overload
+def marginal_loglik(
+    theta: Any,
+    data: ObsModel | None,
+    *,
+    model: InferenceProblem,
+    channel: Literal["ode"],
 ) -> Array: ...
 
 
@@ -101,7 +113,7 @@ def marginal_loglik(
 
 def marginal_loglik(
     theta: Any,
-    data: ObsModel,
+    data: ObsModel | None,
     *,
     model: InferenceProblem,
     channel: str = "obs",
@@ -115,7 +127,8 @@ def marginal_loglik(
             wrappers, which are unwrapped automatically.
         data: Observations as an :class:`ObsModel` (e.g. from
             :func:`prepare_observations`); the measured values live in
-            ``data.c_seq``. Required unless ``channel="ode"``.
+            ``data.c_seq``. Required unless ``channel="ode"``, which needs no
+            observations and so accepts ``None``.
         model: Static :class:`InferenceProblem` (closed over, not traced).
         channel: Which evidence channel to return.
 
