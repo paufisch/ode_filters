@@ -149,8 +149,9 @@ the trajectory is what actually shrinks it.
 
 Scope: fixed grid, plain (non-preconditioned) priors, fixed process noise (the
 diffusion is not recalibrated between passes, since a per-pass `sigma^2` would
-chase the linearization it is conditioned on). Reverse-mode differentiation
-requires a positive-definite `P_0_sqr`.
+chase the linearization it is conditioned on). Reverse-mode differentiation works
+from a singular `P_0_sqr`, including the Dirac that `taylor_mode_initialization`
+returns — no jitter needed.
 
 ## Writing a custom correction
 

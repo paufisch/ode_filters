@@ -220,15 +220,14 @@ def ipls_smoother(
             :func:`~ode_filters.measurement.measurement_models.prepare_observations`.
 
     Note:
-        Differentiating any field of the result requires a **positive-definite**
-        ``P_0_sqr``. The result carries smoothed covariances, and the smoother's
-        covariance recursion already has a NaN reverse-mode derivative when the
-        initial covariance is exactly singular (as
-        :func:`~ode_filters.priors.taylor_mode_initialization` returns) -- a
-        pre-existing property of :func:`~ode_filters.filters.gaussian_filter.\
-rts_smoother`, not of the linearization. Since a zero cotangent times a NaN
-        derivative is still NaN, that poisons the *mean* gradient too. Add a
-        small jitter to ``P_0_sqr`` when differentiating.
+        Every field of the result is reverse-mode differentiable from an exactly
+        singular ``P_0_sqr`` -- including the one
+        :func:`~ode_filters.priors.taylor_mode_initialization` returns, which is a
+        Dirac. Earlier versions required a positive-definite ``P_0_sqr`` (or a
+        jitter) because the smoother's covariance recursion returned a NaN
+        derivative there, which a zero cotangent then propagated into the *mean*
+        gradient as well; :func:`~ode_filters.inference.sqr_gaussian_inference.\
+_safe_qr` fixes that at the source, so no jitter is needed.
 
     Returns:
         An :class:`IPLSResult`.

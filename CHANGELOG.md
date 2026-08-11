@@ -5,7 +5,13 @@ All notable changes to **ode-filters** are documented here. The format is based 
 to [Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes ship in a
 minor bump, non-breaking changes in a patch bump).
 
-## [Unreleased]
+## [0.7.2] - 2026-08-11
+
+A feature release on top of 0.7.1: a new prior family (`IOUPPrior`), a new
+correction family (statistical linearization / `QuadratureCorrection`) and the
+trajectory-level `ipls_smoother`, numerically stable high-order square-root
+process noise for the Matern and IWP priors, and two automatic-differentiation
+fixes that unblock gradient-based hyperparameter inference. Non-breaking.
 
 ### Added
 
@@ -85,6 +91,28 @@ minor bump, non-breaking changes in a patch bump).
 
 ### Fixed
 
+- **Reverse-mode gradients no longer come back `NaN` from a deterministic initial
+  condition.** `np.linalg.qr` has an *undefined* derivative at a rank-deficient
+  input, and an exactly-zero stacked factor is not a corner case here: it is what
+  the first backward conditional *is* when the filter starts from a Dirac initial
+  state, which is exactly what `taylor_mode_initialization` returns. Because a zero
+  cotangent times a `NaN` derivative is still `NaN`, that single degenerate factor
+  poisoned the gradient of *everything* downstream -- including quantities that did
+  not depend on it at all, such as the smoothed *mean*. `sqr_marginalization` and
+  `sqr_inversion` now route their QR through `_safe_qr`, which substitutes a
+  well-conditioned stand-in on the exactly-zero branch (the standard double-`where`
+  idiom) and defines the derivative there to be zero. That is the correct value,
+  not a fudge: `P = P_sqr.T @ P_sqr` is smooth even where `P_sqr` is not, so
+  `dP = 2 P_sqr.T d(P_sqr)` vanishes at `P_sqr = 0` for any finite `d(P_sqr)`.
+  Values are bit-unchanged; `jax.grad` through `rts_smoother` (and `ipls_smoother`)
+  from a singular `P_0_sqr` now matches central finite differences instead of
+  returning `NaN`, so the jitter workaround previously documented for those
+  functions is no longer needed. Two degeneracies remain deliberately unhandled: a
+  *merely* rank-deficient factor (which needs a rank-revealing factorization), and a
+  singular *innovation* covariance, which stays `NaN` -- correctly, since
+  conditioning a zero-variance state on a zero-variance observation is ill-posed.
+  Regression coverage:
+  `test/test_sqr_gaussian_inference/test_degenerate_factor_gradients.py`.
 - **Every prior is constructible from traced hyperparameters again.** Two
   construction-time defects introduced with the square-root process-noise work
   above made `jax.jit` / `jax.grad` over a prior's own hyperparameters raise, which
@@ -248,6 +276,7 @@ single consolidated solver API and a differentiable parameter-inference layer.
 part of the public API and is not jit/grad-able. Prefer `gaussian_filter_adaptive`.
 
 [res]: https://paufisch.github.io/ode_filters/api/filters/
-[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/paufisch/ode_filters/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/paufisch/ode_filters/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/paufisch/ode_filters/compare/v0.6.6...v0.7.0
