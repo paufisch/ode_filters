@@ -371,6 +371,30 @@ class BaseODEInformation(ABC):
         return self._E_constraint
 
     @property
+    def E_args(self) -> Array:
+        """Selection matrix for the coordinates the vector field reads.
+
+        The residual is affine in the state *except* through ``E_args @ state``:
+        for a first-order ODE the vector field sees only ``E0 @ state``, for a
+        second-order one it sees ``(E0 @ state, E1 @ state)``, and the hidden
+        variants add ``E0_hidden``. Conservation constraints are affine and so
+        never enter here.
+
+        Statistical linearisation integrates over this projected subspace only
+        (see :func:`~ode_filters.filters.statistical_linearization.slr_linearize`),
+        which is what keeps the quadrature dimension equal to the ODE dimension
+        rather than the full state dimension.
+
+        The base implementation returns ``E0``, correct for first-order models.
+        A custom subclass whose ``_ode_residual`` reads more than ``E0 @ state``
+        **must override this**, or SLR-based corrections will silently miss the
+        spread in the omitted directions; validate with
+        :func:`~ode_filters.filters.statistical_linearization.check_arg_projection`.
+        Shape ``[p, state_dim]``.
+        """
+        return self._E0
+
+    @property
     def R(self) -> Array:
         """Base measurement noise covariance matrix (ODE part only)."""
         return self._base_R
@@ -597,6 +621,11 @@ class ODEInformationWithHidden(BaseODEInformation):
         self._jacobian_vf_u = jax.jacfwd(self._vf, argnums=1)
         self._init_constraints(constraints)
 
+    @property
+    def E_args(self) -> Array:
+        """Vector-field argument selector: ``[E0; E0_hidden]`` (reads ``x``, ``u``)."""
+        return np.concatenate([self._E0, self._E0_hidden], axis=0)
+
     def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
         x = self._E0 @ state
         u = self._E0_hidden @ state
@@ -648,6 +677,11 @@ class SecondOrderODEInformation(BaseODEInformation):
         self._jacobian_vf_x = jax.jacfwd(self._vf, argnums=0)
         self._jacobian_vf_v = jax.jacfwd(self._vf, argnums=1)
         self._init_constraints(constraints)
+
+    @property
+    def E_args(self) -> Array:
+        """Vector-field argument selector: ``[E0; E1]`` (reads ``x``, ``v``)."""
+        return np.concatenate([self._E0, self._E1], axis=0)
 
     def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
         x = self._E0 @ state
@@ -702,6 +736,11 @@ class SecondOrderODEInformationWithHidden(BaseODEInformation):
         self._jacobian_vf_v = jax.jacfwd(self._vf, argnums=1)
         self._jacobian_vf_u = jax.jacfwd(self._vf, argnums=2)
         self._init_constraints(constraints)
+
+    @property
+    def E_args(self) -> Array:
+        """Vector-field argument selector: ``[E0; E1; E0_hidden]``."""
+        return np.concatenate([self._E0, self._E1, self._E0_hidden], axis=0)
 
     def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
         x = self._E0 @ state
