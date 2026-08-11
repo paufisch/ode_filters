@@ -13,6 +13,11 @@ Properties tested:
 - Square-root Cholesky factors remain lower triangular
 - Posterior uncertainty reduction
 - Numerical stability across dimensions
+
+Every test here sets ``deadline=None`` deliberately; see the module docstring of
+``test_sqr_marginalization_properties`` for why. These assert correctness, not
+latency, and their runtime is dominated by JAX compilation, which varies several-
+fold across machines.
 """
 
 from __future__ import annotations
@@ -157,7 +162,7 @@ def test_sqr_inversion_property_no_nan_or_inf(inputs):
 
 
 @given(valid_sqr_inversion_inputs())
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=None)
 def test_sqr_inversion_property_no_singular_square_root(inputs):
     """Property: Square-root matrix Lambda is non-singular."""
     A, mu, Sigma, mu_z, Sigma_z, Q = inputs
@@ -232,7 +237,7 @@ def test_sqr_inversion_property_numerical_stability_large_dimensions(inputs):
 
 
 @given(valid_sqr_inversion_inputs())
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=None)
 def test_sqr_inversion_property_norm_bounds(inputs):
     """Property: Output magnitudes remain reasonable."""
     A, mu, Sigma, mu_z, Sigma_z, Q = inputs
@@ -255,7 +260,7 @@ def test_sqr_inversion_property_norm_bounds(inputs):
 
 
 @given(load_random_marginalization_case())
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=None)
 def test_sqr_inversion_property_cholesky_consistency(inputs):
     """Property: Integration test - inversion on marginalization outputs."""
     A, b, Q, mu, Sigma = inputs
