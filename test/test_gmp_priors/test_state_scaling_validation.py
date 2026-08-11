@@ -51,3 +51,5 @@ def test_precond_matern_A_and_Q_require_step_size():
         p.A()
     with pytest.raises(ValueError, match="requires a step size"):
         p.Q()
+    with pytest.raises(ValueError, match="requires a step size"):
+        p.Q_sqr()

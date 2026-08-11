@@ -14,6 +14,7 @@ from .correction import (
     Correction,
     CorrectionResult,
     IteratedTaylorCorrection,
+    QuadratureCorrection,
     TaylorCorrection,
 )
 from .gaussian_filter import (
@@ -22,17 +23,36 @@ from .gaussian_filter import (
     gaussian_filter_adaptive,
     rts_smoother,
 )
+from .ipls import IPLSResult, affine_filter_scan, ipls_smoother
+from .statistical_linearization import (
+    SLRModel,
+    check_arg_projection,
+    cubature_rule,
+    gauss_hermite_rule,
+    quadrature_nodes,
+    slr_linearize,
+)
 
 __all__ = [
     "Correction",
     "CorrectionResult",
     "FilterResult",
+    "IPLSResult",
     "IteratedTaylorCorrection",
     "PController",
     "PIController",
+    "QuadratureCorrection",
+    "SLRModel",
     "StepSizeController",
     "TaylorCorrection",
+    "affine_filter_scan",
+    "check_arg_projection",
+    "cubature_rule",
+    "gauss_hermite_rule",
     "gaussian_filter",
     "gaussian_filter_adaptive",
+    "ipls_smoother",
+    "quadrature_nodes",
     "rts_smoother",
+    "slr_linearize",
 ]

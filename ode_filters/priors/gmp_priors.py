@@ -8,6 +8,7 @@ from operator import index
 import jax
 import jax.experimental.jet
 import jax.numpy as np
+import numpy as onp
 from jax import Array
 from jax.scipy.linalg import expm
 from jax.typing import ArrayLike
@@ -312,6 +313,59 @@ def _make_iwp_precond_state_matrices(
     return A_bar, Q_bar, T
 
 
+def _iwp_precond_q_bar_sqr(q: int) -> Array:
+    """Closed-form upper-triangular square root of the preconditioned IWP ``Q_bar``.
+
+    ``Q_bar[i, j] = 1 / (2q+1-i-j)`` is the Gram matrix of the monomials ``s^(q-i)``
+    on ``[0, 1]``; a numerical Cholesky of it loses positive-definiteness in float64
+    around ``q >= 13`` and returns ``NaN``. Instead build the exact closed-form lower
+    factor ``L`` (``L.T @ L == Q_bar``) from integer factorials and re-triangularize
+    once with a QR into the library's upper-triangular convention. This stays finite
+    and reconstructs ``Q_bar`` to machine precision well past ``q = 20`` (matching
+    ``probdiffeq`` -- W. Kahan's Hilbert recurrence -- and ``ProbNumDiffEq.jl``, which
+    both use a closed-form IWP factor). Ref: ProbNumDiffEq.jl
+    ``make_preconditioned_iwp_transition_cov_lsqrt_1d``.
+    """
+    dim = q + 1
+    factor = onp.zeros((dim, dim))
+    for m in range(dim):
+        for n in range(m + 1):
+            factor[m, n] = onp.sqrt(2 * q - 2 * m + 1) * (
+                factorial(q - n) ** 2
+                / (factorial(m - n) * factorial(2 * q - n - m + 1))
+            )
+    return np.linalg.qr(np.asarray(factor), mode="reduced")[1]
+
+
+def _check_iwp_q_bar_factor(factor: Array, q: int) -> None:
+    """Defensive backstop: raise if the IWP ``Q_bar`` square-root factor is non-finite.
+
+    With the closed-form factor (:func:`_iwp_precond_q_bar_sqr`) this stays finite and
+    accurate well past ``q = 20``, so this guard is not expected to fire in any
+    practical range; it remains a cheap construction-time sanity check so that a
+    pathological non-finite factor fails loudly instead of silently propagating a
+    ``NaN`` into a solve.
+
+    **Skipped under tracing.** The check needs a concrete value, and a prior built
+    inside ``jax.jit`` / ``jax.grad`` has none -- so as an unconditional Python
+    ``bool()`` this raised ``TracerBoolConversionError`` for *every* prior
+    constructed from traced hyperparameters, which is what gradient-based
+    hyperparameter inference does on each objective evaluation. Eager
+    construction is where a pathological ``q`` gets introduced in the first
+    place, and that path still fails loudly.
+    """
+    try:
+        all_finite = bool(np.all(np.isfinite(factor)))
+    except jax.errors.TracerBoolConversionError:
+        return  # inside a JIT trace; factor is abstract, skip the check
+    if not all_finite:  # pragma: no cover - defensive backstop
+        raise ValueError(
+            f"IWP order q={q} produced a non-finite square-root factor for the "
+            "integrated-Wiener process noise. Reduce q (q <= 20 is reliable in "
+            "float64), or use a MaternPrior."
+        )
+
+
 class IWP(BasePrior):
     """Integrated Wiener Process prior model."""
 
@@ -322,11 +376,12 @@ class IWP(BasePrior):
         # severely ill-conditioned for moderate q (entries scale as
         # h^(2q+1-i-j)); factorizing it directly loses precision. Instead use
         # Q(h) = T(h) Q_bar T(h) with T(h) diagonal and Q_bar the constant
-        # (h-independent) Hilbert matrix, so its Cholesky is computed once and
-        # the stepsize dependence enters only through the well-behaved diagonal
-        # T(h): Q(h)_sqr = kron(chol(Q_bar).T @ T(h), chol(xi).T).
-        _, _Q_bar_scalar, self._T_scalar = _make_iwp_precond_state_matrices(q)
-        self._Q_bar_sqr_scalar = _cholesky_upper(_Q_bar_scalar)
+        # (h-independent) Hilbert matrix, so its closed-form square-root factor is
+        # computed once and the stepsize dependence enters only through the
+        # well-behaved diagonal T(h): Q(h)_sqr = kron(Q_bar_sqr @ T(h), chol(xi).T).
+        _, _, self._T_scalar = _make_iwp_precond_state_matrices(q)
+        self._Q_bar_sqr_scalar = _iwp_precond_q_bar_sqr(q)
+        _check_iwp_q_bar_factor(self._Q_bar_sqr_scalar, q)
         self._xi_sqr = _cholesky_upper(self.xi)
 
     def A(self, h: ArrayLike) -> Array:
@@ -384,11 +439,12 @@ class PrecondIWP(BasePrior):
     def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         super().__init__(q, d, Xi)
         self._A_bar, self._Q_bar, self._T = _make_iwp_precond_state_matrices(q)
-        # Q is stepsize-independent in preconditioned space, so its square root
-        # is a single constant computed once: kron(chol(Q_bar).T, chol(xi).T).
-        self._Q_sqr_const = np.kron(
-            _cholesky_upper(self._Q_bar), _cholesky_upper(self.xi)
-        )
+        # Q is stepsize-independent in preconditioned space, so its square root is a
+        # single constant computed once via the closed-form factor (no numerical
+        # Cholesky of the ill-conditioned Q_bar): kron(Q_bar_sqr, chol(xi).T).
+        _Q_bar_sqr = _iwp_precond_q_bar_sqr(q)
+        _check_iwp_q_bar_factor(_Q_bar_sqr, q)
+        self._Q_sqr_const = np.kron(_Q_bar_sqr, _cholesky_upper(self.xi))
 
     def A(self, h: ArrayLike | None = None) -> Array:
         """Return the constant preconditioning transition matrix.
@@ -496,16 +552,122 @@ def _matern_companion_form(length_scale: float, q: int) -> tuple[Array, Array, A
     return F, L, q_coeff
 
 
+# Number of Gauss-Legendre nodes for the Matern square-root matrix-fraction
+# decomposition. 64 reconstructs Q(h) to ~1e-13 for every order up to the float64
+# order ceiling (q ~ 18, where the dense Q is hopelessly ill-conditioned); more
+# nodes only accumulate extra rounding without raising the ceiling.
+_MATERN_QUAD_NODES = 64
+
+
+def _sqr_noise_via_quadrature(
+    F: Array, G: Array, gl_nodes: Array, gl_weights: Array, h: ArrayLike
+) -> Array:
+    """Upper-triangular square root ``R`` of the LTI process noise
+    ``Q(h) = int_0^h e^{F u} G G.T e^{F.T u} du`` (so ``R.T @ R == Q(h)``).
+
+    Square-root matrix-fraction decomposition (Bosch, Hennig & Tronarp 2023): the
+    factor is the ``R`` of a QR of the Gauss-Legendre-propagated dispersion columns
+    ``sqrt(w_k) e^{F u_k} G``. ``G`` may be rank one (Matern / scalar IOUP) or rank
+    ``d`` (matrix-rate IOUP). The dense, ill-conditioned ``Q(h)`` is never formed or
+    factorized. jit/vmap/grad-safe (reduced-mode QR).
+    """
+    half_h = 0.5 * h
+    u = half_h * (gl_nodes + 1.0)
+    w = half_h * gl_weights
+    propagated = jax.vmap(lambda u_k: expm(F * u_k) @ G)(u)  # (n_quad, dim, ncol)
+    n_nodes, dim, ncol = propagated.shape
+    cols = (propagated * np.sqrt(w)[:, None, None]).transpose(0, 2, 1)
+    cols = cols.reshape(n_nodes * ncol, dim)
+    return np.linalg.qr(cols, mode="reduced")[1]
+
+
+def _make_matern_sqr_noise(
+    length_scale: float, q: int, n_quad: int
+) -> tuple[Array, Array, Array, Array, Array]:
+    """Precompute the step-size-independent pieces of the square-root matrix-
+    fraction decomposition of the (scalar) Matern process noise.
+
+    In the length-scale-normalized coordinates ``D_lam = diag(1, lam, ..., lam**q)``
+    (``lam = sqrt((2q+1)/length_scale)``) the companion drift becomes the fixed
+    binomial companion ``F_bar = lam * M`` -- independent of ``length_scale`` -- and
+    the rank-1 diffusion is ``g_bar @ g_bar.T``. This normalization removes the
+    ``lam**(q-j)`` dynamic range of the raw companion form (the dominant driver of
+    the high-order conditioning blow-up), the analogue along the length-scale axis
+    of the IWP step-size preconditioner.
+
+    Returns ``(F_bar, g_bar, D_lam, gl_nodes, gl_weights)`` with ``gl_nodes`` /
+    ``gl_weights`` the Gauss-Legendre nodes/weights on ``[-1, 1]``.
+
+    Raises:
+        ValueError: If ``n_quad <= q``. The QR stacks one row per node, so fewer
+            than ``q + 1`` nodes yields a ``[n_quad, q + 1]`` factor instead of a
+            square one -- which is not a mildly less accurate answer but a
+            structurally wrong shape, and it would otherwise surface only much
+            later as a confusing shape error from inside a solve.
+    """
+    D = q + 1
+    if n_quad <= q:
+        raise ValueError(
+            f"n_quad must exceed q to give a square [{D}, {D}] noise factor, got "
+            f"n_quad={n_quad!r} with q={q!r}. The Gauss-Legendre rule contributes "
+            "one row per node to the QR, so n_quad >= q + 1 is a shape "
+            "requirement, not an accuracy preference."
+        )
+    lam = np.sqrt((2.0 * q + 1.0) / length_scale)
+
+    M = np.zeros((D, D))
+    for i in range(D - 1):
+        M = M.at[i, i + 1].set(1.0)
+    for j in range(D):
+        M = M.at[D - 1, j].set(-comb(D, j))
+    F_bar = lam * M
+
+    q_coeff = (factorial(D - 1) ** 2 / factorial(2 * D - 2)) * (2.0 * lam) ** (
+        2 * D - 1
+    )
+    s_bar = q_coeff / lam ** (2 * q)
+    g_bar = np.zeros((D, 1)).at[D - 1, 0].set(np.sqrt(s_bar))
+
+    D_lam = np.diag(lam ** np.arange(D, dtype=float))
+
+    gl_nodes, gl_weights = onp.polynomial.legendre.leggauss(n_quad)
+    return F_bar, g_bar, D_lam, np.asarray(gl_nodes), np.asarray(gl_weights)
+
+
+def _matern_scalar_Q_sqr(
+    consts: tuple[Array, Array, Array, Array, Array], h: ArrayLike
+) -> Array:
+    """Upper-triangular square root ``R`` of the scalar Matern process noise
+    ``Q(h)`` (the ``[q+1, q+1]`` block, before the ``kron`` with ``Xi``):
+    ``R.T @ R == Q(h)``.
+
+    Square-root matrix-fraction decomposition: ``Q(h) = int_0^h e^{F u} S e^{F.T u} du``
+    with ``S`` rank one, so a square-root factor is the ``R`` of a QR of the
+    Gauss-Legendre-propagated diffusion columns ``sqrt(w_k) e^{F_bar u_k} g_bar``
+    (Bosch, Hennig & Tronarp 2023, used there for the IOUP prior). The dense,
+    severely ill-conditioned ``Q(h)`` is never formed or factorized, and the
+    matrix exponentials are evaluated in the well-scaled normalized coordinates of
+    :func:`_make_matern_sqr_noise`; the factor is mapped back with ``D_lam``. This
+    is jit/vmap/grad-safe (reduced-mode QR).
+    """
+    F_bar, g_bar, D_lam, gl_nodes, gl_weights = consts
+    R_bar = _sqr_noise_via_quadrature(F_bar, g_bar, gl_nodes, gl_weights, h)
+    return R_bar @ D_lam
+
+
 class MaternPrior(BasePrior):
     """Matern Gaussian process prior model using block matrix exponential.
 
     Note:
-        Unlike ``IWP``, the Matern process noise ``Q(h)`` is derived from a block
-        matrix exponential and factorized via a (jittered) Cholesky rather than a
-        closed-form square root. At high smoothness (roughly ``q >= 6``) that dense
-        ``Q`` loses positive-definiteness in float64 and ``Q_sqr`` can return
-        ``NaN``. Prefer ``q <= 4`` for Matern priors, or use ``IWP`` / ``PrecondIWP``
-        (closed-form ``Q_sqr``) when you need higher orders.
+        ``Q(h)`` is the dense block-matrix-exponential (matrix-fraction) noise,
+        which is severely ill-conditioned at high smoothness. The square-root
+        factor :meth:`Q_sqr` that the filter consumes is therefore *not* a
+        Cholesky of that dense ``Q``; it is built directly by a square-root
+        matrix-fraction decomposition in length-scale-normalized coordinates
+        (see :func:`_matern_scalar_Q_sqr`), which stays finite and accurate up to
+        the float64 order ceiling (roughly ``q ~ 18``). The number of quadrature
+        nodes is configurable via ``n_quad``. (``Q(h)`` itself still loses
+        positive-definiteness around ``q >= 6``; prefer :meth:`Q_sqr` downstream.)
     """
 
     def __init__(
@@ -514,6 +676,8 @@ class MaternPrior(BasePrior):
         d: int,
         length_scale: float,
         Xi: ArrayLike | None = None,
+        *,
+        n_quad: int = _MATERN_QUAD_NODES,
     ):
         """Initialize the Matern prior.
 
@@ -531,11 +695,19 @@ class MaternPrior(BasePrior):
             d: State dimension.
             length_scale: Length scale of the process.
             Xi: Optional component-correlation matrix (shape [d, d]).
+            n_quad: Number of Gauss-Legendre nodes for the square-root
+                matrix-fraction decomposition used by :meth:`Q_sqr` (must exceed
+                ``q``; the default is robust to the float64 order ceiling).
         """
         super().__init__(q, d, Xi)
         self._F, self._L, self._q = _matern_companion_form(length_scale, q)
         self.S = self._q * self._L @ self._L.T  # Precompute S = L @ Q @ L.T
         self.n = self._F.shape[0]
+        # Square-root process noise consumed by the filter: a stable square-root
+        # matrix-fraction decomposition (never the Cholesky of the dense, severely
+        # ill-conditioned Q(h)). See ``Q_sqr`` / ``_matern_scalar_Q_sqr``.
+        self._xi_sqr = _cholesky_upper(self.xi)
+        self._sqr_noise = _make_matern_sqr_noise(length_scale, q, n_quad)
 
         # Defensive checks - _matern_companion_form always returns valid shapes
         if self._F.shape != (self.n, self.n):  # pragma: no cover
@@ -627,6 +799,19 @@ class MaternPrior(BasePrior):
         Q_h = 0.5 * (Q_h + Q_h.T)
         return np.kron(Q_h, self.xi)
 
+    def Q_sqr(self, h: ArrayLike) -> Array:
+        """Upper-triangular square root of ``Q(h)``: ``Q_sqr.T @ Q_sqr == Q(h)``.
+
+        ``Q(h)_sqr = kron(R(h), chol(Xi))`` where ``R`` is the scalar Matern noise
+        factor from :func:`_matern_scalar_Q_sqr` (a square-root matrix-fraction
+        decomposition in length-scale-normalized coordinates). Unlike the
+        dense-Cholesky default this never forms the severely ill-conditioned
+        ``Q(h)``, so it stays finite and accurate up to the float64 order ceiling
+        (``q ~ 18``) rather than NaN-ing around ``q >= 6``.
+        """
+        R = _matern_scalar_Q_sqr(self._sqr_noise, self._validate_h(h))
+        return np.kron(R, self._xi_sqr)
+
 
 class PrecondMaternPrior(BasePrior):
     """Preconditioned Matern Gaussian process prior model.
@@ -636,16 +821,21 @@ class PrecondMaternPrior(BasePrior):
     stepsize-dependent (they converge to the IWP constants as h -> 0).
 
     Note:
-        Like ``MaternPrior``, the underlying ``expm``-derived ``Q`` is Cholesky-
-        factorized and can return ``NaN`` at high smoothness (roughly ``q >= 6``);
-        preconditioning does not rescue this. Prefer ``q <= 4``, or ``PrecondIWP``
-        for higher orders.
+        The IWP diagonal preconditioner here only removes the step-size scaling;
+        it does *not* address the length-scale/order conditioning of the dense
+        ``expm``-derived ``Q``. The square-root factor :meth:`Q_sqr` therefore uses
+        the same stable square-root matrix-fraction decomposition as
+        ``MaternPrior`` (see :func:`_matern_scalar_Q_sqr`), staying finite up to the
+        float64 order ceiling (``q ~ 18``) rather than NaN-ing around ``q >= 6``.
 
     Args:
         q: Smoothness order (nu = q + 1/2).
         d: State dimension.
         length_scale: Length scale of the Matern process.
         Xi: Optional scaling matrix (shape [d, d]).
+        n_quad: Number of Gauss-Legendre nodes for the square-root
+            matrix-fraction decomposition used by :meth:`Q_sqr` (must exceed
+            ``q``; the default is robust to the float64 order ceiling).
     """
 
     def __init__(
@@ -654,12 +844,16 @@ class PrecondMaternPrior(BasePrior):
         d: int,
         length_scale: float,
         Xi: ArrayLike | None = None,
+        *,
+        n_quad: int = _MATERN_QUAD_NODES,
     ):
         super().__init__(q, d, Xi)
         self._F, self._L, self._q_coeff = _matern_companion_form(length_scale, q)
         self.S = self._q_coeff * self._L @ self._L.T
         self.n = self._F.shape[0]
         _, _, self._T = _make_iwp_precond_state_matrices(q)
+        self._xi_sqr = _cholesky_upper(self.xi)
+        self._sqr_noise = _make_matern_sqr_noise(length_scale, q, n_quad)
 
     def _expm_block_matrix(self, h: ArrayLike) -> Array:
         """Compute exp(H*h) for the Hamiltonian block matrix.
@@ -745,12 +939,20 @@ class PrecondMaternPrior(BasePrior):
     def Q_sqr(self, h: ArrayLike | None = None) -> Array:
         """Upper-triangular square root of the preconditioned ``Q(h)``.
 
-        The preconditioned ``Q_bar(h)`` is well-conditioned (it converges to the
-        IWP constant as ``h -> 0``), so a symmetrized Cholesky is stable here.
-        Accepts ``h=None`` for interface symmetry with the other preconditioned
-        priors, but ``Q`` itself requires ``h``.
+        Built from the stable scalar Matern noise factor (square-root MFD, see
+        :func:`_matern_scalar_Q_sqr`) rather than a Cholesky of the dense
+        ``expm``-derived ``Q``: ``Q(h)_sqr = kron(R(h) @ T_inv, chol(Xi))`` where
+        ``R.T @ R`` is the raw scalar ``Q(h)`` and ``T_inv`` applies the IWP
+        diagonal preconditioner (scaling the columns of the upper-triangular ``R``
+        preserves upper-triangularity). Requires ``h`` (Matern preconditioning is
+        step-size-dependent).
         """
-        return _cholesky_upper(self.Q(h))
+        if h is None:
+            raise ValueError("PrecondMaternPrior.Q_sqr requires a step size h.")
+        h = self._validate_h(h)
+        R_raw = _matern_scalar_Q_sqr(self._sqr_noise, h)
+        T_inv = np.diag(1.0 / np.diag(self._T(h)))
+        return np.kron(R_raw @ T_inv, self._xi_sqr)
 
     def b(self, h: ArrayLike | None = None) -> Array:
         """Return the zero drift vector.
@@ -775,6 +977,121 @@ class PrecondMaternPrior(BasePrior):
             Preconditioning transformation matrix (shape [(q+1)*d, (q+1)*d]).
         """
         return np.kron(self._T(self._validate_h(h)), self._id)
+
+
+class IOUPPrior(BasePrior):
+    """Integrated Ornstein-Uhlenbeck Process prior (probabilistic exponential integrator).
+
+    Like ``IWP``, IOUP is a ``q``-times integrated Gauss-Markov prior, but its highest
+    derivative follows linear (Ornstein-Uhlenbeck) dynamics ``dY^(q) = R Y^(q) dt + dW``
+    with a *rate* ``R``. Choosing ``R`` to be (part of) the ODE's linear dynamics bakes
+    those dynamics into the prior, turning the solver into a probabilistic exponential
+    integrator: the prior mean integrates the linear part exactly, so the filter only
+    has to correct the nonlinear remainder (Bosch, Hennig & Tronarp, NeurIPS 2023).
+    ``IWP`` is the ``R = 0`` special case.
+
+    IOUP is a *drop-in prior*: the measurement model (the standard ODE information
+    operator on the full vector field) and the filter/smoother recursion are unchanged.
+    For a constant rate, ``A(h) = exp(F h)`` and the square-root process noise
+    ``Q_sqr(h)`` are computed per step size like any other prior, the latter via the
+    same square-root matrix-fraction decomposition as ``MaternPrior``
+    (:func:`_sqr_noise_via_quadrature`), never forming the dense ``Q(h)``.
+
+    Note:
+        The diffusion fit by ``calibration="dynamic"/"diagonal"`` is estimated on the
+        IOUP residual -- the *nonlinear remainder*, not the full vector field as under
+        ``IWP`` -- so the calibrated diffusion has a different scale than under ``IWP``
+        (matters only when comparing/porting calibration across priors). A full matrix
+        rate couples the output dimensions, so ``A``/``Q`` are not Kronecker-separable
+        (a dense ``(q+1)*d`` matrix exponential); scalar/diagonal rates are separable in
+        principle but are assembled densely here for a single uniform implementation.
+
+    Args:
+        q: Number of derivatives (smoothness order), as for ``IWP``.
+        d: State dimension.
+        rate: OU rate of the highest derivative -- scalar (uniform), length-``d`` vector
+            (per-dimension diagonal rate), or ``d x d`` matrix (couples dimensions, e.g.
+            the linear part / a reference Jacobian of the ODE).
+        Xi: Optional component-correlation matrix of the driving noise (shape [d, d]).
+        n_quad: Number of Gauss-Legendre nodes for the square-root matrix-fraction
+            decomposition used by :meth:`Q_sqr`.
+    """
+
+    def __init__(
+        self,
+        q: int,
+        d: int,
+        rate: ArrayLike,
+        Xi: ArrayLike | None = None,
+        *,
+        n_quad: int = _MATERN_QUAD_NODES,
+    ):
+        super().__init__(q, d, Xi)
+        self._R = self._build_rate(rate, d)
+        self._xi_sqr = _cholesky_upper(self.xi)
+        # Companion drift F and dispersion G on the derivative-major state
+        # [Y^(0), ..., Y^(q)] (each block d-dimensional): identity shift blocks on the
+        # super-diagonal (dY^(i) = Y^(i+1)), the rate R in the bottom-right (q-th
+        # derivative) block (dY^(q) = R Y^(q) + noise), and the driving noise -- with
+        # component-correlation Xi -- injected only into the q-th block.
+        dim = (q + 1) * d
+        F = np.zeros((dim, dim))
+        for i in range(q):
+            F = F.at[i * d : (i + 1) * d, (i + 1) * d : (i + 2) * d].set(self._id)
+        F = F.at[q * d :, q * d :].set(self._R)
+        self._F = F
+        self._G = np.zeros((dim, d)).at[q * d :, :].set(self._xi_sqr.T)
+        gl_nodes, gl_weights = onp.polynomial.legendre.leggauss(n_quad)
+        self._gl_nodes = np.asarray(gl_nodes)
+        self._gl_weights = np.asarray(gl_weights)
+
+    @staticmethod
+    def _build_rate(rate: ArrayLike, d: int) -> Array:
+        """Normalize ``rate`` to a ``d x d`` matrix (scalar -> r*I, vector -> diag)."""
+        r = np.asarray(rate, dtype=float)
+        if r.ndim == 0:
+            return r * np.eye(d)
+        if r.ndim == 1:
+            if r.shape != (d,):
+                raise ValueError(f"vector rate must have shape ({d},), got {r.shape}.")
+            return np.diag(r)
+        if r.ndim == 2:
+            if r.shape != (d, d):
+                raise ValueError(
+                    f"matrix rate must have shape ({d}, {d}), got {r.shape}."
+                )
+            return r
+        raise ValueError("rate must be a scalar, length-d vector, or d x d matrix.")
+
+    def A(self, h: ArrayLike) -> Array:
+        """Return the state transition matrix ``A(h) = exp(F h)``.
+
+        Args:
+            h: Step size.
+
+        Returns:
+            State transition matrix (shape [(q+1)*d, (q+1)*d]).
+        """
+        return expm(self._F * self._validate_h(h))
+
+    def b(self, h: ArrayLike) -> Array:
+        """Return the zero drift vector (shape [(q+1)*d])."""
+        return self._b
+
+    def Q_sqr(self, h: ArrayLike) -> Array:
+        """Upper-triangular square root of ``Q(h)``: ``Q_sqr.T @ Q_sqr == Q(h)``.
+
+        Square-root matrix-fraction decomposition (see
+        :func:`_sqr_noise_via_quadrature`); never forms the dense ``Q(h)``.
+        """
+        return _sqr_noise_via_quadrature(
+            self._F, self._G, self._gl_nodes, self._gl_weights, self._validate_h(h)
+        )
+
+    def Q(self, h: ArrayLike) -> Array:
+        """Return the dense diffusion matrix ``Q(h)`` (shape [(q+1)*d, (q+1)*d])."""
+        Q_sqr = self.Q_sqr(h)
+        return Q_sqr.T @ Q_sqr
 
 
 class JointPrior(BasePrior):

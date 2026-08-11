@@ -5,6 +5,142 @@ All notable changes to **ode-filters** are documented here. The format is based 
 to [Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes ship in a
 minor bump, non-breaking changes in a patch bump).
 
+## [0.7.2] - 2026-08-11
+
+A feature release on top of 0.7.1: a new prior family (`IOUPPrior`), a new
+correction family (statistical linearization / `QuadratureCorrection`) and the
+trajectory-level `ipls_smoother`, numerically stable high-order square-root
+process noise for the Matern and IWP priors, and two automatic-differentiation
+fixes that unblock gradient-based hyperparameter inference. Non-breaking.
+
+### Added
+
+- `marginal_loglik(..., channel=...)` selects which evidence channel to return:
+  `"obs"` (default, unchanged -- the data evidence / Fenrir objective), `"ode"`
+  (the ODE-defect residual evidence, which needs no observations, and so is the
+  one channel whose overload accepts `data=None`), or `"both"`
+  (the `(ll_ode, ll_obs)` pair). Methods that weight the two channels separately
+  -- split / hybrid / tiered hyperparameter selection -- need the pair, and
+  previously had to call `gaussian_filter` directly to get it. Note the two are
+  sums over *different* numbers of terms (`N` filter steps vs `K` observations),
+  so the raw sum makes the residual channel's influence scale with grid density.
+- `InferenceProblem.prior_fn`, an optional `theta -> prior` callable for fitting
+  the *prior's* hyperparameters (diffusion scale, length scale) rather than --
+  or in addition to -- vector-field parameters. When set it takes precedence
+  over the static `prior` and is evaluated inside the traced region, so the
+  hyperparameters are differentiated. Defaults to `None` (static prior,
+  behaviour unchanged).
+
+- `IOUPPrior` -- an integrated Ornstein-Uhlenbeck process prior (Bosch, Hennig &
+  Tronarp, *Probabilistic Exponential Integrators*, NeurIPS 2023), exported at the
+  top level. Its highest derivative follows linear dynamics `dY^(q) = R Y^(q) dt + dW`
+  with a constant `rate` `R` (scalar, per-dimension vector, or full `d x d` matrix);
+  baking the ODE's linear part into the prior turns the solver into a probabilistic
+  exponential integrator (markedly better on stiff / semi-linear problems). It is a
+  drop-in prior: the measurement model and the filter/smoother recursion are
+  unchanged, and `Q_sqr(h)` reuses the same square-root matrix-fraction decomposition
+  as `MaternPrior`. `IWP` is the `rate = 0` special case. (The re-linearized
+  exponential-Rosenbrock variant, which needs per-step re-discretisation, is not
+  included.)
+- **Statistical linearization (`QuadratureCorrection`) as a `Correction` strategy.**
+  Fits the affine surrogate over the predictive *spread* rather than tangent to the
+  predicted mean, evaluating the Gaussian expectations by quadrature: `H` becomes
+  the expected Jacobian and the linearization-residual covariance `Omega` enters the
+  innovation covariance as inflated measurement noise (`H P H^T + Omega + R`). Both
+  differences vanish identically for an affine vector field, so the correction is a
+  no-op on linear problems and on well-resolved pure solves. Rules: `"gauss_hermite"`
+  (default, exactness `2 * n_nodes - 1`) and `"cubature"` (third-degree spherical,
+  `2p` nodes). `max_iters > 1` gives the iterated posterior-linearization filter
+  (IPLF). Works on the plain, sequential-observation, and preconditioned paths.
+- **`ipls_smoother`** — the iterated posterior-linearization smoother. Refits the
+  surrogate at every step over the *smoothed* marginal and re-runs filter and
+  smoother for a fixed number of passes; `n_iters=0` reproduces the one-shot SLR
+  filter plus RTS exactly. Fixed grid, plain priors, fixed process noise, with
+  optional `obs_model`. Also exports `affine_filter_scan`, the linear-Gaussian
+  filter over a precomputed per-step surrogate that drives it.
+- **`ode_filters.filters.statistical_linearization`** — the SLR primitives:
+  `slr_linearize`, `SLRModel`, `gauss_hermite_rule`, `cubature_rule`,
+  `quadrature_nodes`, and `check_arg_projection`. The quadrature runs over the
+  *projected* marginal `N(E_args m, E_args P E_args^T)`, so its dimension is the ODE
+  dimension rather than the `d (q+1)` state dimension — which is both what makes the
+  spectrally accurate rule affordable and why no square root of the ill-conditioned
+  full `P` is ever taken.
+- **`BaseODEInformation.E_args`** — selection matrix for the coordinates the vector
+  field reads (`E0` for first-order, `[E0; E1]` for second-order, plus `E0_hidden`
+  for the hidden-state variants). Custom subclasses whose residual reads more than
+  `E0 @ state` must override it; `check_arg_projection` validates a declaration by
+  perturbing along the null space of `E_args`.
+- `MaternPrior` / `PrecondMaternPrior` accept an `n_quad` keyword argument
+  controlling the Gauss-Legendre node count of the new square-root process-noise
+  decomposition (default 64, robust to the float64 order ceiling). `n_quad <= q`
+  is rejected at construction: the rule contributes one row per node to the QR, so
+  too few nodes yield a non-square `[n_quad, q+1]` factor -- a wrong shape rather
+  than a coarser approximation, which otherwise surfaced only later as an opaque
+  shape error from inside a solve.
+
+### Changed
+
+- `MaternPrior.Q_sqr` / `PrecondMaternPrior.Q_sqr` now compute the square-root
+  process noise by a square-root matrix-fraction decomposition (QR of the
+  Gauss-Legendre-propagated rank-1 diffusion) in length-scale-normalized
+  coordinates, instead of a Cholesky of the dense `expm`-derived `Q(h)`. The factor
+  the square-root filter consumes stays finite and accurate up to the float64 order
+  ceiling (~`q = 18`) rather than NaN-ing around `q >= 6`; results match the old
+  path (to ~1e-13) wherever it was valid. The dense `Q(h)` itself is unchanged
+  (still ill-conditioned at high `q` -- prefer `Q_sqr` downstream).
+
+### Fixed
+
+- **Reverse-mode gradients no longer come back `NaN` from a deterministic initial
+  condition.** `np.linalg.qr` has an *undefined* derivative at a rank-deficient
+  input, and an exactly-zero stacked factor is not a corner case here: it is what
+  the first backward conditional *is* when the filter starts from a Dirac initial
+  state, which is exactly what `taylor_mode_initialization` returns. Because a zero
+  cotangent times a `NaN` derivative is still `NaN`, that single degenerate factor
+  poisoned the gradient of *everything* downstream -- including quantities that did
+  not depend on it at all, such as the smoothed *mean*. `sqr_marginalization` and
+  `sqr_inversion` now route their QR through `_safe_qr`, which substitutes a
+  well-conditioned stand-in on the exactly-zero branch (the standard double-`where`
+  idiom) and defines the derivative there to be zero. That is the correct value,
+  not a fudge: `P = P_sqr.T @ P_sqr` is smooth even where `P_sqr` is not, so
+  `dP = 2 P_sqr.T d(P_sqr)` vanishes at `P_sqr = 0` for any finite `d(P_sqr)`.
+  Values are bit-unchanged; `jax.grad` through `rts_smoother` (and `ipls_smoother`)
+  from a singular `P_0_sqr` now matches central finite differences instead of
+  returning `NaN`, so the jitter workaround previously documented for those
+  functions is no longer needed. Two degeneracies remain deliberately unhandled: a
+  *merely* rank-deficient factor (which needs a rank-revealing factorization), and a
+  singular *innovation* covariance, which stays `NaN` -- correctly, since
+  conditioning a zero-variance state on a zero-variance observation is ill-posed.
+  Regression coverage:
+  `test/test_sqr_gaussian_inference/test_degenerate_factor_gradients.py`.
+- **Every prior is constructible from traced hyperparameters again.** Two
+  construction-time defects introduced with the square-root process-noise work
+  above made `jax.jit` / `jax.grad` over a prior's own hyperparameters raise, which
+  breaks gradient-based hyperparameter inference — the library's primary use case —
+  for `IWP`, `PrecondIWP`, `MaternPrior`, `PrecondMaternPrior`, and any `JointPrior`
+  built from them. Eager construction was unaffected, which is why the suite did not
+  catch it.
+  - The `Q_bar` finiteness backstop tested a JAX array with a Python `bool()`,
+    raising `TracerBoolConversionError` for any traced `Xi`. It is now skipped under
+    tracing (where it cannot be evaluated) and keeps its eager behaviour, which is
+    where a pathological `q` would be introduced.
+  - `_make_matern_sqr_noise` cast `lambda = sqrt((2q+1)/length_scale)` with
+    `float()`, raising `ConcretizationTypeError` for a traced `length_scale`. The
+    cast was unnecessary — nothing downstream needs a concrete value — and is
+    removed, so `length_scale` is differentiable again.
+  - Regression coverage: `test/test_gmp_priors/test_traced_construction.py`
+    constructs every prior under `jit`/`grad` and pins `grad` against central finite
+    differences, so a future cast that silently *freezes* a hyperparameter (rather
+    than raising) fails too. This is the prior-construction analogue of
+    `test/test_filters/test_grad_safety.py`, which guards the solver loops.
+- `IWP` / `PrecondIWP` now factor the constant Hilbert `Q_bar` with a closed-form
+  square-root factor (exact integer-factorial formula, re-triangularized via QR)
+  instead of a numerical Cholesky that lost positive-definiteness and returned `NaN`
+  around `q >= 13`. The factor now stays finite and reconstructs `Q_bar` to machine
+  precision well past `q = 20` (matching `probdiffeq` and `ProbNumDiffEq.jl`, which
+  both use closed-form IWP factors); results are unchanged for `q <= 12`. A cheap
+  construction-time finiteness guard remains as a defensive backstop.
+
 ## [0.7.1] - 2026-06-23
 
 Documentation, packaging, and API-surface polish on top of the 0.7.0 refactor.
@@ -140,5 +276,7 @@ single consolidated solver API and a differentiable parameter-inference layer.
 part of the public API and is not jit/grad-able. Prefer `gaussian_filter_adaptive`.
 
 [res]: https://paufisch.github.io/ode_filters/api/filters/
+[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/paufisch/ode_filters/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/paufisch/ode_filters/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/paufisch/ode_filters/compare/v0.6.6...v0.7.0

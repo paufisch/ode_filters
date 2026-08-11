@@ -144,6 +144,14 @@ class _BarMeasure:
         return self._measure.E_constraint @ self._T
 
     @property
+    def E_args(self) -> Array:
+        # The vector field reads the same physical coordinates either way; in bar
+        # space they are selected by ``E_args @ T``. The projected marginal is
+        # therefore identical, which is what makes an SLR correction
+        # preconditioning-invariant.
+        return self._measure.E_args @ self._T
+
+    @property
     def ode_dim(self) -> int:
         return self._measure.ode_dim
 

@@ -6,6 +6,7 @@ import pytest
 from ode_filters.priors.gmp_priors import (
     IWP,
     PrecondIWP,
+    _iwp_precond_q_bar_sqr,
     _make_iwp_precond_state_matrices,
     _make_iwp_state_matrices,
 )
@@ -118,3 +119,30 @@ def test_iwp_precond_validate_h_returns_float():
 
 def test_iwp_precond_validate_h_passthrough():
     assert PrecondIWP._validate_h(-1.0) == -1.0
+
+
+@pytest.mark.parametrize("q", [13, 16, 18])
+def test_iwp_precond_q_bar_sqr_closed_form_reconstructs(q):
+    """The closed-form IWP Q_bar factor reconstructs Q_bar past the q>=13 cliff.
+
+    A numerical Cholesky of the Hilbert-like Q_bar NaNs around q >= 13; the
+    closed-form factor (matching probdiffeq / ProbNumDiffEq.jl) stays finite and
+    upper-triangular and reconstructs the exact constant Q_bar to ~machine precision.
+    """
+    factor = _iwp_precond_q_bar_sqr(q)
+    q_bar = _make_iwp_precond_state_matrices(q)[1]
+    assert np.all(np.isfinite(factor))
+    assert np.allclose(np.tril(factor, k=-1), 0.0, atol=1e-9)  # upper-triangular
+    assert np.allclose(factor.T @ factor, q_bar, rtol=1e-10, atol=1e-12)
+
+
+@pytest.mark.parametrize("prior_cls", [IWP, PrecondIWP])
+@pytest.mark.parametrize("q", [13, 16, 18])
+def test_high_order_q_sqr_finite_and_upper_triangular(prior_cls, q):
+    """IWP / PrecondIWP Q_sqr stays finite + upper-triangular past q >= 13.
+
+    Regression for the former numerical-Cholesky cliff (silent NaN at q >= 13).
+    """
+    Q_sqr = prior_cls(q=q, d=1).Q_sqr(0.1)
+    assert np.all(np.isfinite(Q_sqr))
+    assert np.allclose(np.tril(Q_sqr, k=-1), 0.0, atol=1e-9)

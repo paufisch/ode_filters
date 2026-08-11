@@ -111,3 +111,104 @@ def test_gradient_descent_recovers_parameter():
         lam = lam - lr * mhat / (np.sqrt(vhat) + eps)
 
     assert abs(float(lam) - LAM_TRUE) < 0.1, f"recovered lam={float(lam)}"
+
+
+# --------------------------------------------------------------------------
+# channel selection and prior_fn
+# --------------------------------------------------------------------------
+
+
+def test_channel_both_matches_scalar_channels():
+    """``channel="both"`` returns exactly the pair the scalar modes return."""
+    problem, obs_model = _problem_and_data()
+    theta = {"lam": np.array(LAM_TRUE)}
+
+    ll_obs = marginal_loglik(theta, obs_model, model=problem)
+    ll_ode_only = marginal_loglik(theta, obs_model, model=problem, channel="ode")
+    ll_ode, ll_obs_both = marginal_loglik(
+        theta, obs_model, model=problem, channel="both"
+    )
+
+    assert ll_obs_both == ll_obs
+    assert ll_ode == ll_ode_only
+    # The two channels are genuinely different quantities.
+    assert not np.allclose(ll_ode, ll_obs)
+
+
+def test_channel_ode_needs_no_observations():
+    """The residual channel is defined without data."""
+    problem, _ = _problem_and_data()
+    ll_ode = marginal_loglik(
+        {"lam": np.array(LAM_TRUE)}, None, model=problem, channel="ode"
+    )
+    assert np.isfinite(ll_ode)
+
+
+def test_channel_validation():
+    problem, obs_model = _problem_and_data()
+    theta = {"lam": np.array(LAM_TRUE)}
+    for bad in ("joint", "OBS", ""):
+        try:
+            marginal_loglik(theta, obs_model, model=problem, channel=bad)
+        except ValueError as exc:
+            assert "channel" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(f"channel={bad!r} should have raised")
+    # obs channel still requires data
+    try:
+        marginal_loglik(theta, None, model=problem)
+    except ValueError as exc:
+        assert "requires observations" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("channel='obs' with data=None should have raised")
+
+
+def test_channel_both_is_grad_safe():
+    """Both channels are differentiable w.r.t. theta."""
+    problem, obs_model = _problem_and_data()
+
+    def loss(theta):
+        ll_ode, ll_obs = marginal_loglik(
+            theta, obs_model, model=problem, channel="both"
+        )
+        return -(ll_ode + ll_obs)
+
+    g = jax.jit(jax.grad(loss))({"lam": np.array(LAM_TRUE)})
+    assert np.isfinite(g["lam"])
+
+
+def test_prior_fn_fits_prior_hyperparameters():
+    """``prior_fn`` puts the prior's diffusion scale in the traced region."""
+    problem, obs_model = _problem_and_data()
+
+    def prior_fn(theta):
+        return IWP(q=2, d=1, Xi=np.exp(theta["log_sigma"]) * np.eye(1))
+
+    hyper = problem._replace(prior=None, prior_fn=prior_fn)
+
+    def build(theta):
+        mu_0, Sigma_0_sqr, measure = problem.build(theta)
+        return mu_0, Sigma_0_sqr, measure
+
+    hyper = hyper._replace(build=build)
+    theta = {"lam": np.array(LAM_TRUE), "log_sigma": np.array(0.0)}
+
+    # The static `prior=None` is never touched when prior_fn is set.
+    ll = marginal_loglik(theta, obs_model, model=hyper)
+    assert np.isfinite(ll)
+
+    # ...and the hyperparameter carries gradient.
+    g = jax.jit(jax.grad(lambda th: -marginal_loglik(th, obs_model, model=hyper)))(
+        theta
+    )
+    assert np.isfinite(g["log_sigma"])
+    assert not np.allclose(g["log_sigma"], 0.0)
+
+
+def test_prior_fn_absent_uses_static_prior():
+    """Default path is unchanged: prior_fn=None uses the static prior."""
+    problem, obs_model = _problem_and_data()
+    theta = {"lam": np.array(LAM_TRUE)}
+    baseline = marginal_loglik(theta, obs_model, model=problem)
+    explicit = marginal_loglik(theta, obs_model, model=problem._replace(prior_fn=None))
+    assert baseline == explicit

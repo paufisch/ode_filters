@@ -2,6 +2,7 @@
 
 from .gmp_priors import (
     IWP,
+    IOUPPrior,
     JointPrior,
     MaternPrior,
     PrecondIWP,
@@ -12,6 +13,7 @@ from .gmp_priors import (
 
 __all__ = [
     "IWP",
+    "IOUPPrior",
     "JointPrior",
     "MaternPrior",
     "PrecondIWP",
