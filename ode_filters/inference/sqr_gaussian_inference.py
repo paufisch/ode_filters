@@ -5,6 +5,54 @@ import jax.scipy.linalg
 from jax import Array
 
 
+def _safe_qr(C: Array) -> Array:
+    """Upper-triangular ``R`` factor of ``C``, differentiable at ``C = 0``.
+
+    ``np.linalg.qr`` has an *undefined derivative* at a rank-deficient input: its
+    JVP solves with ``R``, whose diagonal has a zero. The value is fine (``R = 0``
+    for ``C = 0``) but reverse mode returns ``NaN``, and since a zero cotangent
+    times ``NaN`` is still ``NaN``, one degenerate factor poisons the gradient of
+    everything downstream -- even quantities that do not depend on it.
+
+    An exactly-zero ``C`` is not a corner case here: it is what the first backward
+    conditional of a filter started from a deterministic initial condition *is*.
+    :func:`~ode_filters.priors.taylor_mode_initialization` returns a zero
+    ``P_0_sqr``, so at the first step ``sqr_inversion`` sees a zero cross-term, a
+    zero gain, and hence a zero stacked factor.
+
+    Defining the derivative to be **zero** there is not a fudge, it is the correct
+    value. Covariances are what the caller ultimately consumes, and
+    ``P = P_sqr.T @ P_sqr`` is smooth even where ``P_sqr`` is not: ``P`` is
+    quadratic in the factor, so ``dP = 2 P_sqr.T d(P_sqr)`` vanishes at
+    ``P_sqr = 0`` whatever finite value ``d(P_sqr)`` takes. The ``NaN`` is the
+    ``0 * inf`` of a cancellation that AD cannot see through; substituting a
+    well-conditioned stand-in on the degenerate branch (the standard double-``where``
+    idiom) lets the cancellation happen.
+
+    Two boundaries. Only an *exactly* zero ``C`` is handled -- a merely
+    rank-deficient one (a structurally singular ``Q``, say) still has an undefined
+    QR derivative, which needs a rank-revealing factorization. And this repairs a
+    degenerate *output* factor, not a degenerate *innovation* covariance:
+    :func:`sqr_inversion` divides by ``Sigma_z_sqr`` in a triangular solve, so a
+    singular innovation stays ``NaN`` -- correctly, since conditioning a
+    zero-variance state on a zero-variance observation is ill-posed.
+
+    Args:
+        C: Stacked square-root factor, shape ``[M, N]`` with ``M >= N`` (both call
+            sites stack a state-sized block on top of a noise-sized one).
+
+    Returns:
+        Upper-triangular ``R`` of shape ``[N, N]`` with ``C.T @ C = R.T @ R``.
+    """
+    degenerate = np.all(C == 0.0)
+    # Full-column-rank stand-in, taken only on the degenerate branch. The outer
+    # `where` zeroes the cotangent reaching the QR there, so nothing about the
+    # stand-in leaks into either the value or the derivative.
+    stand_in = np.eye(C.shape[0], C.shape[1])
+    _, R = np.linalg.qr(np.where(degenerate, stand_in, C))
+    return np.where(degenerate, np.zeros_like(R), R)
+
+
 def sqr_marginalization(
     A: Array,
     b: Array,
@@ -64,7 +112,7 @@ def sqr_marginalization(
     # Compute marginal statistics
     mu_z = A @ mu + b
     C = np.concatenate([Sigma_sqr @ A.T, Q_sqr], axis=0)
-    _, Sigma_z_sqr = np.linalg.qr(C)
+    Sigma_z_sqr = _safe_qr(C)
 
     return mu_z, Sigma_z_sqr
 
@@ -115,7 +163,7 @@ def sqr_inversion(
     d = mu - K @ mu_z
     B = np.eye(n_state) - K @ A
     C = np.concatenate([Sigma_sqr @ B.T, (Q_sqr @ K.T).reshape(-1, n_state)], axis=0)
-    _, Lambda_sqr = np.linalg.qr(C)
+    Lambda_sqr = _safe_qr(C)
 
     return K, d, Lambda_sqr
 

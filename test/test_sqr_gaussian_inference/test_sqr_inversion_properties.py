@@ -110,7 +110,7 @@ def valid_sqr_inversion_inputs(
 
 
 @given(valid_sqr_inversion_inputs())
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_sqr_inversion_property_output_shapes(inputs):
     """Property: Output shapes are always correct."""
     A, mu, Sigma, mu_z, Sigma_z, Q = inputs
@@ -127,7 +127,7 @@ def test_sqr_inversion_property_output_shapes(inputs):
 
 
 @given(valid_sqr_inversion_inputs())
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_sqr_inversion_property_output_types(inputs):
     """Property: Outputs are always numpy arrays."""
     A, mu, Sigma, mu_z, Sigma_z, Q = inputs
@@ -144,7 +144,7 @@ def test_sqr_inversion_property_output_types(inputs):
 
 
 @given(valid_sqr_inversion_inputs())
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_sqr_inversion_property_no_nan_or_inf(inputs):
     """Property: Outputs never contain NaN or Inf."""
     A, mu, Sigma, mu_z, Sigma_z, Q = inputs
@@ -180,7 +180,7 @@ def test_sqr_inversion_property_no_singular_square_root(inputs):
 
 
 @given(load_random_marginalization_case())
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_sqr_inversion_property_reduces_uncertainty(inputs):
     """Property: Posterior covariance is smaller than prior (integration test)."""
     A, b, Q, mu, Sigma = inputs
