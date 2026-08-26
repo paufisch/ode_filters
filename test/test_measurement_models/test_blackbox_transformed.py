@@ -364,6 +364,45 @@ class TestTransformedMeasurementMethods:
         transformed_model.R = 0.1
         assert np.allclose(transformed_model.R, 0.1 * np.eye(2))
 
+    def test_E_args_delegates(self, transformed_model):
+        """`E_args` delegates: a link on a coordinate the base already reads.
+
+        Without it `slr_linearize` falls back to the identity and quadratures
+        over the whole state -- correct, but exponentially more nodes.
+        """
+        assert np.allclose(transformed_model.E_args, transformed_model._base.E_args)
+
+    def test_ode_dim_delegates(self, transformed_model):
+        """`ode_dim` delegates to the base: a transform does not add or remove rows.
+
+        The filter loops slice ``H_t[:ode_dim]`` for calibration, so a missing
+        delegation makes a transformed measure unrunnable rather than merely
+        mis-calibrated.
+        """
+        assert transformed_model.ode_dim == transformed_model._base.ode_dim
+
+    def test_delegation_raises_on_blackbox_base(self):
+        """A black-box base declares neither row layout nor argument selector.
+
+        Both must raise rather than guess: `slr_linearize` probes `E_args` with
+        `getattr(..., None)` and falls back to the identity, so a fabricated
+        selector would silently under-integrate instead of merely costing more.
+        """
+
+        def g_func(state, *, t):
+            return state[:2]
+
+        model = TransformedMeasurement(
+            BlackBoxMeasurement(g_func, state_dim=4, obs_dim=2),
+            lambda state: state**2,
+        )
+
+        with pytest.raises(AttributeError, match="no 'ode_dim'"):
+            _ = model.ode_dim
+        with pytest.raises(AttributeError, match="no 'E_args'"):
+            _ = model.E_args
+        assert getattr(model, "E_args", None) is None
+
     def test_with_blackbox_base(self):
         """Test TransformedMeasurement with BlackBoxMeasurement base."""
 
