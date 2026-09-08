@@ -7,6 +7,19 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+### Fixed
+
+- `MaternPrior.A_and_Q` / `A` / `Q` returned NaN at short length scales: the
+  scaling-and-squaring `expm` of the `[[F, S], [0, -F.T]]` Hamiltonian block
+  carries `S ~ lam^(2q+1)` and overflowed already at `q = 2`,
+  `length_scale = 2.6e-3` (`lam ~ 44`), `h = 1e-2` -- i.e. `lam h = 0.44`, which
+  is what any problem re-expressed on a unit time interval looks like. `A(h)` is
+  now `D_lam expm(lam M h) D_lam^-1` in the length-scale-normalized coordinates
+  `_make_matern_sqr_noise` already builds, and `Q(h)` is `R.T @ R` from the
+  square-root matrix-fraction decomposition `Q_sqr` already uses. Agrees with
+  the block form to ~1e-13 wherever that was finite; regression test
+  `test/test_gmp_priors/test_matern_short_length_scale.py`.
+
 ### Added
 
 - `TransformedMeasurement.ode_dim` and `TransformedMeasurement.E_args`, both
