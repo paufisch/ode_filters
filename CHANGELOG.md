@@ -7,6 +7,13 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-10-04
+
+A patch release: `MaternPrior` no longer returns NaN transition/process-noise
+matrices at short length scales, and `TransformedMeasurement` now forwards
+`ode_dim` and `E_args` so transformed measures run through the filter loops.
+Non-breaking.
+
 ### Fixed
 
 - `MaternPrior.A_and_Q` / `A` / `Q` returned NaN at short length scales: the
@@ -309,7 +316,8 @@ single consolidated solver API and a differentiable parameter-inference layer.
 part of the public API and is not jit/grad-able. Prefer `gaussian_filter_adaptive`.
 
 [res]: https://paufisch.github.io/ode_filters/api/filters/
-[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/paufisch/ode_filters/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/paufisch/ode_filters/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/paufisch/ode_filters/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/paufisch/ode_filters/compare/v0.6.6...v0.7.0
