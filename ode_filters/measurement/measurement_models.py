@@ -993,6 +993,60 @@ class TransformedMeasurement:
         """Set the measurement noise covariance matrix on the base model."""
         self._base.R = value
 
+    @property
+    def ode_dim(self) -> int:
+        """Number of ODE-defect rows (delegated to the base model).
+
+        A state transformation reparameterises *where* the residual is
+        evaluated; it does not change how many of the rows are ODE defect and
+        how many are constraints or observations. The filter loops read this to
+        slice ``H_t[:ode_dim]`` for calibration, so without the delegation a
+        transformed measure cannot be run through them at all.
+
+        Raises:
+            AttributeError: If the base model carries no ODE-information
+                structure (e.g. a :class:`BlackBoxMeasurement`), which has no
+                notion of which of its rows are ODE defect.
+        """
+        if not isinstance(self._base, BaseODEInformation):
+            raise AttributeError(
+                f"{type(self._base).__name__} base has no 'ode_dim': it does not "
+                "declare which of its rows are ODE defect."
+            )
+        return self._base.ode_dim
+
+    @property
+    def E_args(self) -> Array:
+        """Argument selector, delegated to the base model.
+
+        Valid whenever ``sigma`` acts within the coordinates the base already
+        reads -- the composed residual ``g(sigma(state))`` is then still affine
+        in the state except through ``E_args @ state``. That covers the usual
+        case of a link function on one component (e.g. a positivity transform on
+        a latent input).
+
+        It matters for cost, not just tidiness: ``slr_linearize`` falls back to
+        the identity when ``E_args`` is absent, which is correct but quadratures
+        over the *whole* state -- ``n_nodes ** state_dim`` nodes instead of
+        ``n_nodes ** len(args)``. For a joint latent-force state that is the
+        difference between 256 nodes and 17 million.
+
+        If ``sigma`` mixes in coordinates the base does not read, override this
+        with the union of the two sets.
+
+        Raises:
+            AttributeError: If the base model declares no argument selector
+                (e.g. a :class:`BlackBoxMeasurement`). Raising -- rather than
+                guessing one -- is what keeps ``slr_linearize``'s identity
+                fallback correct, since it probes with ``getattr``.
+        """
+        if not isinstance(self._base, BaseODEInformation):
+            raise AttributeError(
+                f"{type(self._base).__name__} base has no 'E_args': it declares no "
+                "argument selector to project the quadrature onto."
+            )
+        return self._base.E_args
+
     def g(self, state: Array, *, t: ArrayLike) -> Array:
         """Evaluate the measurement function on transformed state.
 

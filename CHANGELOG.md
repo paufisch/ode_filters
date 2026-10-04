@@ -5,6 +5,46 @@ All notable changes to **ode-filters** are documented here. The format is based 
 to [Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes ship in a
 minor bump, non-breaking changes in a patch bump).
 
+## [Unreleased]
+
+## [0.7.3] - 2026-10-04
+
+A patch release: `MaternPrior` no longer returns NaN transition/process-noise
+matrices at short length scales, and `TransformedMeasurement` now forwards
+`ode_dim` and `E_args` so transformed measures run through the filter loops.
+Non-breaking.
+
+### Fixed
+
+- `MaternPrior.A_and_Q` / `A` / `Q` returned NaN at short length scales: the
+  scaling-and-squaring `expm` of the `[[F, S], [0, -F.T]]` Hamiltonian block
+  carries `S ~ lam^(2q+1)` and overflowed already at `q = 2`,
+  `length_scale = 2.6e-3` (`lam ~ 44`), `h = 1e-2` -- i.e. `lam h = 0.44`, which
+  is what any problem re-expressed on a unit time interval looks like. `A(h)` is
+  now `D_lam expm(lam M h) D_lam^-1` in the length-scale-normalized coordinates
+  `_make_matern_sqr_noise` already builds, and `Q(h)` is `R.T @ R` from the
+  square-root matrix-fraction decomposition `Q_sqr` already uses. Agrees with
+  the block form to ~1e-13 wherever that was finite; regression test
+  `test/test_gmp_priors/test_matern_short_length_scale.py`.
+
+### Added
+
+- `TransformedMeasurement.ode_dim` and `TransformedMeasurement.E_args`, both
+  delegated to the wrapped base model. A state transformation reparameterises
+  *where* the residual is evaluated; it changes neither how many rows are ODE
+  defect nor -- for the usual case of a link function on a coordinate the base
+  already reads -- which coordinates the residual is nonlinear in. Previously
+  only `R` was forwarded, so a transformed measure could not be run through the
+  filter loops at all: they slice `H_t[:ode_dim]` for calibration. `E_args`
+  additionally keeps statistical linearization cheap -- `slr_linearize` falls
+  back to the identity when it is absent, which is correct but quadratures over
+  the whole state (`n_nodes ** state_dim` nodes instead of
+  `n_nodes ** len(args)`). A `sigma` that mixes in coordinates the base does not
+  read must override `E_args` with the union of the two sets. Over a
+  `BlackBoxMeasurement` base, which declares neither, both raise
+  `AttributeError` rather than guessing -- that is the signal `slr_linearize`
+  probes for, so raising is what keeps its identity fallback correct.
+
 ## [0.7.2] - 2026-08-11
 
 A feature release on top of 0.7.1: a new prior family (`IOUPPrior`), a new
@@ -276,7 +316,8 @@ single consolidated solver API and a differentiable parameter-inference layer.
 part of the public API and is not jit/grad-able. Prefer `gaussian_filter_adaptive`.
 
 [res]: https://paufisch.github.io/ode_filters/api/filters/
-[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/paufisch/ode_filters/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/paufisch/ode_filters/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/paufisch/ode_filters/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/paufisch/ode_filters/compare/v0.6.6...v0.7.0

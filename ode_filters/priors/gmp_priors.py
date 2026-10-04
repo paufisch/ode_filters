@@ -722,26 +722,25 @@ class MaternPrior(BasePrior):
                 f"got {self.S.shape}"
             )
 
-    def _expm_block_matrix(self, h: ArrayLike) -> Array:
-        """Compute exp(H*h) for Hamiltonian block matrix.
-
-        Args:
-            h: Step size.
-
-        Returns:
-            Matrix exponential of the block Hamiltonian (shape [2n, 2n]).
-        """
-        H = np.block(
-            [
-                [self._F, self.S],
-                [np.zeros_like(self._F), -self._F.T],
-            ]
-        )
-        return expm(H * h)
-
     def A_and_Q(self, h: ArrayLike) -> tuple[Array, Array]:
-        """Compute both A(h) and Q(h) efficiently in a single expm call.
-        This is sometimes called matrix fraction decomposition (MFD)
+        """Scalar ``(A(h), Q(h))``, both in length-scale-normalized coordinates.
+
+        ``A(h) = D_lam expm(lam M h) D_lam^-1`` -- the companion drift is
+        ``F = D_lam (lam M) D_lam^-1`` with ``M`` the fixed binomial companion of
+        :func:`_make_matern_sqr_noise`, so the exponential is taken of a matrix
+        whose entries are ``O(lam h)`` instead of ``O(lam^(q+1) h)``.  ``Q(h)`` is
+        ``R.T @ R`` from the square-root matrix-fraction decomposition that
+        :meth:`Q_sqr` already uses.
+
+        Both used to come out of one ``expm`` of the ``[[F, S], [0, -F.T]]``
+        Hamiltonian block (matrix fraction decomposition; ``PrecondMaternPrior``
+        still does this in its preconditioned coordinates).  That
+        block carries ``S ~ lam^(2q+1)``, and the scaling-and-squaring exponential
+        of it returns NaN once the length scale is short relative to the step --
+        measured: ``q = 2``, ``length_scale = 2.6e-3`` (``lam ~ 44``), ``h = 1e-2``,
+        i.e. ``lam h = 0.44`` -- which is exactly what a problem re-expressed on a
+        unit time interval looks like.  The normalized form is finite there and
+        agrees with the block form to ~1e-12 wherever the block form is finite.
 
         Args:
             h: Step size.
@@ -752,12 +751,15 @@ class MaternPrior(BasePrior):
             - Q_h: Diffusion matrix (shape [n, n])
         """
         h = self._validate_h(h)
-        expm_H = self._expm_block_matrix(h)
+        A_h = self._A_scalar(h)
+        R = _matern_scalar_Q_sqr(self._sqr_noise, h)
+        return A_h, R.T @ R
 
-        A_h = expm_H[: self.n, : self.n]
-        Q_h = expm_H[: self.n, self.n :] @ A_h.T
-
-        return A_h, Q_h
+    def _A_scalar(self, h: ArrayLike) -> Array:
+        """``expm(F h)`` for the scalar companion drift, via the normalized form."""
+        F_bar, _, D_lam, _, _ = self._sqr_noise
+        D_inv = np.diag(1.0 / np.diag(D_lam))
+        return D_lam @ expm(F_bar * h) @ D_inv
 
     def A(self, h: ArrayLike) -> Array:
         """Return the state transition matrix for step size h.
@@ -768,8 +770,7 @@ class MaternPrior(BasePrior):
         Returns:
             State transition matrix (shape [n, n]).
         """
-        A_h, _ = self.A_and_Q(h)
-        return np.kron(A_h, self._id)
+        return np.kron(self._A_scalar(self._validate_h(h)), self._id)
 
     def b(self, h: ArrayLike) -> Array:
         """Return the drift vector for step size h.
