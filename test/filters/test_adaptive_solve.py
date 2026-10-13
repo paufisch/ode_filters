@@ -1,5 +1,6 @@
 """Tests for the jit/vmap/grad-able save-at-grid adaptive solve."""
 
+import equinox as eqx
 import jax
 import jax.numpy as np
 import pytest
@@ -63,7 +64,7 @@ def test_jit_matches_eager():
     prior, measure, mu_0, S0_sqr = _logistic_problem()
     args = (mu_0, S0_sqr, prior, measure, SAVE_AT)
     eager = gaussian_filter_adaptive(*args)
-    jitted = jax.jit(gaussian_filter_adaptive, static_argnums=(2, 3))(*args)
+    jitted = eqx.filter_jit(gaussian_filter_adaptive)(*args)
     assert np.allclose(eager.m, jitted.m, atol=1e-10)
     assert np.allclose(eager.log_likelihood, jitted.log_likelihood, atol=1e-9)
 
@@ -301,9 +302,7 @@ def test_blowup_failure_is_jittable():
     """
     prior, measure, mu_0, S0_sqr = _blowup_problem(x0_val=1.0)
     save_at = np.linspace(0.0, 2.0, 5)
-    f = jax.jit(
-        gaussian_filter_adaptive, static_argnums=(2, 3), static_argnames=("max_steps",)
-    )
+    f = eqx.filter_jit(gaussian_filter_adaptive)
     res = f(mu_0, S0_sqr, prior, measure, save_at, max_steps=200)
     assert not bool(res.success)
     assert np.all(np.isfinite(res.m))

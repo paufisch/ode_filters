@@ -1,147 +1,85 @@
+"""Tests for the integrated Wiener process priors."""
+
 from math import factorial
 
 import jax.numpy as np
+import numpy as onp
 import pytest
 
 from ode_filters.priors import IWP, PrecondIWP
-from ode_filters.priors.iwp import (
-    _iwp_precond_q_bar_sqr,
-    _make_iwp_precond_state_matrices,
-    _make_iwp_state_matrices,
-)
+from ode_filters.priors.iwp import _iwp_constants, _iwp_scalar_A
 
 
-@pytest.mark.parametrize("q,h", [(0, 0.7), (1, 0.3)])
-def test_make_iwp_state_matrices_matches_closed_form(q, h):
-    A_fn, Q_fn = _make_iwp_state_matrices(q)
+@pytest.mark.parametrize("q,h", [(0, 0.7), (1, 0.3), (3, 0.05)])
+def test_transition_and_noise_match_the_closed_forms(q, h):
     dim = q + 1
-
-    # Build expected matrices explicitly.
-    expected_A = np.zeros((dim, dim), dtype=float)
-    for i in range(dim):
-        for j in range(i, dim):
-            expected_A = expected_A.at[i, j].set(h ** (j - i) / factorial(j - i))
-
-    expected_Q = np.zeros((dim, dim), dtype=float)
+    A = onp.zeros((dim, dim))
+    Q = onp.zeros((dim, dim))
     for i in range(dim):
         for j in range(dim):
-            power = 2 * q + 1 - i - j
-            denom = (2 * q + 1 - i - j) * factorial(q - i) * factorial(q - j)
-            expected_Q = expected_Q.at[i, j].set(h**power / denom)
-
-    assert A_fn(h) == pytest.approx(expected_A)
-    assert Q_fn(h) == pytest.approx(expected_Q)
-
-
-def test_make_iwp_state_matrices_invalid_inputs():
-    with pytest.raises(ValueError):
-        _make_iwp_state_matrices(-1)
+            if j >= i:
+                A[i, j] = h ** (j - i) / factorial(j - i)
+            p = 2 * q + 1 - i - j
+            Q[i, j] = h**p / (p * factorial(q - i) * factorial(q - j))
+    prior = IWP(q=q, d=1)
+    assert np.allclose(_iwp_scalar_A(q, h), A)
+    assert np.allclose(prior.A(h), A)
+    assert np.allclose(prior.Q(h), Q, rtol=1e-10)
 
 
-def test_iwp_identity_sigma_matches_kron():
-    q, d, h = 1, 2, 0.5
-    iwp = IWP(q=q, d=d)
-    base_A, base_Q = _make_iwp_state_matrices(q)
-    expected_A = np.kron(base_A(h), np.eye(d))
-    expected_Q = np.kron(base_Q(h), np.eye(d))
-
-    assert iwp.A(h) == pytest.approx(expected_A)
-    assert iwp.Q(h) == pytest.approx(expected_Q)
+def test_kronecker_structure_with_xi():
+    xi = np.array([[2.0, 0.3], [0.3, 1.0]])
+    prior, scalar = IWP(q=2, d=2, Xi=xi), IWP(q=2, d=1)
+    h = 0.4
+    assert np.allclose(prior.A(h), np.kron(scalar.A(h), np.eye(2)))
+    assert np.allclose(prior.Q(h), np.kron(scalar.Q(h), xi), rtol=1e-10)
+    assert np.allclose(np.tril(prior.Q_sqr(h), -1), 0.0)
 
 
-def test_iwp_custom_sigma_and_validation():
-    sigma = np.array([[2.0, 0.5], [0.5, 1.0]])
-    iwp = IWP(q=1, d=2, Xi=sigma)
-    h = 0.25
-    base_Q = _make_iwp_state_matrices(1)[1]
-    expected_Q = np.kron(base_Q(h), sigma)
-
-    assert iwp.Q(h) == pytest.approx(expected_Q)
-
-    with pytest.raises(ValueError):
-        IWP(q=-1, d=2)
-
-    with pytest.raises(ValueError):
-        IWP(q=1, d=0)
-
-    with pytest.raises(ValueError):
-        IWP(q=1, d=2, Xi=np.eye(3))
-
-
-@pytest.mark.parametrize("q_float", [0.5, 1.5])
-def test_make_iwp_state_matrices_rejects_float_q(q_float):
-    with pytest.raises(TypeError):
-        _make_iwp_state_matrices(q_float)
-
-
-@pytest.mark.parametrize("q_float", [0.5, 1.5])
-def test_iwp_rejects_float_q(q_float):
-    with pytest.raises(TypeError):
-        IWP(q=q_float, d=2)
-
-
-@pytest.mark.parametrize("d_float", [1.5, 2.0])
-def test_iwp_rejects_float_d(d_float):
-    with pytest.raises(TypeError):
-        IWP(q=1, d=d_float)
-
-
-def test_make_iwp_precond_state_matrices_rejects_negative_q():
-    with pytest.raises(ValueError, match="q must be a non-negative integer"):
-        _make_iwp_precond_state_matrices(-1)
-
-
-@pytest.mark.parametrize(
-    "args,expected_exception,match",
-    [
-        ((1.2, 1), TypeError, "q must be an integer"),
-        ((-1, 1), ValueError, "q must be non-negative"),
-        ((0, "1"), TypeError, "d must be an integer"),
-        ((0, 0), ValueError, "d must be positive"),
-    ],
-)
-def test_iwp_precond_constructor_rejects_invalid_q_and_d(
-    args, expected_exception, match
-):
-    with pytest.raises(expected_exception, match=match):
-        PrecondIWP(*args)
-
-
-def test_iwp_precond_constructor_rejects_bad_xi_shape():
-    with pytest.raises(ValueError, match=r"Xi must have shape"):
-        PrecondIWP(q=0, d=1, Xi=np.eye(2))
-
-
-def test_iwp_precond_validate_h_returns_float():
-    assert PrecondIWP._validate_h(2) == 2.0
-
-
-def test_iwp_precond_validate_h_passthrough():
-    assert PrecondIWP._validate_h(-1.0) == -1.0
-
-
-@pytest.mark.parametrize("q", [13, 16, 18])
-def test_iwp_precond_q_bar_sqr_closed_form_reconstructs(q):
-    """The closed-form IWP Q_bar factor reconstructs Q_bar past the q>=13 cliff.
-
-    A numerical Cholesky of the Hilbert-like Q_bar NaNs around q >= 13; the
-    closed-form factor (matching probdiffeq / ProbNumDiffEq.jl) stays finite and
-    upper-triangular and reconstructs the exact constant Q_bar to ~machine precision.
-    """
-    factor = _iwp_precond_q_bar_sqr(q)
-    q_bar = _make_iwp_precond_state_matrices(q)[1]
-    assert np.all(np.isfinite(factor))
-    assert np.allclose(np.tril(factor, k=-1), 0.0, atol=1e-9)  # upper-triangular
-    assert np.allclose(factor.T @ factor, q_bar, rtol=1e-10, atol=1e-12)
+@pytest.mark.parametrize("q", [1, 5, 13, 20])
+def test_closed_form_noise_factor_reconstructs_the_hilbert_matrix(q):
+    _, Q_bar_sqr, _ = _iwp_constants(q)
+    i, j = onp.indices((q + 1, q + 1))
+    hilbert = 1.0 / (2 * q + 1 - i - j)
+    rel = onp.linalg.norm(Q_bar_sqr.T @ Q_bar_sqr - hilbert) / onp.linalg.norm(hilbert)
+    assert rel < 1e-12
 
 
 @pytest.mark.parametrize("prior_cls", [IWP, PrecondIWP])
-@pytest.mark.parametrize("q", [13, 16, 18])
-def test_high_order_q_sqr_finite_and_upper_triangular(prior_cls, q):
-    """IWP / PrecondIWP Q_sqr stays finite + upper-triangular past q >= 13.
+@pytest.mark.parametrize("q", [10, 15, 20])
+def test_high_order_noise_is_finite_and_triangular(prior_cls, q):
+    Q_sqr = prior_cls(q=q, d=2).transition(0.01).Q_sqr
+    assert bool(np.all(np.isfinite(Q_sqr)))
+    assert np.allclose(np.tril(Q_sqr, -1), 0.0)
 
-    Regression for the former numerical-Cholesky cliff (silent NaN at q >= 13).
-    """
-    Q_sqr = prior_cls(q=q, d=1).Q_sqr(0.1)
-    assert np.all(np.isfinite(Q_sqr))
-    assert np.allclose(np.tril(Q_sqr, k=-1), 0.0, atol=1e-9)
+
+@pytest.mark.parametrize("prior_cls", [IWP, PrecondIWP])
+@pytest.mark.parametrize(
+    ("q", "d", "error"),
+    [
+        (1.5, 1, TypeError),
+        (-1, 1, ValueError),
+        (2, 0, ValueError),
+        (2, 1.0, TypeError),
+        (True, 1, TypeError),
+    ],
+)
+def test_invalid_order_or_dimension_raises(prior_cls, q, d, error):
+    with pytest.raises(error):
+        prior_cls(q=q, d=d)
+
+
+def test_xi_of_the_wrong_shape_raises():
+    with pytest.raises(ValueError, match="Xi must have shape"):
+        IWP(q=1, d=2, Xi=np.eye(3))
+
+
+def test_selectors_and_dimensions():
+    prior = IWP(q=2, d=2)
+    state = np.arange(6.0)
+    assert prior.state_dim == 6
+    assert np.allclose(prior.E0 @ state, state[:2])
+    assert np.allclose(prior.E1 @ state, state[2:4])
+    assert np.allclose(prior.E2 @ state, state[4:])
+    assert IWP(q=1, d=1).E2 is None
+    assert np.allclose(prior.b(0.3), 0.0)

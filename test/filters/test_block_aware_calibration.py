@@ -238,8 +238,8 @@ class TestJointPriorStateOnlyScaling:
         Q_calib_sqr = joint.apply_state_sigma_sqr(Q_h_sqr, sigma_sqr)
         Q_calib = Q_calib_sqr.T @ Q_calib_sqr
 
-        D_x = (prior_x.q + 1) * prior_x._dim  # 6
-        D_u = (prior_u.q + 1) * prior_u._dim  # 2
+        D_x = (prior_x.q + 1) * prior_x.d  # 6
+        D_u = (prior_u.q + 1) * prior_u.d  # 2
 
         # State block scaled by sigma_sqr.
         onp.testing.assert_allclose(
@@ -274,7 +274,7 @@ class TestJointPriorStateOnlyScaling:
 
         # A generic (not block-diagonal) full-state covariance sqrt.
         key = onp.random.default_rng(0)
-        D = (prior_x.q + 1) * prior_x._dim + (prior_u.q + 1) * prior_u._dim
+        D = (prior_x.q + 1) * prior_x.d + (prior_u.q + 1) * prior_u.d
         A = np.asarray(key.standard_normal((D, D)))
         P = A.T @ A
         P_sqr = np.linalg.cholesky(P).T
@@ -283,7 +283,7 @@ class TestJointPriorStateOnlyScaling:
         P_calib_sqr = joint.apply_state_sigma_to_cov_sqr(P_sqr, sigma_sqr)
         P_calib = P_calib_sqr.T @ P_calib_sqr
 
-        D_x = (prior_x.q + 1) * prior_x._dim
+        D_x = (prior_x.q + 1) * prior_x.d
         # Input block (rows/cols >= D_x) UNCHANGED.
         onp.testing.assert_allclose(
             onp.asarray(P_calib[D_x:, D_x:]),
@@ -373,7 +373,7 @@ class TestJointPriorDiagonalCalibration:
         Q_h_sqr = np.linalg.cholesky(joint.Q(h)).T
         sigma_vec = np.array([7.0, 0.3])  # arbitrary per-component values
         Q_calib_sqr = joint.apply_state_sigma_sqr(Q_h_sqr, sigma_vec)
-        D_x = joint._D_x
+        D_x = joint.prior_x.state_dim
         # Input block of Q (reconstructed from sqrt) is unchanged.
         Q_h = Q_h_sqr.T @ Q_h_sqr
         Q_calib = Q_calib_sqr.T @ Q_calib_sqr
@@ -410,9 +410,9 @@ class TestAdaptiveErrorNormUsesStateOnly:
         prior_u = IWP(q=1, d=1)
         joint = JointPrior(prior_x, prior_u)
         # E0_state should be E0_x (state-only extractor).
-        assert joint.E0_state.shape[0] == prior_x._dim
+        assert joint.E0_state.shape[0] == prior_x.d
         onp.testing.assert_array_equal(
-            onp.asarray(joint.E0_state), onp.asarray(joint._E0_x)
+            onp.asarray(joint.E0_state), onp.asarray(joint.E0_x)
         )
 
     def test_E0_state_default_equals_E0_for_non_joint(self):

@@ -78,7 +78,7 @@ def test_joint_rescale_leaves_input_block_unchanged():
     path wrongly scales the hidden/input block; passing prior= fixes it.
     """
     prior = _joint_prior()
-    D_x = prior._D_x  # 3
+    D_x = prior.prior_x.state_dim  # 3
     P_sqr = np.arange(1.0, 26.0).reshape(5, 5)  # full-state sqrt, D = D_x + D_u = 5
     sigma_sqr = 4.0
 
@@ -94,7 +94,7 @@ def test_joint_rescale_leaves_input_block_unchanged():
 
 def test_joint_rescale_seq_per_step():
     prior = _joint_prior()
-    D_x = prior._D_x
+    D_x = prior.prior_x.state_dim
     P0 = np.arange(1.0, 26.0).reshape(5, 5)
     P_seq = np.stack([P0, 2.0 * P0])
     sigma_seq = np.asarray([4.0, 9.0])

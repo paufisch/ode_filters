@@ -41,19 +41,20 @@ result = solve(m_0, P_0_sqr, prior, measure, np.linspace(0.0, 10.0, 101))
 A traced grid is handled step by step (one transition per step); a concrete
 uniform grid passed outside `jit` computes the prior's transition once.
 
-### Build models once and don't mutate them under `jit`
+### Models are pytrees: use `equinox.filter_jit`, not `jax.jit` with static arguments
 
-Priors and measurement models are static arguments, compared by identity. Two
-consequences:
+Priors and measurement models are `equinox` modules. Their arrays (`Xi`, a length
+scale, a rate, the selection matrices, the noise `R`) are pytree leaves; their
+orders, dimensions and vector fields are static. So:
 
-- **A new model object recompiles**, even if it is equal to the old one. Build
-  the prior and measurement model once and reuse them across calls.
-- **A mutated model is not noticed.** After `measure.R = 0.5`, a jitted solve
-  that has already seen `measure` keeps using the old noise. Build a new model
-  instead (which recompiles), or call the solver without `jit`.
-
-Only arrays (`m_0`, `P_0_sqr`, the time grid, the data in an `obs_model`,
-parameters) are traced, so differentiate with respect to those.
+- `equinox.filter_jit` traces a model's arrays like any other argument: a new
+  model with the same structure does not recompile, and one with a different
+  hyperparameter is not silently stale. `jax.jit` with `static_argnums` does not
+  work, because a module holding arrays is not hashable.
+- Models are immutable. `measure.with_noise(R)` returns a copy with new noise;
+  there is no setter.
+- A model can be differentiated (`equinox.filter_grad`) or batched
+  (`equinox.filter_vmap`) directly, e.g. over a length scale.
 
 ### Data times must be grid nodes
 

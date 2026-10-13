@@ -1,144 +1,106 @@
-"""Tests for MaternPrior and _matern_companion_form."""
+"""Tests for MaternPrior, against the companion form and its stationary law."""
 
+import jax
 import jax.numpy as np
+import numpy as onp
 import pytest
 
-from ode_filters.priors import MaternPrior
-from ode_filters.priors.matern import _matern_companion_form
+from ode_filters.priors import MaternPrior, PrecondMaternPrior
+from test.helpers import assert_grad_matches_fd, matern_companion, van_loan
 
 
-class TestMaternCompanionForm:
-    """Tests for _matern_companion_form helper function."""
-
-    def test_returns_correct_shapes(self):
-        """Test that returned matrices have correct shapes."""
-        length_scale, q = 1.0, 2
-        F, L, q_coeff = _matern_companion_form(length_scale, q)
-        D = q + 1
-
-        assert F.shape == (D, D), f"F shape should be ({D}, {D})"
-        assert L.shape == (D, 1), f"L shape should be ({D}, 1)"
-        # q_coeff may be a Python float or a 0-d JAX array (for JIT compatibility)
-        assert np.ndim(np.asarray(q_coeff)) == 0, "q coefficient should be a scalar"
-
-    def test_F_has_super_diagonal_ones(self):
-        """Test that F matrix has ones on super-diagonal."""
-        length_scale, q = 2.0, 2
-        F, _, _ = _matern_companion_form(length_scale, q)
-        D = q + 1
-
-        for i in range(D - 1):
-            assert F[i, i + 1] == pytest.approx(1.0), f"F[{i}, {i + 1}] should be 1.0"
-
-    def test_L_has_one_in_last_position(self):
-        """Test that L vector has 1 in last position, zeros elsewhere."""
-        length_scale, q = 1.5, 3
-        _, L, _ = _matern_companion_form(length_scale, q)
-        D = q + 1
-
-        assert L[-1, 0] == pytest.approx(1.0), "Last element of L should be 1.0"
-        for i in range(D - 1):
-            assert L[i, 0] == pytest.approx(0.0), f"L[{i}] should be 0.0"
-
-    def test_rejects_negative_q(self):
-        """Test that negative q raises error."""
-        with pytest.raises(ValueError, match="non-negative integer"):
-            _matern_companion_form(1.0, -1)
-
-    def test_rejects_float_q(self):
-        """Test that float q raises error."""
-        with pytest.raises(ValueError, match="non-negative integer"):
-            _matern_companion_form(1.0, 1.5)
-
-    @pytest.mark.parametrize("q", [0, 1, 2, 3])
-    def test_q_coefficient_positive(self, q):
-        """Test that diffusion coefficient is always positive."""
-        _, _, q_coeff = _matern_companion_form(1.0, q)
-        assert q_coeff > 0, "Diffusion coefficient should be positive"
+@pytest.mark.parametrize("q", [0, 1, 2, 3])
+@pytest.mark.parametrize("length_scale", [0.5, 2.0])
+@pytest.mark.parametrize("h", [0.05, 0.5])
+def test_transition_and_noise_match_the_companion_form(q, length_scale, h):
+    A_ref, Q_ref = van_loan(*matern_companion(length_scale, q), h)
+    prior = MaternPrior(q, 1, length_scale)
+    assert np.allclose(prior.A(h), A_ref, rtol=1e-10, atol=1e-12)
+    assert np.allclose(
+        prior.Q(h), Q_ref, rtol=1e-8, atol=1e-12 * float(np.max(np.abs(Q_ref)))
+    )
 
 
-class TestMaternPrior:
-    """Tests for MaternPrior class."""
+def test_kronecker_structure_and_shapes():
+    xi = np.array([[2.0, 0.3], [0.3, 1.0]])
+    prior, scalar = MaternPrior(2, 2, 1.5, Xi=xi), MaternPrior(2, 1, 1.5)
+    h = 0.3
+    assert (
+        prior.state_dim == 6 and prior.E0.shape == (2, 6) and prior.E1.shape == (2, 6)
+    )
+    assert np.allclose(prior.A(h), np.kron(scalar.A(h), np.eye(2)))
+    assert np.allclose(prior.Q(h), np.kron(scalar.Q(h), xi), rtol=1e-10)
+    assert np.allclose(prior.b(h), np.zeros(6))
+    assert np.allclose(prior.A(0.0), np.eye(6))
 
-    def test_constructor_basic(self):
-        """Test basic construction."""
-        prior = MaternPrior(q=2, d=1, length_scale=1.0)
-        assert prior.q == 2
-        assert prior._dim == 1
-        assert prior.n == 3  # q + 1
 
-    def test_constructor_with_xi(self):
-        """Test construction with custom Xi matrix."""
-        xi = np.array([[2.0, 0.5], [0.5, 1.0]])
-        prior = MaternPrior(q=1, d=2, length_scale=1.0, Xi=xi)
-        assert np.allclose(prior.xi, xi)
+def test_n_quad_must_exceed_the_order():
+    with pytest.raises(ValueError, match="n_quad must exceed q"):
+        MaternPrior(q=4, d=1, length_scale=1.0, n_quad=4)
 
-    def test_A_returns_correct_shape(self):
-        """Test that A(h) returns correct shape."""
-        q, d = 2, 2
-        prior = MaternPrior(q=q, d=d, length_scale=1.0)
-        A = prior.A(0.5)
-        expected_shape = ((q + 1) * d, (q + 1) * d)
-        assert A.shape == expected_shape, f"A shape should be {expected_shape}"
 
-    def test_Q_returns_correct_shape(self):
-        """Test that Q(h) returns correct shape."""
-        q, d = 2, 2
-        prior = MaternPrior(q=q, d=d, length_scale=1.0)
-        Q = prior.Q(0.5)
-        expected_shape = ((q + 1) * d, (q + 1) * d)
-        assert Q.shape == expected_shape, f"Q shape should be {expected_shape}"
+# ---------------------------------------------------------------------------
+# The stationary law
+# ---------------------------------------------------------------------------
 
-    def test_b_returns_zeros(self):
-        """Test that b(h) returns zero vector."""
-        prior = MaternPrior(q=2, d=1, length_scale=1.0)
-        b = prior.b(0.5)
-        assert np.allclose(b, np.zeros(prior.n))
 
-    @pytest.mark.parametrize(("q", "d"), [(2, 2), (1, 3), (3, 2)])
-    def test_b_shape_matches_lifted_state(self, q, d):
-        """b(h) must have the Kron-lifted length (q+1)*d, not (q+1).
+def _lyapunov(F, S):
+    """Stationary covariance from ``F P + P F.T + S = 0`` by vectorization."""
+    F, S = onp.asarray(F), onp.asarray(S)
+    n = F.shape[0]
+    eye = onp.eye(n)
+    P = onp.linalg.solve(onp.kron(F, eye) + onp.kron(eye, F), -S.reshape(-1))
+    return P.reshape(n, n)
 
-        Regression for the d>1 drift-dimension bug: b previously returned
-        ``np.zeros(q + 1)``, mismatching the ``(q+1)*d`` state for d>1.
-        """
-        prior = MaternPrior(q=q, d=d, length_scale=1.0)
-        b = prior.b(0.5)
-        assert b.shape == ((q + 1) * d,)
-        assert np.allclose(b, 0.0)
-        # b must be conformable with A(h) @ state + b.
-        assert b.shape[0] == prior.A(0.5).shape[0]
 
-    def test_A_and_Q_combined(self):
-        """Test that A_and_Q returns both matrices."""
-        prior = MaternPrior(q=2, d=1, length_scale=1.0)
-        A, Q = prior.A_and_Q(0.5)
-        assert A.shape == (3, 3)
-        assert Q.shape == (3, 3)
+@pytest.mark.parametrize("q", [0, 1, 2, 3, 5])
+@pytest.mark.parametrize("length_scale", [0.3, 1.0, 4.0])
+def test_stationary_covariance_matches_the_lyapunov_solution(q, length_scale):
+    prior = MaternPrior(q, 1, length_scale)
+    S = prior.stationary_cov_sqr()
+    expected = _lyapunov(*matern_companion(length_scale, q))
+    assert np.allclose(
+        S.T @ S, expected, rtol=1e-9, atol=1e-12 * onp.abs(expected).max()
+    )
 
-    def test_Q_is_symmetric(self):
-        """Test that Q(h) is symmetric."""
-        prior = MaternPrior(q=2, d=1, length_scale=1.0)
-        Q = prior.Q(0.5)
-        assert np.allclose(Q, Q.T), "Q should be symmetric"
 
-    def test_Q_is_positive_semidefinite(self):
-        """Test that Q(h) is positive semi-definite."""
-        prior = MaternPrior(q=2, d=1, length_scale=1.0)
-        Q = prior.Q(0.5)
-        eigenvalues = np.linalg.eigvalsh(Q)
-        assert np.all(eigenvalues >= -1e-10), "Q should be positive semi-definite"
+@pytest.mark.parametrize("prior_cls", [MaternPrior, PrecondMaternPrior])
+@pytest.mark.parametrize("q", [1, 2, 4])
+@pytest.mark.parametrize("h", [0.01, 0.3, 3.0])
+def test_stationary_covariance_is_invariant_under_the_transition(prior_cls, q, h):
+    xi = np.diag(np.array([0.5, 2.0]))
+    prior = prior_cls(q, 2, 0.8, Xi=xi)
+    S = prior.stationary_cov_sqr()
+    P = S.T @ S
+    A = prior.A(h)
+    assert np.allclose(A @ P @ A.T + prior.Q(h), P, atol=1e-10 * float(np.max(P)))
+    assert np.allclose(np.tril(S, -1), 0.0)
 
-    @pytest.mark.parametrize("h", [0.1, 0.5, 1.0, 2.0])
-    def test_A_h_zero_is_identity(self, h):
-        """Test that A(0) is identity matrix."""
-        prior = MaternPrior(q=2, d=1, length_scale=1.0)
-        A_0 = prior.A(0.0)
-        n = prior.n
-        assert np.allclose(A_0, np.eye(n)), "A(0) should be identity"
 
-    def test_E0_E1_properties_available(self):
-        """Test that E0 and E1 properties are accessible."""
-        prior = MaternPrior(q=2, d=1, length_scale=1.0)
-        assert prior.E0.shape == (1, 3)
-        assert prior.E1.shape == (1, 3)
+@pytest.mark.parametrize("q", [0, 1, 2, 3])
+def test_stationary_variance_of_the_solution_is_xi(q):
+    xi = np.diag(np.array([0.5, 3.0]))
+    S = MaternPrior(q, 2, 0.7, Xi=xi).stationary_cov_sqr()
+    P = S.T @ S
+    assert np.allclose(P[:2, :2], xi, rtol=1e-10)
+
+
+def test_stationary_covariance_is_finite_at_short_length_scales():
+    S = MaternPrior(2, 1, 2.6e-3).stationary_cov_sqr()
+    assert bool(np.all(np.isfinite(S)))
+
+
+def test_stationary_covariance_is_differentiable_and_traceable():
+    def entry(log_ell):
+        S = MaternPrior(2, 1, np.exp(log_ell)).stationary_cov_sqr()
+        return (S.T @ S)[1, 1]
+
+    assert_grad_matches_fd(entry, np.array(0.3))
+
+    def scaled(xi):
+        S = MaternPrior(1, 1, 1.0, Xi=xi * np.eye(1)).stationary_cov_sqr()
+        return (S.T @ S)[0, 0]
+
+    assert_grad_matches_fd(scaled, np.array(1.7))
+    jitted = jax.jit(lambda ell: MaternPrior(2, 1, ell).stationary_cov_sqr())(0.5)
+    assert np.allclose(jitted, MaternPrior(2, 1, 0.5).stationary_cov_sqr())

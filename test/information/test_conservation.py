@@ -1,12 +1,9 @@
-"""Tests for the ODEconservation factory function."""
+"""Tests for conservation laws on ODE information."""
 
 import jax.numpy as np
 import pytest
 
-from ode_filters.information import (
-    Conservation,
-    ODEconservation,
-)
+from ode_filters.information import Conservation, ODEInformation
 
 
 def make_projection_matrices(d: int, q: int):
@@ -18,11 +15,11 @@ def make_projection_matrices(d: int, q: int):
     return E0, E1
 
 
-class TestODEconservationConstruction:
-    """Tests for ODEconservation constructor."""
+class TestConservationConstruction:
+    """Tests for ODE information with a conservation law."""
 
     def test_basic_construction(self):
-        """Test basic construction of ODEconservation."""
+        """Test basic construction with a conservation law."""
 
         def vf(x, *, t):
             return x
@@ -31,10 +28,10 @@ class TestODEconservationConstruction:
         A = np.array([[1.0, 1.0]])  # Conservation: x1 + x2 = const
         p = np.array([1.0])
 
-        model = ODEconservation(vf=vf, E0=E0, E1=E1, A=A, p=p)
+        model = ODEInformation(vf, E0, E1, constraints=[Conservation(A, p)])
         # Model has one Conservation constraint
-        assert len(model._constraints) == 1
-        assert isinstance(model._constraints[0], Conservation)
+        assert len(model.constraints) == 1
+        assert isinstance(model.constraints[0], Conservation)
 
     def test_rejects_mismatched_A_p_shapes(self):
         """Test that mismatched A and p shapes raise error."""
@@ -47,7 +44,7 @@ class TestODEconservationConstruction:
         p = np.array([1.0])  # Only 1 value
 
         with pytest.raises(ValueError, match="must match"):
-            ODEconservation(vf=vf, E0=E0, E1=E1, A=A, p=p)
+            ODEInformation(vf, E0, E1, constraints=[Conservation(A, p)])
 
     def test_rejects_mismatched_A_E0_shapes(self):
         """Test that mismatched A and E0 shapes raise error."""
@@ -60,15 +57,15 @@ class TestODEconservationConstruction:
         p = np.array([1.0])
 
         with pytest.raises(ValueError):
-            ODEconservation(vf=vf, E0=E0, E1=E1, A=A, p=p)
+            ODEInformation(vf, E0, E1, constraints=[Conservation(A, p)])
 
 
-class TestODEconservationMethods:
-    """Tests for ODEconservation methods."""
+class TestConservationMethods:
+    """Tests for the conservation rows."""
 
     @pytest.fixture
     def conservation_model(self):
-        """Create a standard ODEconservation for testing."""
+        """A first-order ODE information with one conservation law."""
 
         def vf(x, *, t):
             return -x  # Simple decay
@@ -77,7 +74,7 @@ class TestODEconservationMethods:
         A = np.array([[1.0, 1.0]])  # Conservation: x1 + x2 = const
         p = np.array([2.0])  # x1 + x2 = 2
 
-        return ODEconservation(vf=vf, E0=E0, E1=E1, A=A, p=p)
+        return ODEInformation(vf, E0, E1, constraints=[Conservation(A, p)])
 
     def test_g_returns_combined_residual(self, conservation_model):
         """Test that g returns ODE residual plus conservation residual."""
@@ -110,7 +107,7 @@ class TestODEconservationMethods:
 
     def test_get_noise_returns_correct_shape(self, conservation_model):
         """Test that get_noise returns correct shape."""
-        R = conservation_model.get_noise(t=0.0)
+        R = conservation_model.noise_sqr(t=0.0)
 
         # Shape should be (d + k, d + k) = (3, 3)
         assert R.shape == (3, 3)

@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import NamedTuple
 
+import equinox as eqx
 import jax.numpy as np
 import numpy as onp
 from jax import Array
 from jax.typing import ArrayLike
 
-from ..gaussian.algebra import _check_noise_covariance, _safe_cholesky_sqr
+from ..gaussian.algebra import _safe_cholesky_sqr
+from .noise import noise_matrix
 
 # Default measurement noise for observations
 DEFAULT_MEASUREMENT_NOISE = 1e-6
@@ -101,7 +102,7 @@ def prepare_observations(
     for m in observations:
         rows = slice(offset, offset + m.dim)
         H = H.at[rows, :].set(m.A if m.full_state else m.A @ E0)
-        R = R.at[rows, rows].set(m.get_noise_matrix())
+        R = R.at[rows, rows].set(m.R)
         times = onp.asarray(m.z_t, dtype=float)
         idx = _grid_steps(times, steps)
         if onp.any(idx < 0):
@@ -124,69 +125,60 @@ def prepare_observations(
     )
 
 
-@dataclass(frozen=True)
-class Measurement:
+class Measurement(eqx.Module):
     """Noisy linear data ``z[n] = A @ x(z_t[n]) + v`` at the times ``z_t``.
 
     Passed to the solvers through ``prepare_observations``, which matches the
     times to the solver's grid with a small tolerance (absorbing the ~1e-8
     differences between NumPy and JAX ``linspace``).
 
-    Args:
-        A: Measurement matrix (shape [k, d] or [k, state_dim] if full_state=True).
-        z: Measurement values (shape [n, k]).
-        z_t: Measurement times (shape [n]). Should use jax.numpy.linspace for
-            consistency with the filter's internal time grid.
-        noise: Measurement noise variance (scalar or [k] or [k, k]).
-        full_state: If True, A operates on the full state X instead of x = E0 @ X.
+    Attributes:
+        A: Measurement matrix, shape ``[k, d]`` (on ``x = E0 @ state``) or
+            ``[k, state_dim]`` with ``full_state=True``.
+        z: Data, shape ``[n, k]``.
+        z_t: Times of the data, shape ``[n]`` (``[n, 1]`` is flattened).
+        R: Noise covariance, ``[k, k]``; given as ``noise=`` a variance, per-row
+            variances or a covariance.
+        full_state: Whether ``A`` acts on the full state instead of ``x``.
     """
 
     A: Array
     z: Array
     z_t: Array
-    noise: float | Array = DEFAULT_MEASUREMENT_NOISE
-    full_state: bool = False
+    R: Array
+    full_state: bool = eqx.field(static=True, default=False)
 
-    def __post_init__(self) -> None:
-        for name in ("A", "z", "z_t"):
-            object.__setattr__(self, name, np.asarray(getattr(self, name)))
-        if self.A.ndim != 2:
-            raise ValueError(f"'A' must be 2D, got {self.A.ndim}D.")
-        if self.z.ndim != 2 or self.z.shape[1] != self.A.shape[0]:
+    def __init__(
+        self,
+        A: ArrayLike,
+        z: ArrayLike,
+        z_t: ArrayLike,
+        noise: ArrayLike = DEFAULT_MEASUREMENT_NOISE,
+        full_state: bool = False,
+    ):
+        A, z, z_t = np.asarray(A), np.asarray(z), np.asarray(z_t)
+        if A.ndim != 2:
+            raise ValueError(f"'A' must be 2D, got {A.ndim}D.")
+        if z.ndim != 2 or z.shape[1] != A.shape[0]:
             raise ValueError(
-                f"'z' must be 2D with shape (n, {self.A.shape[0]}), got {self.z.shape}."
+                f"'z' must be 2D with shape (n, {A.shape[0]}), got {z.shape}."
             )
-        # Normalize z_t to 1D
-        z_t = self.z_t
         if z_t.ndim == 2 and z_t.shape[1] == 1:
-            object.__setattr__(self, "z_t", z_t.reshape(-1))
+            z_t = z_t.reshape(-1)
         elif z_t.ndim != 1:
             raise ValueError(
                 f"'z_t' must be 1D shape (n,) or 2D shape (n, 1), got {z_t.shape}."
             )
-        if self.z_t.shape[0] != self.z.shape[0]:
+        if z_t.shape[0] != z.shape[0]:
             raise ValueError(
-                f"'z_t' length must match number of measurements {self.z.shape[0]}, "
-                f"got {self.z_t.shape[0]}."
+                f"'z_t' length must match number of measurements {z.shape[0]}, "
+                f"got {z_t.shape[0]}."
             )
-        noise = self.get_noise_matrix()
-        if noise.shape != (self.dim, self.dim):
-            raise ValueError(
-                f"'noise' must be a scalar, a length-{self.dim} vector or a "
-                f"({self.dim}, {self.dim}) matrix, got shape {np.shape(self.noise)}."
-            )
-        _check_noise_covariance(noise, "Measurement noise")
+        self.A, self.z, self.z_t = A, z, z_t
+        self.R = noise_matrix(noise, A.shape[0], "Measurement noise")
+        self.full_state = full_state
 
     @property
     def dim(self) -> int:
-        """Dimension of measurement output."""
+        """Number of measured quantities ``k``."""
         return int(self.A.shape[0])
-
-    def get_noise_matrix(self) -> Array:
-        """Get noise covariance matrix."""
-        noise = np.asarray(self.noise)
-        if noise.ndim == 0:
-            return noise * np.eye(self.dim)
-        elif noise.ndim == 1:
-            return np.diag(noise)
-        return noise

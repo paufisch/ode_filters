@@ -88,7 +88,7 @@ class TestODEInformationGetNoise:
         E0, E1 = make_projection_matrices(d=2, q=1)
         model = ODEInformation(vf=vf, E0=E0, E1=E1)
 
-        R = model.get_noise(t=0.0)
+        R = model.noise_sqr(t=0.0)
         assert R.shape == (2, 2)
         assert np.allclose(R, model.R)
 
@@ -102,9 +102,9 @@ class TestODEInformationGetNoise:
         model = ODEInformation(vf=vf, E0=E0, E1=E1)
 
         # Modify noise via property
-        model.R = 0.1
+        model = model.with_noise(0.1)
 
-        R_sqr = model.get_noise(t=0.0)
+        R_sqr = model.noise_sqr(t=0.0)
         R_reconstructed = R_sqr.T @ R_sqr
         assert R_reconstructed[0, 0] == pytest.approx(0.1)
 
@@ -124,7 +124,7 @@ class TestNoisePropertyAndSetters:
         assert model.R.shape == (2, 2)
         assert np.allclose(model.R, np.zeros((2, 2)))
 
-    def test_R_setter_with_matrix(self):
+    def test_with_noise_with_matrix(self):
         """Test that R setter accepts a full matrix."""
 
         def vf(x, *, t):
@@ -134,11 +134,11 @@ class TestNoisePropertyAndSetters:
         model = ODEInformation(vf=vf, E0=E0, E1=E1)
 
         new_R = np.array([[0.1, 0.0], [0.0, 0.2]])
-        model.R = new_R
+        model = model.with_noise(new_R)
 
         assert np.allclose(model.R, new_R)
 
-    def test_R_setter_with_vector(self):
+    def test_with_noise_with_vector(self):
         """Test that R setter accepts a vector for diagonal."""
 
         def vf(x, *, t):
@@ -147,13 +147,13 @@ class TestNoisePropertyAndSetters:
         E0, E1 = make_projection_matrices(d=2, q=1)
         model = ODEInformation(vf=vf, E0=E0, E1=E1)
 
-        model.R = np.array([0.1, 0.2])
+        model = model.with_noise(np.array([0.1, 0.2]))
 
         assert model.R[0, 0] == pytest.approx(0.1)
         assert model.R[1, 1] == pytest.approx(0.2)
         assert model.R[0, 1] == pytest.approx(0.0)
 
-    def test_R_setter_with_scalar(self):
+    def test_with_noise_with_scalar(self):
         """Test that R setter accepts a scalar for uniform diagonal."""
 
         def vf(x, *, t):
@@ -162,13 +162,13 @@ class TestNoisePropertyAndSetters:
         E0, E1 = make_projection_matrices(d=2, q=1)
         model = ODEInformation(vf=vf, E0=E0, E1=E1)
 
-        model.R = 0.5
+        model = model.with_noise(0.5)
 
         assert model.R[0, 0] == pytest.approx(0.5)
         assert model.R[1, 1] == pytest.approx(0.5)
         assert model.R[0, 1] == pytest.approx(0.0)
 
-    def test_R_setter_rejects_wrong_matrix_shape(self):
+    def test_with_noise_rejects_wrong_matrix_shape(self):
         """Test that R setter rejects incorrect matrix shapes."""
 
         def vf(x, *, t):
@@ -177,10 +177,10 @@ class TestNoisePropertyAndSetters:
         E0, E1 = make_projection_matrices(d=2, q=1)
         model = ODEInformation(vf=vf, E0=E0, E1=E1)
 
-        with pytest.raises(ValueError, match="must have shape"):
-            model.R = np.array([[0.1]])
+        with pytest.raises(ValueError, match="must be a scalar, a length"):
+            model = model.with_noise(np.array([[0.1]]))
 
-    def test_R_setter_rejects_wrong_vector_length(self):
+    def test_with_noise_rejects_wrong_vector_length(self):
         """Test that R setter rejects incorrect vector length."""
 
         def vf(x, *, t):
@@ -189,10 +189,10 @@ class TestNoisePropertyAndSetters:
         E0, E1 = make_projection_matrices(d=2, q=1)
         model = ODEInformation(vf=vf, E0=E0, E1=E1)
 
-        with pytest.raises(ValueError, match="must have length"):
-            model.R = np.array([0.1])
+        with pytest.raises(ValueError, match="must be a scalar, a length"):
+            model = model.with_noise(np.array([0.1]))
 
-    def test_R_setter_rejects_3d_array(self):
+    def test_with_noise_rejects_3d_array(self):
         """Test that R setter rejects 3D+ arrays."""
 
         def vf(x, *, t):
@@ -201,8 +201,8 @@ class TestNoisePropertyAndSetters:
         E0, E1 = make_projection_matrices(d=2, q=1)
         model = ODEInformation(vf=vf, E0=E0, E1=E1)
 
-        with pytest.raises(ValueError, match="must be scalar, 1D, or 2D"):
-            model.R = np.array([[[0.1]]])
+        with pytest.raises(ValueError, match="must be a scalar, a length"):
+            model = model.with_noise(np.array([[[0.1]]]))
 
 
 class TestMeasurementDataclass:
@@ -224,7 +224,7 @@ class TestMeasurementDataclass:
         z_t = np.array([0.5])
 
         m = Measurement(A=A, z=z, z_t=z_t, noise=0.1)
-        R = m.get_noise_matrix()
+        R = m.R
         assert R.shape == (2, 2)
         assert np.allclose(R, 0.1 * np.eye(2))
 
@@ -256,7 +256,7 @@ class TestConservationDataclass:
         p = np.array([2.0])
 
         c = Conservation(A=A, p=p)
-        jac = c.jacobian()
+        jac = c.A
         assert np.allclose(jac, A)
 
 
@@ -476,7 +476,7 @@ class TestConstraintInputs:
 
     def test_unknown_constraint_type_is_rejected(self):
         prior = IWP(q=1, d=2)
-        with pytest.raises(TypeError, match="must be Conservation objects"):
+        with pytest.raises(TypeError, match="must be Conservation laws"):
             ODEInformation(
                 lambda x, *, t: -x, prior.E0, prior.E1, constraints=[(1.0, 2.0)]
             )
@@ -508,7 +508,7 @@ class TestNoiseCovarianceValidation:
             )
 
     def test_measurement_rejects_wrongly_shaped_noise(self):
-        with pytest.raises(ValueError, match="'noise' must be a scalar"):
+        with pytest.raises(ValueError, match="must be a scalar, a length"):
             Measurement(
                 A=np.eye(2), z=np.zeros((1, 2)), z_t=np.zeros(1), noise=np.ones(3)
             )
@@ -522,14 +522,14 @@ class TestNoiseCovarianceValidation:
         )
         prior = IWP(q=1, d=2)
         model = ODEInformation(lambda x, *, t: -x, prior.E0, prior.E1)
-        model.R = 0.0
-        assert np.all(np.isfinite(model.get_noise(t=0.0)))
+        model = model.with_noise(0.0)
+        assert np.all(np.isfinite(model.noise_sqr(t=0.0)))
 
-    def test_R_setter_rejects_singular_correlated_noise(self):
+    def test_with_noise_rejects_singular_correlated_noise(self):
         prior = IWP(q=1, d=2)
         model = ODEInformation(lambda x, *, t: -x, prior.E0, prior.E1)
         with pytest.raises(ValueError, match="positive-definite covariance"):
-            model.R = self.singular
+            model = model.with_noise(self.singular)
 
     def test_black_box_rejects_singular_correlated_noise(self):
         with pytest.raises(ValueError, match="positive-definite covariance"):
@@ -538,7 +538,7 @@ class TestNoiseCovarianceValidation:
             )
         model = BlackBoxMeasurement(lambda s, *, t: s[:2], state_dim=4, obs_dim=2)
         with pytest.raises(ValueError, match="positive-definite covariance"):
-            model.R = self.singular
+            model = model.with_noise(self.singular)
 
     def test_check_is_skipped_for_traced_noise(self):
         """Noise as a differentiated parameter must not trip the eager check."""
@@ -546,6 +546,6 @@ class TestNoiseCovarianceValidation:
         def noise_matrix(n):
             return Measurement(
                 A=np.eye(1), z=np.zeros((1, 1)), z_t=np.zeros(1), noise=n
-            ).get_noise_matrix()
+            ).R
 
         assert np.allclose(jax.jit(noise_matrix)(0.5), 0.5)

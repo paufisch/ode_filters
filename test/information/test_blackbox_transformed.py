@@ -15,7 +15,6 @@ from ode_filters.information import (
     Conservation,
     Measurement,
     ODEInformation,
-    SecondOrderODEconservation,
     SecondOrderODEInformation,
     TransformedMeasurement,
 )
@@ -46,8 +45,8 @@ class TestBlackBoxMeasurementConstruction:
             return state[:2]
 
         model = BlackBoxMeasurement(g_func, state_dim=4, obs_dim=2)
-        assert model._state_dim == 4
-        assert model._obs_dim == 2
+        assert model.state_dim == 4
+        assert model.obs_dim == 2
 
     def test_construction_with_scalar_noise(self):
         """Test construction with scalar noise."""
@@ -113,7 +112,7 @@ class TestBlackBoxMeasurementConstruction:
         def g_func(state, *, t):
             return state[:2]
 
-        with pytest.raises(ValueError, match="must have length"):
+        with pytest.raises(ValueError, match="must be a scalar, a length"):
             BlackBoxMeasurement(g_func, state_dim=4, obs_dim=2, noise=np.array([0.1]))
 
     def test_rejects_mismatched_matrix_noise(self):
@@ -122,7 +121,7 @@ class TestBlackBoxMeasurementConstruction:
         def g_func(state, *, t):
             return state[:2]
 
-        with pytest.raises(ValueError, match="must have shape"):
+        with pytest.raises(ValueError, match="must be a scalar, a length"):
             BlackBoxMeasurement(g_func, state_dim=4, obs_dim=2, noise=np.array([[0.1]]))
 
     def test_rejects_3d_noise(self):
@@ -131,7 +130,7 @@ class TestBlackBoxMeasurementConstruction:
         def g_func(state, *, t):
             return state[:2]
 
-        with pytest.raises(ValueError, match="must be scalar, 1D, or 2D"):
+        with pytest.raises(ValueError, match="must be a scalar, a length"):
             BlackBoxMeasurement(
                 g_func, state_dim=4, obs_dim=2, noise=np.array([[[0.1]]])
             )
@@ -172,9 +171,9 @@ class TestBlackBoxMeasurementMethods:
         assert jacobian[1, 0] == pytest.approx(0.0)
         assert jacobian[1, 1] == pytest.approx(1.0)
 
-    def test_get_noise(self, bb_model):
+    def test_noise_sqr(self, bb_model):
         """Test get_noise returns square root of R matrix."""
-        R_sqr = bb_model.get_noise(t=0.0)
+        R_sqr = bb_model.noise_sqr(t=0.0)
         assert R_sqr.shape == (2, 2)
         # R_sqr.T @ R_sqr should reconstruct the noise covariance
         assert np.allclose(R_sqr.T @ R_sqr, 0.01 * np.eye(2), atol=1e-10)
@@ -192,37 +191,37 @@ class TestBlackBoxMeasurementMethods:
         reconstructed = H @ state + c
         assert np.allclose(reconstructed, g_val)
 
-    def test_R_setter_scalar(self, bb_model):
+    def test_with_noise_scalar(self, bb_model):
         """Test R setter with scalar."""
-        bb_model.R = 0.5
+        bb_model = bb_model.with_noise(0.5)
         assert np.allclose(bb_model.R, 0.5 * np.eye(2))
 
-    def test_R_setter_vector(self, bb_model):
+    def test_with_noise_vector(self, bb_model):
         """Test R setter with vector."""
-        bb_model.R = np.array([0.1, 0.2])
+        bb_model = bb_model.with_noise(np.array([0.1, 0.2]))
         assert bb_model.R[0, 0] == pytest.approx(0.1)
         assert bb_model.R[1, 1] == pytest.approx(0.2)
 
-    def test_R_setter_matrix(self, bb_model):
+    def test_with_noise_matrix(self, bb_model):
         """Test R setter with matrix."""
         new_R = np.array([[0.1, 0.05], [0.05, 0.2]])
-        bb_model.R = new_R
+        bb_model = bb_model.with_noise(new_R)
         assert np.allclose(bb_model.R, new_R)
 
-    def test_R_setter_rejects_wrong_vector_length(self, bb_model):
+    def test_with_noise_rejects_wrong_vector_length(self, bb_model):
         """Test R setter rejects wrong vector length."""
-        with pytest.raises(ValueError, match="must have length"):
-            bb_model.R = np.array([0.1])
+        with pytest.raises(ValueError, match="must be a scalar, a length"):
+            bb_model = bb_model.with_noise(np.array([0.1]))
 
-    def test_R_setter_rejects_wrong_matrix_shape(self, bb_model):
+    def test_with_noise_rejects_wrong_matrix_shape(self, bb_model):
         """Test R setter rejects wrong matrix shape."""
-        with pytest.raises(ValueError, match="must have shape"):
-            bb_model.R = np.array([[0.1]])
+        with pytest.raises(ValueError, match="must be a scalar, a length"):
+            bb_model = bb_model.with_noise(np.array([[0.1]]))
 
-    def test_R_setter_rejects_3d_array(self, bb_model):
+    def test_with_noise_rejects_3d_array(self, bb_model):
         """Test R setter rejects 3D array."""
-        with pytest.raises(ValueError, match="must be scalar, 1D, or 2D"):
-            bb_model.R = np.array([[[0.1]]])
+        with pytest.raises(ValueError, match="must be a scalar, a length"):
+            bb_model = bb_model.with_noise(np.array([[[0.1]]]))
 
     def test_validate_state_wrong_dimension(self, bb_model):
         """Test that wrong state dimension raises error."""
@@ -258,7 +257,8 @@ class TestTransformedMeasurementConstruction:
             return state * 2  # Simple scaling
 
         model = TransformedMeasurement(base, sigma)
-        assert model._use_autodiff is True
+        state = np.arange(4.0)
+        assert np.allclose(model.sigma_jacobian(state), 2.0 * np.eye(4))
 
     def test_construction_with_explicit_jacobian(self):
         """Test construction with explicit Jacobian."""
@@ -275,10 +275,8 @@ class TestTransformedMeasurementConstruction:
         def sigma_jacobian(state):
             return 2 * np.eye(state.shape[0])
 
-        model = TransformedMeasurement(
-            base, sigma, use_autodiff_jacobian=False, sigma_jacobian=sigma_jacobian
-        )
-        assert model._use_autodiff is False
+        model = TransformedMeasurement(base, sigma, sigma_jacobian=sigma_jacobian)
+        assert model.sigma_jacobian is sigma_jacobian
 
     def test_rejects_non_callable_sigma(self):
         """Test that non-callable sigma raises error."""
@@ -291,21 +289,6 @@ class TestTransformedMeasurementConstruction:
 
         with pytest.raises(TypeError, match="must be callable"):
             TransformedMeasurement(base, "not_a_function")
-
-    def test_rejects_missing_explicit_jacobian(self):
-        """Test that missing explicit Jacobian raises error when autodiff disabled."""
-
-        def vf(x, *, t):
-            return -x
-
-        E0, E1, _ = make_projection_matrices(d=2, q=1)
-        base = ODEInformation(vf, E0, E1)
-
-        def sigma(state):
-            return state * 2
-
-        with pytest.raises(ValueError, match="Must provide 'sigma_jacobian'"):
-            TransformedMeasurement(base, sigma, use_autodiff_jacobian=False)
 
 
 class TestTransformedMeasurementMethods:
@@ -342,9 +325,9 @@ class TestTransformedMeasurementMethods:
 
         assert jacobian.shape == (2, 4)
 
-    def test_get_noise(self, transformed_model):
+    def test_noise_sqr(self, transformed_model):
         """Test get_noise delegates to base model."""
-        R = transformed_model.get_noise(t=0.0)
+        R = transformed_model.noise_sqr(t=0.0)
         assert R.shape == (2, 2)
 
     def test_linearize(self, transformed_model):
@@ -367,7 +350,7 @@ class TestTransformedMeasurementMethods:
 
     def test_R_setter(self, transformed_model):
         """Test R setter modifies base model."""
-        transformed_model.R = 0.1
+        transformed_model = transformed_model.with_noise(0.1)
         assert np.allclose(transformed_model.R, 0.1 * np.eye(2))
 
     def test_E_args_delegates(self, transformed_model):
@@ -376,7 +359,7 @@ class TestTransformedMeasurementMethods:
         Without it `slr_linearize` falls back to the identity and quadratures
         over the whole state -- correct, but exponentially more nodes.
         """
-        assert np.allclose(transformed_model.E_args, transformed_model._base.E_args)
+        assert np.allclose(transformed_model.E_args, transformed_model.base.E_args)
 
     def test_ode_dim_delegates(self, transformed_model):
         """`ode_dim` delegates to the base: a transform does not add or remove rows.
@@ -385,7 +368,7 @@ class TestTransformedMeasurementMethods:
         delegation makes a transformed measure unrunnable rather than merely
         mis-calibrated.
         """
-        assert transformed_model.ode_dim == transformed_model._base.ode_dim
+        assert transformed_model.ode_dim == transformed_model.base.ode_dim
 
     def test_delegation_raises_on_blackbox_base(self):
         """A black-box base declares neither row layout nor argument selector.
@@ -445,9 +428,7 @@ class TestTransformedMeasurementMethods:
         def sigma_jacobian(state):
             return 2 * np.eye(state.shape[0])
 
-        model = TransformedMeasurement(
-            base, sigma, use_autodiff_jacobian=False, sigma_jacobian=sigma_jacobian
-        )
+        model = TransformedMeasurement(base, sigma, sigma_jacobian=sigma_jacobian)
 
         state = np.array([1.0, 1.0, 0.5, 0.5])
         jacobian = model.jacobian_g(state, t=0.0)
@@ -472,8 +453,8 @@ class TestSecondOrderODEInformation:
         E0, E1, E2 = make_projection_matrices(d=1, q=2)
         model = SecondOrderODEInformation(vf, E0, E1, E2)
 
-        assert model._d == 1
-        assert model._state_dim == 3
+        assert model.ode_dim == 1
+        assert model.state_dim == 3
 
     def test_g_evaluation(self):
         """Test g function evaluation."""
@@ -572,8 +553,8 @@ class TestSecondOrderODEInformation:
 class TestSecondOrderFactoryFunctions:
     """Tests for second-order ODE factory functions."""
 
-    def test_SecondOrderODEconservation(self):
-        """Test SecondOrderODEconservation factory."""
+    def test_second_order_with_conservation(self):
+        """Second-order ODE information with a conservation law."""
 
         def vf(x, v, *, t):
             return -x
@@ -582,10 +563,12 @@ class TestSecondOrderFactoryFunctions:
         A = np.array([[1.0, 1.0]])
         p = np.array([1.0])
 
-        model = SecondOrderODEconservation(vf, E0, E1, E2, A, p)
+        model = SecondOrderODEInformation(
+            vf, E0, E1, E2, constraints=[Conservation(A, p)]
+        )
 
-        assert len(model._constraints) == 1
-        assert isinstance(model._constraints[0], Conservation)
+        assert len(model.constraints) == 1
+        assert isinstance(model.constraints[0], Conservation)
 
         state = np.array([0.5, 0.5, 0.0, 0.0, -0.5, -0.5])
         result = model.g(state, t=0.0)
@@ -609,7 +592,7 @@ class TestMeasurementEdgeCases:
         z_t = np.array([0.5])
 
         m = Measurement(A=A, z=z, z_t=z_t, noise=np.array([0.1, 0.2]))
-        R = m.get_noise_matrix()
+        R = m.R
 
         assert R.shape == (2, 2)
         assert R[0, 0] == pytest.approx(0.1)
@@ -624,7 +607,7 @@ class TestMeasurementEdgeCases:
         noise_matrix = np.array([[0.1, 0.05], [0.05, 0.2]])
 
         m = Measurement(A=A, z=z, z_t=z_t, noise=noise_matrix)
-        R = m.get_noise_matrix()
+        R = m.R
 
         assert np.allclose(R, noise_matrix)
 
@@ -642,7 +625,7 @@ class TestMeasurementEdgeCases:
             p=np.array([1.0]),
         )
 
-        with pytest.raises(ValueError, match="must match state dimension"):
+        with pytest.raises(ValueError, match="columns but the"):
             ODEInformation(vf, E0, E1, constraints=[conservation])
 
 
@@ -694,8 +677,7 @@ class TestBlackBoxMeasurementInSolvers:
 
 
 class TestTransformedMeasurementJacobianMode:
-    """``sigma_jacobian`` used to be ignored unless ``use_autodiff_jacobian=False``
-    was passed as well."""
+    """An explicit ``sigma_jacobian`` is used in place of autodiff."""
 
     @staticmethod
     def _base():
@@ -712,15 +694,5 @@ class TestTransformedMeasurementJacobianMode:
         model = TransformedMeasurement(
             self._base(), lambda s: 2.0 * s, sigma_jacobian=sigma_jacobian
         )
-        assert model._use_autodiff is False
         model.linearize(np.array([1.0, 0.5]), t=0.0)
         assert calls
-
-    def test_rejects_autodiff_together_with_an_explicit_jacobian(self):
-        with pytest.raises(ValueError, match="pass only one of them"):
-            TransformedMeasurement(
-                self._base(),
-                lambda s: s,
-                use_autodiff_jacobian=True,
-                sigma_jacobian=lambda s: np.eye(s.shape[0]),
-            )

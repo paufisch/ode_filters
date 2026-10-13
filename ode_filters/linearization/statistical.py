@@ -45,7 +45,7 @@ References:
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import jax
 import jax.numpy as np
@@ -57,7 +57,7 @@ from ..gaussian import Gaussian, marginalize
 from ..information.protocol import MeasurementModel
 
 #: Quadrature rules selectable by name.
-QuadratureRule = str
+QuadratureRule = Literal["gauss_hermite", "cubature"]
 
 #: Guard on the tensor-product node count. Tensor Gauss-Hermite costs ``m^p``
 #: nodes; past this the caller should switch to ``"cubature"`` (``2 p`` nodes).
@@ -272,7 +272,7 @@ def slr_linearize(
 
     # One QR gives the effective noise square root; stacking R_sqr first keeps
     # the result square even when there are fewer nodes than residual rows.
-    R_sqr = measure.get_noise(t=t)
+    R_sqr = measure.noise_sqr(t=t)
     _, R_eff_sqr = np.linalg.qr(np.concatenate([R_sqr, Omega_sqr], axis=0))
     return SLRModel(H=H, c=c, R_eff_sqr=R_eff_sqr, Omega_sqr=Omega_sqr)
 

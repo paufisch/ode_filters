@@ -11,7 +11,6 @@ import pytest
 
 from ode_filters.priors import (
     IWP,
-    BasePrior,
     IOUPPrior,
     JointPrior,
     MaternPrior,
@@ -80,7 +79,7 @@ def test_q_sqr_is_upper_triangular(name, prior, h):
 def test_joint_q_sqr_is_block_diagonal():
     """JointPrior.Q_sqr keeps the state/input blocks decoupled (off-diagonal 0)."""
     prior = JointPrior(IWP(q=2, d=2), IWP(q=1, d=1))
-    D_x = prior._D_x
+    D_x = prior.prior_x.state_dim
     Q_sqr = prior.Q_sqr(0.3)
     # The off-diagonal blocks must be exactly zero.
     assert np.allclose(Q_sqr[:D_x, D_x:], 0.0)
@@ -134,35 +133,6 @@ def test_matern_q_sqr_stable_at_high_order(prior_cls, q, d):
     assert Q_sqr.shape == ((q + 1) * d, (q + 1) * d)
     assert np.all(np.isfinite(Q_sqr)), f"{prior_cls.__name__} q={q} d={d}"
     assert _is_upper_triangular(Q_sqr), f"{prior_cls.__name__} q={q} d={d}"
-
-
-class _DenseDefaultPrior(BasePrior):
-    """Minimal prior that does NOT override ``Q_sqr``.
-
-    Exercises the ``BasePrior.Q_sqr`` dense-Cholesky default, the documented
-    fallback for custom priors that lack a closed-form / structured square root
-    (every shipped prior overrides it).
-    """
-
-    def A(self, h):  # pragma: no cover - not exercised by the Q_sqr test
-        n = (self.q + 1) * self._dim
-        return np.eye(n)
-
-    def b(self, h):  # pragma: no cover - not exercised by the Q_sqr test
-        return self._b
-
-    def Q(self, h):
-        n = (self.q + 1) * self._dim
-        return h * np.eye(n)
-
-
-def test_base_prior_q_sqr_default_is_dense_cholesky():
-    """BasePrior.Q_sqr factorizes the dense Q (fallback for custom priors)."""
-    prior = _DenseDefaultPrior(q=2, d=1)
-    h = 0.3
-    Q_sqr = prior.Q_sqr(h)
-    assert _is_upper_triangular(Q_sqr)
-    assert np.allclose(Q_sqr.T @ Q_sqr, prior.Q(h))
 
 
 @pytest.mark.parametrize("q", [8, 12])

@@ -52,5 +52,5 @@ def test_measurement_z_t_length_mismatch_raises():
 def test_measurement_rejected_as_measure_constraint():
     E0, E1 = _E0_E1()
     m = Measurement(A=np.eye(1), z=np.zeros((1, 1)), z_t=np.array([0.0]))
-    with pytest.raises(TypeError, match="no longer accepted"):
+    with pytest.raises(TypeError, match="not part of the ODE information"):
         ODEInformation(lambda x, *, t: -x, E0, E1, constraints=[m])

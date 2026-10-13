@@ -1,17 +1,37 @@
-"""ODE information operators: the ODE residual plus conservation laws."""
+"""ODE information operators: the residual of the ODE, plus conservation laws.
+
+An ODE ``x^(nu) = f(a_1, ..., a_k, t)`` is information about the prior's state
+``Y`` through the residual
+
+    r(Y, t) = E_lhs @ Y - f(S_1 @ Y, ..., S_k @ Y, t),
+
+which the filters observe as zero (Tronarp et al. 2019; Bosch et al. 2022).
+``E_lhs`` selects the derivative on the left-hand side and the ``S_i`` select
+the vector field's arguments. The four public classes differ only in those
+selectors:
+
+| Class | ODE | ``E_lhs`` | arguments |
+| --- | --- | --- | --- |
+| ``ODEInformation`` | ``x' = f(x, t)`` | ``E1`` | ``E0`` |
+| ``ODEInformationWithHidden`` | ``x' = f(x, u, t)`` | ``E1`` | ``E0``, ``E0_hidden`` |
+| ``SecondOrderODEInformation`` | ``x'' = f(x, x', t)`` | ``E2`` | ``E0``, ``E1`` |
+| ``SecondOrderODEInformationWithHidden`` | ``x'' = f(x, x', u, t)`` | ``E2`` | ``E0``, ``E1``, ``E0_hidden`` |
+
+``Conservation`` laws ``A x = p`` add affine rows below the ODE residual.
+"""
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from collections.abc import Callable
-from dataclasses import dataclass
 
+import equinox as eqx
 import jax
 import jax.numpy as np
 from jax import Array
 from jax.typing import ArrayLike
 
-from ..gaussian.algebra import _check_noise_covariance, _safe_cholesky_sqr
+from ..gaussian.algebra import _safe_cholesky_sqr
+from .noise import noise_matrix
 from .observations import Measurement
 
 
@@ -47,23 +67,24 @@ def _check_selectors(**selectors: ArrayLike | None) -> None:
             )
 
 
-@dataclass(frozen=True)
-class Conservation:
-    """Conservation constraint: A @ x = p (always active).
+class Conservation(eqx.Module):
+    """A conservation law ``A @ x = p``, always active.
 
-    Args:
-        A: Constraint matrix (shape [k, d] or [k, state_dim] if full_state=True).
-        p: Target values (shape [k]).
-        full_state: If True, A operates on the full state X instead of x = E0 @ X.
+    Attributes:
+        A: Constraint matrix, shape ``[k, d]`` (on ``x = E0 @ state``) or
+            ``[k, state_dim]`` with ``full_state=True``.
+        p: Conserved values, shape ``[k]``.
+        full_state: Whether ``A`` acts on the full state instead of ``x``.
     """
 
     A: Array
     p: Array
-    full_state: bool = False
+    full_state: bool = eqx.field(static=True, default=False)
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "A", np.asarray(self.A))
-        object.__setattr__(self, "p", np.asarray(self.p))
+    def __init__(self, A: ArrayLike, p: ArrayLike, full_state: bool = False):
+        self.A = np.asarray(A)
+        self.p = np.asarray(p)
+        self.full_state = full_state
         if self.A.ndim != 2 or self.p.ndim != 1:
             raise ValueError(
                 f"Conservation needs a 2-D 'A' and a 1-D 'p', got shapes "
@@ -75,316 +96,212 @@ class Conservation:
             )
 
     def residual(self, x: Array) -> Array:
-        """Compute residual: A @ x - p."""
+        """``A @ x - p``."""
         return self.A @ x - self.p
-
-    def jacobian(self) -> Array:
-        """Return Jacobian (constant): A."""
-        return self.A
 
     @property
     def dim(self) -> int:
-        """Dimension of constraint output."""
+        """Number of conserved quantities."""
         return int(self.p.shape[0])
 
 
-class BaseODEInformation(ABC):
-    """Abstract base class for ODE measurement models."""
+class BaseODEInformation(eqx.Module):
+    """The residual ``E_lhs @ Y - f(S_1 @ Y, ..., S_k @ Y, t)`` plus conservation rows.
 
-    _vf: Callable
-    _E0: Array
-    _E1: Array
-    _E_constraint: Array
-    _d: int
-    _state_dim: int
-    _base_R: Array
-    _constraints: list[Conservation]
+    Use one of the four public subclasses; they set the selectors. All of them
+    implement the ``MeasurementModel`` protocol and are ``equinox`` modules:
+    their arrays are pytree leaves, the vector field is static.
 
-    def _init_constraints(
-        self,
-        constraints: list[Conservation] | None,
-    ) -> None:
-        """Initialize constraint list and validate.
+    Attributes:
+        vf: The vector field ``f``.
+        E0: Selector of the solution ``x`` (conservation laws act on ``E0 @ Y``).
+        E_lhs: Selector of the ODE's left-hand side (``E1``, or ``E2`` for a
+            second-order ODE): the Jacobian of the residual's affine part, which
+            an EK0 linearization uses for the ODE rows.
+        selectors: Selectors of the vector field's arguments, in order.
+        constraints: Conservation laws.
+        R: Noise covariance of the ODE rows, shape ``[d, d]`` (zero by default:
+            the ODE holds exactly).
+    """
 
-        Only ``Conservation`` constraints (noiseless, always-on model
-        structure) are accepted. Data observations are *not* part of the
-        measurement model -- pass them as an ``obs_model`` built with
-        ``prepare_observations``.
-        """
-        # A copy, so appending to the caller's list later cannot change the model.
-        self._constraints = list(constraints or [])
-        for c in self._constraints:
-            if isinstance(c, Conservation):
-                expected = self._state_dim if c.full_state else self._d
-                label = "full state" if c.full_state else "state"
-                if c.A.shape[1] != expected:
-                    raise ValueError(
-                        f"Conservation A.shape[1] ({c.A.shape[1]}) must match "
-                        f"{label} dimension ({expected})."
-                    )
-            elif isinstance(c, Measurement):
-                raise TypeError(
-                    "Measurement is no longer accepted as a measure constraint. "
-                    "Data observations go through obs_model: build it with "
-                    "prepare_observations([Measurement(...)], E0, ts) and pass "
-                    "obs_model= to the solver. `measure` carries only the ODE "
-                    "information and Conservation constraints."
-                )
-            else:
-                raise TypeError(
-                    f"constraints must be Conservation objects, got {type(c).__name__}."
-                )
-
-    def _conservations(self) -> list[Conservation]:
-        """Conservation constraints registered on this measure (always active)."""
-        return [c for c in self._constraints if isinstance(c, Conservation)]
-
-    def _build_noise_matrix(self, t: ArrayLike) -> Array:
-        """Build combined noise matrix for all active constraints at time t."""
-        conservations = self._conservations()
-        cons_dim = sum(c.dim for c in conservations)
-        total_dim = self._d + cons_dim
-
-        R = np.zeros((total_dim, total_dim))
-        # Base ODE noise (usually zero)
-        R = R.at[: self._d, : self._d].set(self._base_R)
-        # Conservation noise (zero)
-        return R
+    vf: Callable[..., Array] = eqx.field(static=True)
+    E0: Array
+    E_lhs: Array
+    selectors: tuple[Array, ...]
+    constraints: tuple[Conservation, ...]
+    R: Array
 
     @property
     def ode_dim(self) -> int:
-        """Number of ODE-defect rows at the top of ``linearize()`` output.
+        """Number of ODE-residual rows at the top of ``g`` (they drive calibration).
 
-        Calibration and step-size adaptation should use only
-        ``H_t[:ode_dim]`` and ``mz_pred[:ode_dim]`` so that conservation
-        and observation residuals (which live on different scales than the
-        ODE defect) cannot bias the diffusion estimate. See Bosch,
-        Tronarp, Hennig (2022), *Pick-and-Mix Information Operators*,
-        sec. 3 and ProbNumDiffEq.jl's ``perform_step!`` for the matching
-        design choice.
+        Conservation rows live on other scales, so the diffusion is estimated
+        from these rows alone (Bosch, Tronarp & Hennig 2022, *Pick-and-Mix
+        Information Operators*, Sec. 3).
         """
-        return self._d
+        return int(self.E_lhs.shape[0])
 
     @property
-    def E_constraint(self) -> Array:
-        """Selection matrix for the highest-derivative ODE-defect rows.
-
-        This is the Jacobian of the *linear* part of the ODE residual (``E1``
-        for first-order systems, ``E2`` for second-order). A zeroth-order (EK0)
-        correction uses it directly as the ODE-row Jacobian (vector field
-        treated as locally constant); the first-order (EK1) Jacobian
-        additionally subtracts the vector-field Jacobian (see
-        ``_ode_jacobian``). Shape ``[ode_dim, state_dim]``.
-        """
-        return self._E_constraint
+    def state_dim(self) -> int:
+        """Dimension of the prior's state."""
+        return int(self.E0.shape[1])
 
     @property
     def E_args(self) -> Array:
-        """Selection matrix for the coordinates the vector field reads.
+        """The vector field's argument selectors, stacked: ``[S_1; ...; S_k]``.
 
-        The residual is affine in the state *except* through ``E_args @ state``:
-        for a first-order ODE the vector field sees only ``E0 @ state``, for a
-        second-order one it sees ``(E0 @ state, E1 @ state)``, and the hidden
-        variants add ``E0_hidden``. Conservation constraints are affine and so
-        never enter here.
-
-        Statistical linearisation integrates over this projected subspace only
-        (see ``slr_linearize``),
-        which is what keeps the quadrature dimension equal to the ODE dimension
-        rather than the full state dimension.
-
-        The base implementation returns ``E0``, correct for first-order models.
-        A custom subclass whose ``_ode_residual`` reads more than ``E0 @ state``
-        **must override this**, or SLR-based corrections will silently miss the
-        spread in the omitted directions; validate with
-        ``check_arg_projection``.
-        Shape ``[p, state_dim]``.
+        The residual is affine in the state except through ``E_args @ state``.
+        Statistical linearization integrates over this projected subspace only
+        (see ``slr_linearize``), which keeps the quadrature dimension equal to
+        the ODE dimension rather than the state dimension.
         """
-        return self._E0
+        return np.concatenate(self.selectors, axis=0)
 
-    @property
-    def R(self) -> Array:
-        """Base measurement noise covariance matrix (ODE part only)."""
-        return self._base_R
+    def _arguments(self, state: Array) -> list[Array]:
+        return [S @ state for S in self.selectors]
 
-    @R.setter
-    def R(self, value: ArrayLike) -> None:
-        """Set the base measurement noise covariance matrix.
+    def _conservation_rows(self, state: Array) -> tuple[list[Array], list[Array]]:
+        """Residuals and (constant) Jacobians of the conservation laws."""
+        x = self.E0 @ state
+        residuals, jacobians = [], []
+        for c in self.constraints:
+            residuals.append(c.residual(state if c.full_state else x))
+            jacobians.append(c.A if c.full_state else c.A @ self.E0)
+        return residuals, jacobians
 
-        Args:
-            value: Noise specification. Can be:
-                - Scalar: Applied to all diagonal entries
-                - 1D array: Used as diagonal values
-                - 2D array: Used as full covariance matrix
-        """
-        R_arr = np.asarray(value)
-        expected_dim = self._base_R.shape[0]
-
-        if R_arr.ndim == 0:
-            self._base_R = R_arr * np.eye(expected_dim)
-        elif R_arr.ndim == 1:
-            if R_arr.shape[0] != expected_dim:
-                raise ValueError(
-                    f"Diagonal values must have length {expected_dim}, "
-                    f"got {R_arr.shape[0]}."
-                )
-            self._base_R = np.diag(R_arr)
-        elif R_arr.ndim == 2:
-            expected_shape = (expected_dim, expected_dim)
-            if R_arr.shape != expected_shape:
-                raise ValueError(
-                    f"R must have shape {expected_shape}, got {R_arr.shape}."
-                )
-            self._base_R = R_arr
-        else:
-            raise ValueError("R must be scalar, 1D, or 2D array.")
-        _check_noise_covariance(self._base_R, "R")
-
-    @abstractmethod
     def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
-        """Compute the ODE residual."""
+        return self.E_lhs @ state - self.vf(*self._arguments(state), t=t)
 
-    @abstractmethod
     def _ode_jacobian(self, state: Array, *, t: ArrayLike) -> Array:
-        """Compute the ODE Jacobian."""
+        args = self._arguments(state)
+        jacobians = jax.jacfwd(
+            lambda *a: self.vf(*a, t=t), argnums=tuple(range(len(args)))
+        )(*args)
+        H = self.E_lhs
+        for J, S in zip(jacobians, self.selectors, strict=True):
+            H = H - J @ S
+        return H
 
     def g(self, state: Array, *, t: ArrayLike) -> Array:
-        """Evaluate the observation model for a flattened state vector.
-
-        Args:
-            state: State vector of length matching ``E0.shape[1]``.
-            t: Current time.
-
-        Returns:
-            Observation model evaluation (ODE + active constraints).
-        """
-        state_arr = self._validate_state(state)
-        x = self._E0 @ state_arr
-
-        # ODE residual
-        residuals = [self._ode_residual(state_arr, t=t)]
-
-        # Constraint residuals
-        for c in self._conservations():
-            residuals.append(c.residual(state_arr if c.full_state else x))
-
-        return np.concatenate(residuals) if len(residuals) > 1 else residuals[0]
+        """The residual at ``state``: ODE rows, then conservation rows."""
+        state = self._validate_state(state)
+        conservation, _ = self._conservation_rows(state)
+        return np.concatenate([self._ode_residual(state, t=t), *conservation])
 
     def jacobian_g(self, state: Array, *, t: ArrayLike) -> Array:
-        """Return the Jacobian of the observation model at ``state``.
-
-        Args:
-            state: State vector of length matching ``E0.shape[1]``.
-            t: Current time.
-
-        Returns:
-            Jacobian matrix of the observation model.
-        """
-        state_arr = self._validate_state(state)
-
-        # ODE Jacobian
-        jacobians = [self._ode_jacobian(state_arr, t=t)]
-
-        # Constraint Jacobians (compose with E0 unless full_state)
-        for c in self._conservations():
-            jacobians.append(c.jacobian() if c.full_state else c.jacobian() @ self._E0)
-
-        return np.concatenate(jacobians) if len(jacobians) > 1 else jacobians[0]
-
-    def get_noise(self, *, t: ArrayLike) -> Array:
-        """Return the square root of the measurement noise covariance at time ``t``.
-
-        Returns an upper-triangular matrix L such that L.T @ L ≈ R,
-        where R is the full noise covariance.
-
-        Args:
-            t: Current time.
-
-        Returns:
-            Upper-triangular square root of the noise covariance matrix.
-        """
-        R = self._build_noise_matrix(t)
-        return _safe_cholesky_sqr(R, R.shape[0])
+        """The Jacobian of the residual at ``state``."""
+        state = self._validate_state(state)
+        _, conservation = self._conservation_rows(state)
+        return np.concatenate([self._ode_jacobian(state, t=t), *conservation])
 
     def linearize(self, state: Array, *, t: ArrayLike) -> tuple[Array, Array]:
-        """Linearize the observation model around the given state.
+        """First-order (EK1) linearization: ``H x + c`` matches ``g`` to first order.
 
         Args:
-            state: State vector to linearize around.
-            t: Current time.
+            state: Linearization point.
+            t: Time.
 
         Returns:
-            Tuple of (H_t, c_t) where:
-            - H_t is the Jacobian matrix
-            - c_t is the constant term (observation offset)
+            ``(H, c)``.
         """
-        state_arr = self._validate_state(state)
-        x = self._E0 @ state_arr
-
-        # ODE part (single evaluation of vf)
-        H_ode = self._ode_jacobian(state_arr, t=t)
-        g_ode = self._ode_residual(state_arr, t=t)
-        jacobians = [H_ode]
-        residuals = [g_ode]
-
-        # Constraints (single iteration)
-        for c in self._conservations():
-            jacobians.append(c.jacobian() if c.full_state else c.jacobian() @ self._E0)
-            residuals.append(c.residual(state_arr if c.full_state else x))
-
-        H_t = np.concatenate(jacobians) if len(jacobians) > 1 else jacobians[0]
-        g_val = np.concatenate(residuals) if len(residuals) > 1 else residuals[0]
-        c_t = g_val - H_t @ state_arr
-        return H_t, c_t
+        state = self._validate_state(state)
+        H = self.jacobian_g(state, t=t)
+        return H, self.g(state, t=t) - H @ state
 
     def linearize_ek0(self, state: Array, *, t: ArrayLike) -> tuple[Array, Array]:
         """Zeroth-order (EK0) linearization: the vector field held constant.
 
-        The ODE rows of the Jacobian reduce to ``E_constraint``, the selector of
-        the ODE's left-hand side; the conservation rows are affine and exact.
-        Only the residual is evaluated, never the vector-field Jacobian.
+        The ODE rows of the Jacobian reduce to ``E_lhs``; the conservation rows
+        are affine and exact. Only the residual is evaluated, never the
+        vector-field Jacobian.
 
         Args:
-            state: State vector to linearize around.
-            t: Current time.
+            state: Linearization point.
+            t: Time.
 
         Returns:
-            Tuple ``(H, c)`` with ``H x + c`` equal to the residual at ``state``.
+            ``(H, c)`` with ``H x + c`` equal to the residual at ``state``.
         """
-        state_arr = self._validate_state(state)
-        jacobians = [self._E_constraint]
-        for c in self._conservations():
-            jacobians.append(c.jacobian() if c.full_state else c.jacobian() @ self._E0)
-        H = np.concatenate(jacobians) if len(jacobians) > 1 else jacobians[0]
-        return H, self.g(state_arr, t=t) - H @ state_arr
+        state = self._validate_state(state)
+        _, conservation = self._conservation_rows(state)
+        H = np.concatenate([self.E_lhs, *conservation])
+        return H, self.g(state, t=t) - H @ state
+
+    def noise_sqr(self, *, t: ArrayLike) -> Array:
+        """Upper-triangular square root of the noise of all rows.
+
+        The ODE rows carry ``R``; conservation rows are exact.
+        """
+        k = self.ode_dim + sum(c.dim for c in self.constraints)
+        R = np.zeros((k, k)).at[: self.ode_dim, : self.ode_dim].set(self.R)
+        return _safe_cholesky_sqr(R, k)
+
+    def with_noise(self, R: ArrayLike) -> BaseODEInformation:
+        """A copy whose ODE rows carry the noise ``R``.
+
+        Args:
+            R: A variance (scalar), per-row variances (length ``ode_dim``) or a
+                covariance (``[ode_dim, ode_dim]``).
+        """
+        return eqx.tree_at(lambda m: m.R, self, noise_matrix(R, self.ode_dim, "R"))
 
     def _validate_state(self, state: Array) -> Array:
-        """Validate and convert state to required format."""
-        state_arr = np.asarray(state)
-        if state_arr.ndim != 1:
+        state = np.asarray(state)
+        if state.ndim != 1:
             raise ValueError("'state' must be a one-dimensional array.")
-        if state_arr.shape[0] != self._state_dim:
+        if state.shape[0] != self.state_dim:
             raise ValueError(
-                f"'state' must have length {self._state_dim}, got {state_arr.shape[0]}."
+                f"'state' must have length {self.state_dim}, got {state.shape[0]}."
             )
-        return state_arr
+        return state
 
 
-# =============================================================================
-# First-order ODE classes
-# =============================================================================
+def _init_ode_information(
+    model: BaseODEInformation,
+    vf: Callable[..., Array],
+    E0: ArrayLike,
+    E_lhs: ArrayLike,
+    selectors: tuple[ArrayLike, ...],
+    constraints: list[Conservation] | tuple[Conservation, ...] | None,
+    R: ArrayLike | None,
+) -> None:
+    """Set and validate the fields of an ODE-information model."""
+    model.vf = vf
+    model.E0 = np.asarray(E0)
+    model.E_lhs = np.asarray(E_lhs)
+    model.selectors = tuple(np.asarray(S) for S in selectors)
+    d = model.E_lhs.shape[0]
+    model.R = np.zeros((d, d)) if R is None else noise_matrix(R, d, "R")
+    model.constraints = tuple(constraints or ())
+    for c in model.constraints:
+        if isinstance(c, Measurement):
+            raise TypeError(
+                "Data are not part of the ODE information: build an obs_model with "
+                "prepare_observations([Measurement(...)], E0, ts) and pass "
+                "obs_model= to the solver. constraints= takes Conservation laws."
+            )
+        if not isinstance(c, Conservation):
+            raise TypeError(
+                f"constraints must be Conservation laws, got {type(c).__name__}."
+            )
+        expected = model.E0.shape[1] if c.full_state else model.E0.shape[0]
+        label = "state" if c.full_state else "solution"
+        if c.A.shape[1] != expected:
+            raise ValueError(
+                f"Conservation A has {c.A.shape[1]} columns but the {label} has "
+                f"dimension {expected}."
+            )
 
 
 class ODEInformation(BaseODEInformation):
-    """First-order ODE measurement model: dx/dt = f(x, t).
+    """First-order ODE ``x' = f(x, t)``.
 
     Args:
-        vf: Vector field function vf(x, *, t) -> dx/dt.
-        E0: State extraction matrix (shape [d, D]).
-        E1: First derivative extraction matrix (shape [d, D]).
-        constraints: Optional list of Conservation constraints. (Data observations
-            are *not* measure constraints -- pass them as an ``obs_model`` built
-            with ``prepare_observations``; a ``Measurement`` here raises TypeError.)
+        vf: Vector field ``vf(x, *, t) -> x'``.
+        E0: Selector of ``x``, shape ``[d, D]``.
+        E1: Selector of ``x'``, shape ``[d, D]``.
+        constraints: Conservation laws.
+        R: Noise of the ODE rows (default zero).
     """
 
     def __init__(
@@ -393,257 +310,91 @@ class ODEInformation(BaseODEInformation):
         E0: ArrayLike,
         E1: ArrayLike,
         constraints: list[Conservation] | None = None,
+        *,
+        R: ArrayLike | None = None,
     ):
         _check_selectors(E0=E0, E1=E1)
-        self._vf = vf
-        self._E0 = np.asarray(E0)
-        self._E1 = np.asarray(E1)
-        self._d = self._E0.shape[0]
-        self._state_dim = self._E0.shape[1]
-        self._E_constraint = self._E1
-        self._base_R = np.zeros((self._d, self._d))
-        self._jacobian_vf = jax.jacfwd(self._vf)
-        self._init_constraints(constraints)
-
-    def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
-        x = self._E0 @ state
-        vf_eval = self._vf(x, t=t)
-        return self._E_constraint @ state - vf_eval
-
-    def _ode_jacobian(self, state: Array, *, t: ArrayLike) -> Array:
-        x = self._E0 @ state
-        jac_vf = self._jacobian_vf(x, t=t)
-        return self._E_constraint - jac_vf @ self._E0
+        _init_ode_information(self, vf, E0, E1, (E0,), constraints, R)
 
 
 class ODEInformationWithHidden(BaseODEInformation):
-    """First-order ODE with hidden states: dx/dt = f(x, u, t).
+    """First-order ODE driven by a hidden input: ``x' = f(x, u, t)``.
 
-    For joint state-parameter estimation where u is a hidden parameter
-    that appears in the dynamics but evolves according to its own prior.
+    The input ``u`` (a latent force, an unknown parameter) is part of the state,
+    with its own prior (see ``JointPrior``).
 
     Args:
-        vf: Vector field function vf(x, u, *, t) -> dx/dt.
-        E0: State extraction matrix for x (shape [d_x, D]).
-        E1: First derivative extraction matrix (shape [d_x, D]).
-        E0_hidden: Hidden state extraction matrix for u (shape [d_u, D]).
-        constraints: Optional list of Conservation constraints. (Data observations
-            are *not* measure constraints -- pass them as an ``obs_model`` built
-            with ``prepare_observations``; a ``Measurement`` here raises TypeError.)
+        vf: Vector field ``vf(x, u, *, t) -> x'``.
+        E0: Selector of ``x``, shape ``[d_x, D]``.
+        E1: Selector of ``x'``, shape ``[d_x, D]``.
+        E0_hidden: Selector of ``u``, shape ``[d_u, D]``.
+        constraints: Conservation laws (on ``x``).
+        R: Noise of the ODE rows (default zero).
     """
 
     def __init__(
         self,
-        vf: Callable[[Array, Array], Array],
+        vf: Callable[..., Array],
         E0: ArrayLike,
         E1: ArrayLike,
         E0_hidden: ArrayLike,
         constraints: list[Conservation] | None = None,
+        *,
+        R: ArrayLike | None = None,
     ):
         _check_selectors(E0=E0, E1=E1, E0_hidden=E0_hidden)
-        self._vf = vf
-        self._E0 = np.asarray(E0)
-        self._E1 = np.asarray(E1)
-        self._E0_hidden = np.asarray(E0_hidden)
-        self._d = self._E0.shape[0]
-        self._state_dim = self._E0.shape[1]
-        self._E_constraint = self._E1
-        self._base_R = np.zeros((self._d, self._d))
-        self._jacobian_vf_x = jax.jacfwd(self._vf, argnums=0)
-        self._jacobian_vf_u = jax.jacfwd(self._vf, argnums=1)
-        self._init_constraints(constraints)
-
-    @property
-    def E_args(self) -> Array:
-        """Vector-field argument selector: ``[E0; E0_hidden]`` (reads ``x``, ``u``)."""
-        return np.concatenate([self._E0, self._E0_hidden], axis=0)
-
-    def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
-        x = self._E0 @ state
-        u = self._E0_hidden @ state
-        vf_eval = self._vf(x, u, t=t)
-        return self._E_constraint @ state - vf_eval
-
-    def _ode_jacobian(self, state: Array, *, t: ArrayLike) -> Array:
-        x = self._E0 @ state
-        u = self._E0_hidden @ state
-        jac_vf_x = self._jacobian_vf_x(x, u, t=t)
-        jac_vf_u = self._jacobian_vf_u(x, u, t=t)
-        return self._E_constraint - jac_vf_x @ self._E0 - jac_vf_u @ self._E0_hidden
-
-
-# =============================================================================
-# Second-order ODE classes
-# =============================================================================
+        _init_ode_information(self, vf, E0, E1, (E0, E0_hidden), constraints, R)
 
 
 class SecondOrderODEInformation(BaseODEInformation):
-    """Second-order ODE measurement model: d^2x/dt^2 = f(x, v, t).
+    """Second-order ODE ``x'' = f(x, x', t)``.
 
     Args:
-        vf: Vector field function vf(x, v, *, t) -> d^2x/dt^2.
-        E0: State extraction matrix (shape [d, D]).
-        E1: First derivative extraction matrix (shape [d, D]).
-        E2: Second derivative extraction matrix (shape [d, D]).
-        constraints: Optional list of Conservation constraints. (Data observations
-            are *not* measure constraints -- pass them as an ``obs_model`` built
-            with ``prepare_observations``; a ``Measurement`` here raises TypeError.)
+        vf: Vector field ``vf(x, v, *, t) -> x''``.
+        E0: Selector of ``x``, shape ``[d, D]``.
+        E1: Selector of ``x'``, shape ``[d, D]``.
+        E2: Selector of ``x''``, shape ``[d, D]``.
+        constraints: Conservation laws.
+        R: Noise of the ODE rows (default zero).
     """
 
     def __init__(
         self,
-        vf: Callable[[Array, Array], Array],
+        vf: Callable[..., Array],
         E0: ArrayLike,
         E1: ArrayLike,
         E2: ArrayLike,
         constraints: list[Conservation] | None = None,
+        *,
+        R: ArrayLike | None = None,
     ):
         _check_selectors(E0=E0, E1=E1, E2=E2)
-        self._vf = vf
-        self._E0 = np.asarray(E0)
-        self._E1 = np.asarray(E1)
-        self._E2 = np.asarray(E2)
-        self._d = self._E0.shape[0]
-        self._state_dim = self._E0.shape[1]
-        self._E_constraint = self._E2
-        self._base_R = np.zeros((self._d, self._d))
-        self._jacobian_vf_x = jax.jacfwd(self._vf, argnums=0)
-        self._jacobian_vf_v = jax.jacfwd(self._vf, argnums=1)
-        self._init_constraints(constraints)
-
-    @property
-    def E_args(self) -> Array:
-        """Vector-field argument selector: ``[E0; E1]`` (reads ``x``, ``v``)."""
-        return np.concatenate([self._E0, self._E1], axis=0)
-
-    def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
-        x = self._E0 @ state
-        v = self._E1 @ state
-        vf_eval = self._vf(x, v, t=t)
-        return self._E_constraint @ state - vf_eval
-
-    def _ode_jacobian(self, state: Array, *, t: ArrayLike) -> Array:
-        x = self._E0 @ state
-        v = self._E1 @ state
-        jac_x = self._jacobian_vf_x(x, v, t=t)
-        jac_v = self._jacobian_vf_v(x, v, t=t)
-        return self._E_constraint - jac_x @ self._E0 - jac_v @ self._E1
+        _init_ode_information(self, vf, E0, E2, (E0, E1), constraints, R)
 
 
 class SecondOrderODEInformationWithHidden(BaseODEInformation):
-    """Second-order ODE with hidden states: d^2x/dt^2 = f(x, v, u, t).
-
-    For joint state-parameter estimation where u is a hidden parameter
-    that appears in the dynamics but evolves according to its own prior.
+    """Second-order ODE driven by a hidden input: ``x'' = f(x, x', u, t)``.
 
     Args:
-        vf: Vector field function vf(x, v, u, *, t) -> d^2x/dt^2.
-        E0: State extraction matrix for x (shape [d_x, D]).
-        E1: First derivative extraction matrix (shape [d_x, D]).
-        E2: Second derivative extraction matrix (shape [d_x, D]).
-        E0_hidden: Hidden state extraction matrix for u (shape [d_u, D]).
-        constraints: Optional list of Conservation constraints. (Data observations
-            are *not* measure constraints -- pass them as an ``obs_model`` built
-            with ``prepare_observations``; a ``Measurement`` here raises TypeError.)
+        vf: Vector field ``vf(x, v, u, *, t) -> x''``.
+        E0: Selector of ``x``, shape ``[d_x, D]``.
+        E1: Selector of ``x'``, shape ``[d_x, D]``.
+        E2: Selector of ``x''``, shape ``[d_x, D]``.
+        E0_hidden: Selector of ``u``, shape ``[d_u, D]``.
+        constraints: Conservation laws (on ``x``).
+        R: Noise of the ODE rows (default zero).
     """
 
     def __init__(
         self,
-        vf: Callable[[Array, Array, Array], Array],
+        vf: Callable[..., Array],
         E0: ArrayLike,
         E1: ArrayLike,
         E2: ArrayLike,
         E0_hidden: ArrayLike,
         constraints: list[Conservation] | None = None,
+        *,
+        R: ArrayLike | None = None,
     ):
         _check_selectors(E0=E0, E1=E1, E2=E2, E0_hidden=E0_hidden)
-        self._vf = vf
-        self._E0 = np.asarray(E0)
-        self._E1 = np.asarray(E1)
-        self._E2 = np.asarray(E2)
-        self._E0_hidden = np.asarray(E0_hidden)
-        self._d = self._E0.shape[0]
-        self._state_dim = self._E0.shape[1]
-        self._E_constraint = self._E2
-        self._base_R = np.zeros((self._d, self._d))
-        self._jacobian_vf_x = jax.jacfwd(self._vf, argnums=0)
-        self._jacobian_vf_v = jax.jacfwd(self._vf, argnums=1)
-        self._jacobian_vf_u = jax.jacfwd(self._vf, argnums=2)
-        self._init_constraints(constraints)
-
-    @property
-    def E_args(self) -> Array:
-        """Vector-field argument selector: ``[E0; E1; E0_hidden]``."""
-        return np.concatenate([self._E0, self._E1, self._E0_hidden], axis=0)
-
-    def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
-        x = self._E0 @ state
-        v = self._E1 @ state
-        u = self._E0_hidden @ state
-        vf_eval = self._vf(x, v, u, t=t)
-        return self._E_constraint @ state - vf_eval
-
-    def _ode_jacobian(self, state: Array, *, t: ArrayLike) -> Array:
-        x = self._E0 @ state
-        v = self._E1 @ state
-        u = self._E0_hidden @ state
-        jac_x = self._jacobian_vf_x(x, v, u, t=t)
-        jac_v = self._jacobian_vf_v(x, v, u, t=t)
-        jac_u = self._jacobian_vf_u(x, v, u, t=t)
-        return (
-            self._E_constraint
-            - jac_x @ self._E0
-            - jac_v @ self._E1
-            - jac_u @ self._E0_hidden
-        )
-
-
-# =============================================================================
-# Convenience factory functions for backward compatibility
-# =============================================================================
-
-
-def ODEconservation(
-    vf: Callable,
-    E0: ArrayLike,
-    E1: ArrayLike,
-    A: Array,
-    p: Array,
-) -> ODEInformation:
-    """Create first-order ODE model with conservation constraint.
-
-    Args:
-        vf: Vector field function vf(x, *, t) -> dx/dt.
-        E0: State extraction matrix.
-        E1: Derivative extraction matrix.
-        A: Conservation constraint matrix (shape [k, d]).
-        p: Conservation target values (shape [k]).
-
-    Returns:
-        ODEInformation with conservation constraint.
-    """
-    return ODEInformation(vf, E0, E1, constraints=[Conservation(A, p)])
-
-
-def SecondOrderODEconservation(
-    vf: Callable,
-    E0: ArrayLike,
-    E1: ArrayLike,
-    E2: ArrayLike,
-    A: Array,
-    p: Array,
-) -> SecondOrderODEInformation:
-    """Create second-order ODE model with conservation constraint.
-
-    Args:
-        vf: Vector field function vf(x, v, *, t) -> d^2x/dt^2.
-        E0: State extraction matrix.
-        E1: First derivative extraction matrix.
-        E2: Second derivative extraction matrix.
-        A: Conservation constraint matrix (shape [k, d]).
-        p: Conservation target values (shape [k]).
-
-    Returns:
-        SecondOrderODEInformation with conservation constraint.
-    """
-    return SecondOrderODEInformation(vf, E0, E1, E2, constraints=[Conservation(A, p)])
+        _init_ode_information(self, vf, E0, E2, (E0, E1, E0_hidden), constraints, R)

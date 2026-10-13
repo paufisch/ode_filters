@@ -30,7 +30,6 @@ import pytest
 
 from ode_filters import IWP, JointPrior, MaternPrior, PrecondIWP
 from ode_filters.priors import PrecondMaternPrior
-from ode_filters.priors.iwp import _check_iwp_q_bar_factor
 
 H = 0.1
 
@@ -101,27 +100,3 @@ def test_prior_grad_matches_finite_difference(name, fn, x0):
     # A frozen (cast) hyperparameter shows up as an exactly-zero entry.
     assert onp.all(onp.abs(grad) > 0.0), f"{name}: some hyperparameter has no gradient"
     onp.testing.assert_allclose(grad, expected, rtol=1e-5, atol=1e-8)
-
-
-def test_finiteness_backstop_fires_eagerly_but_is_skipped_under_trace():
-    """The IWP backstop keeps its eager behaviour and becomes a no-op under trace.
-
-    It is a construction-time sanity check against a pathological ``q``; eager
-    construction is where such a ``q`` is introduced, so that is where it must
-    still fail loudly. Under trace it cannot be evaluated at all, and silently
-    skipping is the only option that does not break every traced construction.
-    """
-    bad = np.asarray([[np.inf, 0.0], [0.0, 1.0]])
-    good = np.eye(2)
-
-    with pytest.raises(ValueError, match="non-finite square-root factor"):
-        _check_iwp_q_bar_factor(bad, q=1)
-    assert _check_iwp_q_bar_factor(good, q=1) is None
-
-    # Under trace both are accepted -- no raise, no leaked tracer.
-    @jax.jit
-    def _traced(x):
-        _check_iwp_q_bar_factor(x, q=1)
-        return np.sum(x)
-
-    assert onp.isfinite(float(_traced(good)))

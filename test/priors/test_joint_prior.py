@@ -36,13 +36,13 @@ class TestJointPriorConstruction:
     def test_rejects_non_prior_x(self):
         """Test that non-BasePrior for prior_x raises error."""
         prior_u = IWP(q=2, d=1)
-        with pytest.raises(TypeError, match="prior_x must be BasePrior"):
+        with pytest.raises(TypeError, match="prior_x must be a BasePrior"):
             JointPrior("not a prior", prior_u)
 
     def test_rejects_non_prior_u(self):
         """Test that non-BasePrior for prior_u raises error."""
         prior_x = IWP(q=2, d=1)
-        with pytest.raises(TypeError, match="prior_u must be BasePrior"):
+        with pytest.raises(TypeError, match="prior_u must be a BasePrior"):
             JointPrior(prior_x, [1, 2, 3])
 
 

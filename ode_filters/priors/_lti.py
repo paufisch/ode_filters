@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+
 import jax
 import jax.numpy as np
 import numpy as onp
@@ -13,7 +15,12 @@ from jax.typing import ArrayLike
 # decomposition. 64 reconstructs Q(h) to ~1e-13 for every order up to the float64
 # order ceiling (q ~ 18, where the dense Q is hopelessly ill-conditioned); more
 # nodes only accumulate extra rounding without raising the ceiling.
-_MATERN_QUAD_NODES = 64
+QUAD_NODES = 64
+
+
+@functools.lru_cache
+def _leggauss(n_quad: int) -> tuple[onp.ndarray, onp.ndarray]:
+    return onp.polynomial.legendre.leggauss(n_quad)
 
 
 def _gauss_legendre(n_quad: int, q: int) -> tuple[Array, Array]:
@@ -35,7 +42,7 @@ def _gauss_legendre(n_quad: int, q: int) -> tuple[Array, Array]:
             "one block of rows per node to the QR, so n_quad >= q + 1 is a shape "
             "requirement, not an accuracy preference."
         )
-    gl_nodes, gl_weights = onp.polynomial.legendre.leggauss(n_quad)
+    gl_nodes, gl_weights = _leggauss(n_quad)
     return np.asarray(gl_nodes), np.asarray(gl_weights)
 
 

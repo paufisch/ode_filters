@@ -28,7 +28,7 @@ class TestIOUPConstruction:
     def test_basic(self):
         prior = IOUPPrior(q=2, d=1, rate=-3.0)
         assert prior.q == 2
-        assert prior._dim == 1
+        assert prior.d == 1
 
     def test_with_xi(self):
         xi = np.array([[2.0, 0.5], [0.5, 1.0]])
@@ -76,7 +76,7 @@ class TestIOUPShapes:
 class TestIOUPProperties:
     def test_A_zero_is_identity(self):
         prior = IOUPPrior(q=2, d=2, rate=-2.0)
-        assert np.allclose(prior.A(0.0), np.eye((prior.q + 1) * prior._dim))
+        assert np.allclose(prior.A(0.0), np.eye((prior.q + 1) * prior.d))
 
     def test_Q_symmetric_psd(self):
         prior = IOUPPrior(q=2, d=1, rate=-2.0)
@@ -99,7 +99,7 @@ class TestIOUPProperties:
         h = 0.15
         Q_sqr = prior.Q_sqr(h)
         assert _is_upper_triangular(Q_sqr)
-        Q_ref = _vanloan_Q(prior._F, prior._G, h)
+        Q_ref = _vanloan_Q(*prior._drift_and_dispersion(), h)
         rel = onp.linalg.norm(onp.asarray(Q_sqr.T @ Q_sqr) - Q_ref) / onp.linalg.norm(
             Q_ref
         )
