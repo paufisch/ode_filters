@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import jax.numpy as np
 import pytest
-from hypothesis import given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 from ode_filters.calibration.sigma import (
@@ -47,7 +47,6 @@ class TestQuasiMLE:
         assert got == pytest.approx(expected, rel=1e-10)
 
     @given(scale=st.floats(min_value=0.1, max_value=10.0))
-    @settings(max_examples=20, deadline=None)
     def test_invariant_under_joint_rescaling(self, scale):
         """Scaling both m_z and the covariance scale appropriately leaves
         sigma_hat invariant up to the variance factor: if S -> c^2 * S then

@@ -25,7 +25,7 @@ from __future__ import annotations
 import jax.numpy as np
 import numpy as onp  # Regular numpy for exceptions
 import pytest
-from hypothesis import given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 from ode_filters.inference.sqr_gaussian_inference import (
@@ -115,7 +115,6 @@ def valid_sqr_inversion_inputs(
 
 
 @given(valid_sqr_inversion_inputs())
-@settings(max_examples=100, deadline=None)
 def test_sqr_inversion_property_output_shapes(inputs):
     """Property: Output shapes are always correct."""
     A, mu, Sigma, mu_z, Sigma_z, Q = inputs
@@ -132,7 +131,6 @@ def test_sqr_inversion_property_output_shapes(inputs):
 
 
 @given(valid_sqr_inversion_inputs())
-@settings(max_examples=100, deadline=None)
 def test_sqr_inversion_property_output_types(inputs):
     """Property: Outputs are always numpy arrays."""
     A, mu, Sigma, mu_z, Sigma_z, Q = inputs
@@ -149,7 +147,6 @@ def test_sqr_inversion_property_output_types(inputs):
 
 
 @given(valid_sqr_inversion_inputs())
-@settings(max_examples=100, deadline=None)
 def test_sqr_inversion_property_no_nan_or_inf(inputs):
     """Property: Outputs never contain NaN or Inf."""
     A, mu, Sigma, mu_z, Sigma_z, Q = inputs
@@ -162,7 +159,6 @@ def test_sqr_inversion_property_no_nan_or_inf(inputs):
 
 
 @given(valid_sqr_inversion_inputs())
-@settings(max_examples=50, deadline=None)
 def test_sqr_inversion_property_no_singular_square_root(inputs):
     """Property: Square-root matrix Lambda is non-singular."""
     A, mu, Sigma, mu_z, Sigma_z, Q = inputs
@@ -185,7 +181,6 @@ def test_sqr_inversion_property_no_singular_square_root(inputs):
 
 
 @given(load_random_marginalization_case())
-@settings(max_examples=100, deadline=None)
 def test_sqr_inversion_property_reduces_uncertainty(inputs):
     """Property: Posterior covariance is smaller than prior (integration test)."""
     A, b, Q, mu, Sigma = inputs
@@ -224,7 +219,6 @@ def test_sqr_inversion_property_reduces_uncertainty(inputs):
 @given(
     valid_sqr_inversion_inputs(n_state_min=1, n_state_max=10, n_obs_min=1, n_obs_max=10)
 )
-@settings(max_examples=50, deadline=None)
 def test_sqr_inversion_property_numerical_stability_large_dimensions(inputs):
     """Property: Function remains numerically stable for larger dimensions."""
     A, mu, Sigma, mu_z, Sigma_z, Q = inputs
@@ -237,7 +231,6 @@ def test_sqr_inversion_property_numerical_stability_large_dimensions(inputs):
 
 
 @given(valid_sqr_inversion_inputs())
-@settings(max_examples=50, deadline=None)
 def test_sqr_inversion_property_norm_bounds(inputs):
     """Property: Output magnitudes remain reasonable."""
     A, mu, Sigma, mu_z, Sigma_z, Q = inputs
@@ -260,7 +253,6 @@ def test_sqr_inversion_property_norm_bounds(inputs):
 
 
 @given(load_random_marginalization_case())
-@settings(max_examples=50, deadline=None)
 def test_sqr_inversion_property_cholesky_consistency(inputs):
     """Property: Integration test - inversion on marginalization outputs."""
     A, b, Q, mu, Sigma = inputs
