@@ -35,7 +35,7 @@ def test_preconditioned_joint_state_accessor_and_scaling():
         pj.apply_state_sigma_sqr(np.eye(5), np.zeros(2))
 
     # Scalar scaling of a full-state covariance sqrt touches only the state cols.
-    D_x = pj._D_x  # 3
+    D_x = pj.prior_x.state_dim  # 3
     P_sqr = np.arange(1.0, 26.0).reshape(5, 5)
     out = pj.apply_state_sigma_to_cov_sqr(P_sqr, 4.0)
     assert np.allclose(out[:, :D_x], 2.0 * P_sqr[:, :D_x])

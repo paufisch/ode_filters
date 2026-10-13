@@ -4,7 +4,7 @@ import jax.numpy as np
 import pytest
 
 from ode_filters.priors import IWP, PrecondIWP
-from ode_filters.priors.iwp import _make_iwp_precond_state_matrices
+from ode_filters.priors.iwp import _iwp_constants
 
 H = 0.3
 
@@ -40,7 +40,8 @@ def test_transition_reconstructs_the_original_coordinates(q, d):
 
 
 def test_transition_matrices_are_the_closed_form_constants():
-    A_bar, Q_bar, _ = _make_iwp_precond_state_matrices(2)
+    A_bar, Q_bar_sqr, _ = _iwp_constants(2)
+    Q_bar = Q_bar_sqr.T @ Q_bar_sqr
     xi = np.array([[2.0, 0.0], [0.0, 3.0]])
     tr = PrecondIWP(q=2, d=2, Xi=xi).transition(H)
     assert np.allclose(tr.A, np.kron(A_bar, np.eye(2)))

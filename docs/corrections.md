@@ -16,7 +16,7 @@ reproduces the historical behavior exactly.
 
 `TaylorCorrection(order=0)` -- the zeroth-order linearization (EK0): the vector
 field is treated as locally constant, so the ODE-defect rows of the Jacobian
-reduce to the selection matrix `E_constraint` (`E1` for first-order systems, `E2`
+reduce to the selection matrix `E_lhs` (`E1` for first-order systems, `E2`
 for second-order; no vector-field Jacobian). EK0 is cheaper --
 no Jacobian -- and is the classic `EK0` / `ts0` solver.
 
@@ -81,12 +81,12 @@ first-order ODE, `E2` for a second-order one), whatever the correction. See
 
 ## Statistical linearization
 
-`g(X) = E_c X - f(E_args X)` is affine in the state *except* through the vector
+`g(X) = E_lhs X - f(E_args X)` is affine in the state *except* through the vector
 field's arguments, so by Stein's identity the SLR quantities reduce to
 expectations under the **projected** marginal `N(E_args m, E_args P E_args^T)`:
 
 ```
-H     = E[jacobian_g]                        (= E_c - E[J_f] E_args)
+H     = E[jacobian_g]                        (= E_lhs - E[J_f] E_args)
 c     = E[g] - H m
 Omega = Var[g] - H P H^T = Var[g(X) - H X - c]
 ```
@@ -109,13 +109,14 @@ scaled unscented transform is deliberately not offered -- its `beta` term puts a
 negative weight on the centre point, which breaks the square-root construction
 of `Omega`.
 
-**Custom measurement models must declare `E_args`.** The base implementation
-returns `E0`, correct for first-order models; the second-order and hidden-state
-models override it. A subclass whose vector field reads more than `E0 @ state`
-must override it too, or the quadrature silently misses the spread in the
-omitted directions. Validate with `check_arg_projection(measure, state, t=...)`,
-which perturbs along the null space of `E_args` and checks the Jacobian is
-unchanged.
+**Custom measurement models should declare `E_args`.** The ODE-information
+models stack their argument selectors (`E0`; `E0, E1` for a second-order ODE;
+plus `E0_hidden` with a hidden input). A model without `E_args` (a
+`BlackBoxMeasurement`) is integrated over the whole state, which is correct but
+costs `n_nodes ** state_dim` nodes. A custom model whose `E_args` misses a
+coordinate the residual is nonlinear in is silently wrong; validate it with
+`check_arg_projection(measure, state, t=...)`, which perturbs along the null
+space of `E_args` and checks that the Jacobian is unchanged.
 
 **When it matters.** The closure error scales with the predictive spread of the
 vector field's arguments. In a pure ODE solve that spread vanishes as `h -> 0`,

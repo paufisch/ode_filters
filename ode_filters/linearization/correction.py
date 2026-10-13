@@ -70,7 +70,7 @@ def taylor_linearize(
         H, c = measure.linearize_ek0(state, t=t)  # type: ignore[attr-defined]
     else:
         H, c = measure.linearize(state, t=t)
-    return AffineModel(H, c, measure.get_noise(t=t))
+    return AffineModel(H, c, measure.noise_sqr(t=t))
 
 
 class Correction(eqx.Module):

@@ -24,7 +24,7 @@ def test_observation_matches_manual_computation():
     state = np.array([2.0, 3.0])
     time = 0.0
 
-    manual = model._E1 @ state - vf(model._E0 @ state, t=time)
+    manual = model.E_lhs @ state - vf(model.E0 @ state, t=time)
     computed = model.g(state, t=time)
 
     onp.testing.assert_allclose(np.asarray(computed), np.asarray(manual))
@@ -40,8 +40,8 @@ def test_jacobian_matches_expected_linearization():
     time = 1.0
 
     jacobian = model.jacobian_g(state, t=time)
-    jacobian_vf = jax.jacfwd(vf)(model._E0 @ state, t=time)
-    expected = model._E1 - jacobian_vf @ model._E0
+    jacobian_vf = jax.jacfwd(vf)(model.E0 @ state, t=time)
+    expected = model.E_lhs - jacobian_vf @ model.E0
 
     onp.testing.assert_allclose(np.asarray(jacobian), np.asarray(expected))
 
@@ -55,8 +55,8 @@ def test_projection_matrices_have_expected_shapes(d, q):
     model = ODEInformation(vf=vf, E0=E0, E1=E1)
     state_dim = (q + 1) * d
 
-    assert model._E0.shape == (d, state_dim)
-    assert model._E1.shape == (d, state_dim)
+    assert model.E0.shape == (d, state_dim)
+    assert model.E_lhs.shape == (d, state_dim)
 
 
 def test_invalid_state_dimension_raises_error():

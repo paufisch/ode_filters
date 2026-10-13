@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import equinox as eqx
 import jax.numpy as np
 from jax import Array
 from jax.scipy.linalg import expm
 from jax.typing import ArrayLike
 
 from ..gaussian.algebra import _cholesky_upper
-from ._lti import _MATERN_QUAD_NODES, _gauss_legendre, _sqr_noise_via_quadrature
-from .base import BasePrior
+from ._lti import QUAD_NODES, _gauss_legendre, _sqr_noise_via_quadrature
+from .base import BasePrior, check_order_and_dimension, component_matrix
 
 
 class IOUPPrior(BasePrior):
@@ -50,6 +51,12 @@ class IOUPPrior(BasePrior):
             decomposition used by ``Q_sqr``.
     """
 
+    q: int = eqx.field(static=True)
+    d: int = eqx.field(static=True)
+    xi: Array
+    rate: Array
+    n_quad: int = eqx.field(static=True)
+
     def __init__(
         self,
         q: int,
@@ -57,28 +64,17 @@ class IOUPPrior(BasePrior):
         rate: ArrayLike,
         Xi: ArrayLike | None = None,
         *,
-        n_quad: int = _MATERN_QUAD_NODES,
+        n_quad: int = QUAD_NODES,
     ):
-        super().__init__(q, d, Xi)
-        self._R = self._build_rate(rate, d)
-        self._xi_sqr = _cholesky_upper(self.xi)
-        # Companion drift F and dispersion G on the derivative-major state
-        # [Y^(0), ..., Y^(q)] (each block d-dimensional): identity shift blocks on the
-        # super-diagonal (dY^(i) = Y^(i+1)), the rate R in the bottom-right (q-th
-        # derivative) block (dY^(q) = R Y^(q) + noise), and the driving noise -- with
-        # component-correlation Xi -- injected only into the q-th block.
-        dim = (q + 1) * d
-        F = np.zeros((dim, dim))
-        for i in range(q):
-            F = F.at[i * d : (i + 1) * d, (i + 1) * d : (i + 2) * d].set(self._id)
-        F = F.at[q * d :, q * d :].set(self._R)
-        self._F = F
-        self._G = np.zeros((dim, d)).at[q * d :, :].set(self._xi_sqr.T)
-        self._gl_nodes, self._gl_weights = _gauss_legendre(n_quad, q)
+        check_order_and_dimension(q, d)
+        _gauss_legendre(n_quad, q)  # validates n_quad
+        self.q, self.d, self.n_quad = q, d, n_quad
+        self.xi = component_matrix(Xi, d)
+        self.rate = self._rate_matrix(rate, d)
 
     @staticmethod
-    def _build_rate(rate: ArrayLike, d: int) -> Array:
-        """Normalize ``rate`` to a ``d x d`` matrix (scalar -> r*I, vector -> diag)."""
+    def _rate_matrix(rate: ArrayLike, d: int) -> Array:
+        """Normalize ``rate`` to a ``d x d`` matrix (scalar -> r I, vector -> diag)."""
         r = np.asarray(rate, dtype=float)
         if r.ndim == 0:
             return r * np.eye(d)
@@ -94,32 +90,26 @@ class IOUPPrior(BasePrior):
             return r
         raise ValueError("rate must be a scalar, length-d vector, or d x d matrix.")
 
-    def A(self, h: ArrayLike) -> Array:
-        """Return the state transition matrix ``A(h) = exp(F h)``.
+    def _drift_and_dispersion(self) -> tuple[Array, Array]:
+        """Companion drift ``F`` and dispersion ``G`` on the derivative-major state.
 
-        Args:
-            h: Step size.
-
-        Returns:
-            State transition matrix (shape ``[(q+1)*d, (q+1)*d]``).
+        Identity shift blocks on the super-diagonal (``dY^(i) = Y^(i+1)``), the
+        rate in the bottom-right block (``dY^(q) = R Y^(q) + noise``), and the
+        driving noise, correlated by ``Xi``, entering the ``q``-th block only.
         """
-        return expm(self._F * self._validate_h(h))
+        q, d = self.q, self.d
+        shift = np.kron(np.eye(q + 1, k=1), np.eye(d))
+        F = shift.at[q * d :, q * d :].set(self.rate)
+        G = np.zeros((self.state_dim, d)).at[q * d :, :].set(_cholesky_upper(self.xi).T)
+        return F, G
 
-    def b(self, h: ArrayLike) -> Array:
-        """Return the zero drift vector (shape ``[(q+1)*d]``)."""
-        return self._b
+    def A(self, h: ArrayLike) -> Array:
+        """Transition matrix ``expm(F h)``."""
+        F, _ = self._drift_and_dispersion()
+        return expm(F * h)
 
     def Q_sqr(self, h: ArrayLike) -> Array:
-        """Upper-triangular square root of ``Q(h)``: ``Q_sqr.T @ Q_sqr == Q(h)``.
-
-        Square-root matrix-fraction decomposition (see
-        ``_sqr_noise_via_quadrature``); never forms the dense ``Q(h)``.
-        """
-        return _sqr_noise_via_quadrature(
-            self._F, self._G, self._gl_nodes, self._gl_weights, self._validate_h(h)
-        )
-
-    def Q(self, h: ArrayLike) -> Array:
-        """Return the dense diffusion matrix ``Q(h)`` (shape ``[(q+1)*d, (q+1)*d]``)."""
-        Q_sqr = self.Q_sqr(h)
-        return Q_sqr.T @ Q_sqr
+        """Square-root process noise by the square-root matrix-fraction decomposition."""
+        F, G = self._drift_and_dispersion()
+        nodes, weights = _gauss_legendre(self.n_quad, self.q)
+        return _sqr_noise_via_quadrature(F, G, nodes, weights, h)

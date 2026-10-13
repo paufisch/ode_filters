@@ -7,10 +7,9 @@ over the pure Layer-1 core (``marginal_loglik``): ``ODEFilter.loglik`` builds
 an ``InferenceProblem`` from the module and calls the core, so there is a
 single source of truth for the likelihood.
 
-Only ``ode_params`` is a trainable (array) leaf; the vector field, prior, grid and
-calibration are static configuration, and the initial Gaussian is produced by a
-static ``init_fn(params)`` callable -- so ``eqx.filter_value_and_grad``
-differentiates exactly the parameters.
+``fit`` trains ``ode_params`` only; the vector field, prior, grid and
+calibration stay fixed, and the initial Gaussian is produced by a static
+``init_fn(params)`` callable.
 
 For anything beyond a plain first-order ODE (hidden-state / joint priors, custom
 measurement models, fitting the initial condition), use ``marginal_loglik``
@@ -25,6 +24,7 @@ from collections.abc import Callable
 from typing import Any
 
 import equinox as eqx
+import jax
 import jax.numpy as np
 import numpy as onp
 from jax import Array
@@ -47,16 +47,16 @@ class ODEFilter(eqx.Module):
         init_fn: Callable ``params -> (m_0, P_0_sqr)`` producing the initial
             Gaussian (square-root covariance). May ignore ``params`` for a fixed
             initial condition.
-        prior: Gauss-Markov prior (e.g. ``IWP``).
+        prior: Gauss-Markov prior (e.g. ``IWP``); fixed during ``fit``.
         ts: Time grid, shape ``[K]``; stored as a tuple, so it is static
             configuration rather than a trainable leaf.
-        ode_params: The differentiable parameters (the only trainable leaf).
+        ode_params: The parameters ``fit`` trains.
         calibration: Diffusion calibration policy or shorthand (default ``"none"``).
     """
 
     vf: Callable = eqx.field(static=True)
     init_fn: Callable = eqx.field(static=True)
-    prior: Any = eqx.field(static=True)
+    prior: Any
     ts: tuple[float, ...] = eqx.field(static=True, converter=_as_static_grid)
     ode_params: Array
     calibration: Calibration | CalibrationMode = eqx.field(static=True, default="none")
@@ -103,17 +103,27 @@ def fit(
         Tuple ``(fitted_model, losses)`` where ``losses`` is the per-step negative
         log-likelihood (shape ``[steps]``).
     """
-    opt_state = optim.init(eqx.filter(model, eqx.is_inexact_array))
+    # Only ode_params is trained; the prior and everything else stay fixed.
+    trainable = jax.tree.map(lambda _: False, model)
+    trainable = eqx.tree_at(
+        lambda m: m.ode_params,
+        trainable,
+        replace=jax.tree.map(eqx.is_inexact_array, model.ode_params),
+    )
+    params, fixed = eqx.partition(model, trainable)
+    opt_state = optim.init(params)
 
     @eqx.filter_jit
-    def make_step(model, opt_state):
-        loss, grads = eqx.filter_value_and_grad(lambda m: -m.loglik(data))(model)
+    def make_step(params, opt_state):
+        def loss_fn(p):
+            return -eqx.combine(p, fixed).loglik(data)
+
+        loss, grads = eqx.filter_value_and_grad(loss_fn)(params)
         updates, opt_state = optim.update(grads, opt_state)
-        model = eqx.apply_updates(model, updates)
-        return model, opt_state, loss
+        return eqx.apply_updates(params, updates), opt_state, loss
 
     losses = []
     for _ in range(steps):
-        model, opt_state, loss = make_step(model, opt_state)
+        params, opt_state, loss = make_step(params, opt_state)
         losses.append(loss)
-    return model, np.asarray(losses)
+    return eqx.combine(params, fixed), np.asarray(losses)

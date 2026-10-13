@@ -249,3 +249,38 @@ def dense_kalman(
         m_smooth=np.stack(m_smooth[::-1]),
         P_smooth=np.stack(P_smooth[::-1]),
     )
+
+
+# ---------------------------------------------------------------------------
+# Matern companion form: an independent oracle for the Matern prior
+# ---------------------------------------------------------------------------
+
+
+def matern_companion(length_scale: float, q: int) -> tuple[Array, Array]:
+    """The raw companion drift ``F`` and diffusion ``S`` of a unit-variance Matern.
+
+    ``F`` is the companion matrix of ``(D + lam)^(q+1)`` with
+    ``lam = sqrt((2q+1)/length_scale)``; ``S = q_c e_q e_q.T`` with
+    ``q_c = (q!)^2 / (2q)! (2 lam)^(2q+1)``, which normalizes the stationary
+    variance of the process to one (Hartikainen & Saerkkae 2010).
+    """
+    from math import comb, factorial
+
+    D = q + 1
+    lam = (2.0 * q + 1.0) / length_scale
+    lam = lam**0.5
+    F = np.zeros((D, D))
+    F = F.at[np.arange(q), np.arange(1, D)].set(1.0)
+    F = F.at[q].set(np.array([-comb(D, j) * lam ** (D - j) for j in range(D)]))
+    q_c = factorial(q) ** 2 / factorial(2 * q) * (2.0 * lam) ** (2 * q + 1)
+    S = np.zeros((D, D)).at[q, q].set(q_c)
+    return F, S
+
+
+def van_loan(F: Array, S: Array, h: float) -> tuple[Array, Array]:
+    """``(expm(F h), int_0^h e^{F u} S e^{F.T u} du)`` by Van Loan's block exponential."""
+    n = F.shape[0]
+    block = np.block([[F, S], [np.zeros_like(F), -F.T]])
+    E = jax.scipy.linalg.expm(block * h)
+    A = E[:n, :n]
+    return A, E[:n, n:] @ A.T

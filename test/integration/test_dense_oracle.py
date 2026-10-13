@@ -107,7 +107,7 @@ PLAIN_PRIORS = {
 def test_linear_ode_matches_dense_kalman(prior_name, calibration):
     prior = PLAIN_PRIORS[prior_name]()
     measure = ODEInformation(_vf, prior.E0, prior.E1)
-    measure.R = R_ODE
+    measure = measure.with_noise(R_ODE)
     D = prior.E0.shape[1]
     m0 = np.zeros(D).at[:2].set(np.array([1.0, 0.0]))
     P0 = _spd(jax.random.PRNGKey(0), D)
@@ -137,7 +137,7 @@ def test_linear_ode_matches_dense_kalman(prior_name, calibration):
 def test_linear_ode_with_observations_matches_dense_kalman(calibration):
     prior = IWP(q=2, d=2)
     measure = ODEInformation(_vf, prior.E0, prior.E1)
-    measure.R = R_ODE
+    measure = measure.with_noise(R_ODE)
     D = prior.E0.shape[1]
     m0 = np.zeros(D).at[:2].set(np.array([1.0, 0.0]))
     P0 = _spd(jax.random.PRNGKey(1), D)
@@ -181,7 +181,7 @@ def test_hidden_input_with_non_diagonal_xi_matches_dense_kalman(calibration):
     measure = ODEInformationWithHidden(
         _vf_hidden, prior.E0_x, prior.E1, prior.E0_hidden
     )
-    measure.R = R_ODE
+    measure = measure.with_noise(R_ODE)
     D = prior.E0.shape[1]
     D_x = 6
     m0 = np.zeros(D).at[:2].set(np.array([1.0, 0.0]))

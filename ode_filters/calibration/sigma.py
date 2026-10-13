@@ -52,7 +52,7 @@ def quasi_mle_sigma_sqr(m_z: Array, P_z_sqr: Array) -> Array:
     **``P_z_sqr`` must exclude any measurement noise R.** The estimator
     treats ``S`` as scaling linearly with ``sigma^2``; adding ``R`` into the
     denominator inflates it by a constant and biases ``sigma_hat^2`` down.
-    For pure ODE-information filtering (``measure.get_noise`` returns zero
+    For pure ODE-information filtering (``measure.noise_sqr`` returns zero
     -- the typical case) the distinction is moot. For data-assimilation
     workflows with ``R != 0``, pre-compute the noise-free covariance via
     ``sqr_marginalization``

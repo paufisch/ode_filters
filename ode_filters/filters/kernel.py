@@ -114,7 +114,7 @@ class OnlineInformation(NamedTuple):
         return self.correction.correct(self.measure, x, model, t=t)
 
     def lhs_selector(self) -> Array:
-        return self.measure.E_constraint  # type: ignore[attr-defined]
+        return self.measure.E_lhs  # type: ignore[attr-defined]
 
 
 class FrozenInformation(NamedTuple):

@@ -90,6 +90,6 @@ def test_fit_only_trains_ode_params():
     thing that changes is ode_params."""
     model, data = _model_and_data(0.4)
     fitted, _ = fit(model, data, optax.adam(0.05), steps=10)
-    assert fitted.prior is model.prior  # static identity preserved
+    assert np.allclose(fitted.prior.xi, model.prior.xi)  # the prior is not trained
     assert fitted.ts == model.ts
     assert not np.allclose(fitted.ode_params, model.ode_params)  # params moved

@@ -35,6 +35,6 @@ class MeasurementModel(Protocol):
         """``(H, c)`` with ``H x + c`` the first-order expansion of ``g`` at ``state``."""
         ...
 
-    def get_noise(self, *, t: ArrayLike) -> Array:
+    def noise_sqr(self, *, t: ArrayLike) -> Array:
         """Upper-triangular square root of the residual's noise covariance."""
         ...

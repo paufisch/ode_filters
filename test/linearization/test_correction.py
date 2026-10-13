@@ -66,7 +66,7 @@ def test_ek1_linearizes_like_the_measurement_model():
     H, c = measure.linearize(x.m, t=T_EVAL)
     assert_close(model.H, H)
     assert_close(model.c, c)
-    assert_close(model.R_sqr, measure.get_noise(t=T_EVAL))
+    assert_close(model.R_sqr, measure.noise_sqr(t=T_EVAL))
 
 
 def test_ek1_update_is_the_kalman_update_of_its_linearization():
@@ -119,7 +119,7 @@ def test_ek0_jacobian_is_the_lhs_selector_and_the_residual_is_exact():
     prior, measure, m0, P0_sqr = _nonlinear()
     x = _predict(prior, m0, P0_sqr)
     model = TaylorCorrection(order=0).linearize(measure, x.m, t=T_EVAL)
-    assert_close(model.H, measure.E_constraint)
+    assert_close(model.H, measure.E_lhs)
     assert_close(model.H @ x.m + model.c, measure.g(x.m, t=T_EVAL))
 
 

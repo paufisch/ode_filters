@@ -1,18 +1,19 @@
-"""Base class of the Gauss-Markov priors."""
+"""Base class of the Gauss-Markov priors, and the transition a filter step uses."""
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+import abc
 from collections.abc import Callable
 from typing import NamedTuple
 
+import equinox as eqx
+import jax
 import jax.numpy as np
 from jax import Array
 from jax.typing import ArrayLike
 
-from ..gaussian.algebra import _cholesky_upper, _safe_sqrt
+from ..gaussian.algebra import _safe_sqrt
 
-MatrixFunction = Callable[[ArrayLike], Array]
 # vf is called positionally with 1 (order 1) or 2 (order 2) derivatives plus a
 # keyword-only ``t``; ``Callable[..., Array]`` captures both arities.
 VectorField = Callable[..., Array]
@@ -42,7 +43,32 @@ class Transition(NamedTuple):
     T_diag: Array | None = None
 
 
-class BasePrior(ABC):
+def check_order_and_dimension(q: int, d: int) -> None:
+    """Validate a prior's smoothness order ``q`` and dimension ``d``."""
+    if not isinstance(q, int) or isinstance(q, bool):
+        raise TypeError("q must be an integer.")
+    if q < 0:
+        raise ValueError("q must be non-negative.")
+    if not isinstance(d, int) or isinstance(d, bool):
+        raise TypeError("d must be an integer.")
+    if d <= 0:
+        raise ValueError("d must be positive.")
+
+
+def component_matrix(Xi: ArrayLike | None, d: int) -> Array:
+    """The component-correlation matrix ``Xi``: the identity by default."""
+    xi = np.eye(d) if Xi is None else np.asarray(Xi, dtype=float)
+    if xi.shape != (d, d):
+        raise ValueError(f"Xi must have shape ({d}, {d}), got {xi.shape}.")
+    return xi
+
+
+def _selector(q: int, d: int, k: int) -> Array:
+    """Selector of the ``k``-th derivative of a derivative-major state."""
+    return np.kron(np.eye(q + 1)[k : k + 1], np.eye(d))
+
+
+class BasePrior(eqx.Module):
     """Base class of the Gauss-Markov priors.
 
     A prior models a ``d``-dimensional solution ``x(t)`` together with its first
@@ -50,72 +76,65 @@ class BasePrior(ABC):
     ``Y = [x, x', ..., x^(q)]`` of length ``(q+1)*d``. Over a step of size ``h`` it
     is the linear-Gaussian transition ``Y(t+h) = A(h) Y(t) + b(h) + noise`` with
     process noise covariance ``Q(h) = Q_sqr(h).T @ Q_sqr(h)``. Subclasses define
-    ``A``, ``b`` and ``Q``; the filters consume ``transition(h)``.
+    ``A`` and ``Q_sqr``; the filters consume ``transition(h)``.
 
-    Args:
+    Priors are ``equinox`` modules: their hyperparameters (``Xi``, a length
+    scale, a rate) are pytree leaves, so a prior can be differentiated, vmapped
+    or passed through ``equinox.filter_jit`` like any array; the orders and
+    dimensions are static.
+
+    Attributes:
         q: Number of modelled derivatives (the smoothness order).
         d: Dimension of the solution ``x``.
-        Xi: Component-correlation matrix of the driving noise, shape ``[d, d]``;
-            defaults to the identity. It sets the scale of the prior uncertainty
-            (together with the calibrated ``sigma^2``).
+        xi: Component-correlation matrix of the driving noise, shape ``[d, d]``.
+            It sets the scale of the prior uncertainty (together with the
+            calibrated ``sigma^2``).
     """
 
-    def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
-        if not isinstance(q, int):
-            raise TypeError("q must be an integer.")
-        if q < 0:
-            raise ValueError("q must be non-negative.")
+    q: eqx.AbstractVar[int]
+    d: eqx.AbstractVar[int]
+    xi: eqx.AbstractVar[Array]
 
-        if not isinstance(d, int):
-            raise TypeError("d must be an integer.")
-        if d <= 0:
-            raise ValueError("d must be positive.")
-
-        xi = np.eye(d, dtype=float) if Xi is None else np.asarray(Xi, dtype=float)
-        if xi.shape != (d, d):
-            raise ValueError(f"Xi must have shape ({d}, {d}), got {xi.shape}.")
-
-        self.q = q
-        self._dim = d
-        self.xi = xi
-        self._id = np.eye(d, dtype=xi.dtype)
-        self._b = np.zeros(d * (q + 1))
-        eye_d = np.eye(d)
-        basis = np.eye(q + 1)
-        self._E0 = np.kron(basis[0:1], eye_d)
-        self._E1 = np.kron(basis[1:2], eye_d)
-        self._E2 = np.kron(basis[2:3], eye_d) if q >= 2 else None
+    @property
+    def state_dim(self) -> int:
+        """Dimension ``D`` of the state."""
+        return (self.q + 1) * self.d
 
     @property
     def E0(self) -> Array:
-        """State extraction matrix (shape ``[d, (q+1)*d]``)."""
-        return self._E0
+        """Selector of the solution ``x``, shape ``[d, D]``."""
+        return _selector(self.q, self.d, 0)
 
     @property
     def E1(self) -> Array:
-        """First derivative extraction matrix (shape ``[d, (q+1)*d]``)."""
-        return self._E1
+        """Selector of ``x'``, shape ``[d, D]``."""
+        return _selector(self.q, self.d, 1)
 
     @property
     def E2(self) -> Array | None:
-        """Second derivative extraction matrix (shape ``[d, (q+1)*d]``), or None if q < 2."""
-        return self._E2
+        """Selector of ``x''``, shape ``[d, D]``, or ``None`` if ``q < 2``."""
+        return _selector(self.q, self.d, 2) if self.q >= 2 else None
 
-    @staticmethod
-    def _validate_h(h: ArrayLike) -> ArrayLike:
-        return h
-
-    @abstractmethod
+    @abc.abstractmethod
     def A(self, h: ArrayLike) -> Array:
-        pass  # pragma: no cover
+        """Transition matrix over a step ``h``, shape ``[D, D]``."""
 
-    @abstractmethod
+    @abc.abstractmethod
+    def Q_sqr(self, h: ArrayLike) -> Array:
+        """Upper-triangular square root of the process noise: ``Q_sqr.T @ Q_sqr == Q(h)``."""
+
     def b(self, h: ArrayLike) -> Array:
-        pass  # pragma: no cover
+        """Drift over a step ``h``, shape ``[D]`` (zero for these priors)."""
+        return np.zeros(self.state_dim)
 
-    @abstractmethod
     def Q(self, h: ArrayLike) -> Array:
-        pass  # pragma: no cover
+        """Process noise covariance over a step ``h``, shape ``[D, D]``.
+
+        Prefer ``Q_sqr``: at high order the dense ``Q(h)`` is severely
+        ill-conditioned, while its square-root factor stays accurate.
+        """
+        Q_sqr = self.Q_sqr(h)
+        return Q_sqr.T @ Q_sqr
 
     def transition(self, h: ArrayLike) -> Transition:
         """The matrices a filter step of size ``h`` computes with.
@@ -126,73 +145,106 @@ class BasePrior(ABC):
         """
         return Transition(self.A(h), self.b(h), self.Q_sqr(h))
 
-    def Q_sqr(self, h: ArrayLike) -> Array:
-        """Upper-triangular square root of ``Q(h)``: ``Q_sqr.T @ Q_sqr == Q(h)``.
-
-        This is the quantity the square-root filter actually consumes. The
-        default factorizes the dense ``Q(h)`` with a (symmetrized) Cholesky;
-        subclasses with a closed-form factor (``IWP`` / ``PrecondIWP``) or a
-        block structure (``JointPrior``) override this to avoid factorizing a
-        dense -- and, for the integrated Wiener process, severely
-        ill-conditioned -- matrix at runtime.
-        """
-        return _cholesky_upper(self.Q(h))
-
     # ------------------------------------------------------------------
-    # Block-aware calibration hooks. Defaults treat the whole state as a
-    # single block; ``JointPrior`` / ``PrecondJointPrior`` override.
+    # The state block: the part of the state the diffusion sigma^2 scales.
+    # For a plain prior that is the whole state; a JointPrior overrides.
     # ------------------------------------------------------------------
 
     @property
     def E0_state(self) -> Array:
-        """State-only value projection used by the step-size error norm.
+        """Selector of the ODE solution in the state.
 
-        Bosch, Tronarp, Hennig (2022) sec. 3 recommends that the local
-        error vector have the dimension of the ODE solution. For non-joint
-        priors the state is everything, so ``E0_state == E0``. Joint priors
-        override to return the state-only extractor.
+        The adaptive error estimate measures this part only (Bosch, Tronarp &
+        Hennig 2022, Sec. 3). It is ``E0`` for a plain prior.
         """
-        return self._E0
+        return self.E0
 
     @property
     def xi_state(self) -> Array:
-        """State-block component-correlation matrix ``Xi`` (shape ``[d, d]``).
-
-        For non-joint priors this is just ``self.xi``. Joint priors override
-        to return the state-prior's ``Xi`` — diagonal-mode calibration only
-        needs the state block to be (per-component) diagonal; the input
-        block can have arbitrary structure.
-        """
+        """``Xi`` of the state block (per-component calibration needs it diagonal)."""
         return self.xi
 
-    def apply_state_sigma_sqr(self, Q_sqr: Array, sigma_sqr: ArrayLike) -> Array:
-        """Apply diffusion ``sigma_sqr`` to the state block of ``Q_sqr``.
+    @property
+    def _state_block(self) -> tuple[int, int, int]:
+        """``(D_x, d_x, q_x)`` of the block the diffusion scales: its leading columns."""
+        return self.state_dim, self.d, self.q
 
-        Accepts a scalar (uniform scaling) or a length-``d`` vector
-        (per-component scaling, used by ``calibration="diagonal"``). The
-        vector path scales each component's columns by ``sqrt(sigma_sqr[i])``
-        across all ``q + 1`` derivative orders.
-
-        For non-joint priors the whole ``Q`` is the state block, so the
-        scalar path is ``sqrt(sigma_sqr) * Q_sqr``. Joint priors override to
-        leave the input block untouched (Schmidt et al. 2021 convention).
-        """
+    def _state_scale(self, sigma_sqr: ArrayLike) -> Array:
+        """Column scaling ``sqrt(sigma^2)`` of the state block, length ``D_x``."""
+        D_x, d_x, q_x = self._state_block
         sigma_sqr = np.asarray(sigma_sqr)
         if sigma_sqr.ndim == 0:
-            return _safe_sqrt(sigma_sqr) * Q_sqr
-        if sigma_sqr.shape != (self._dim,):
+            return np.full(D_x, _safe_sqrt(sigma_sqr))
+        if sigma_sqr.shape != (d_x,):
             raise ValueError(
-                f"sigma_sqr must be scalar or length-{self._dim} vector; "
+                f"sigma_sqr must be scalar or length-{d_x} vector; "
                 f"got shape {sigma_sqr.shape}."
             )
-        tiled = np.tile(sigma_sqr, self.q + 1)
-        return Q_sqr * _safe_sqrt(tiled)[None, :]
+        return np.tile(_safe_sqrt(sigma_sqr), q_x + 1)
+
+    def apply_state_sigma_sqr(self, Q_sqr: Array, sigma_sqr: ArrayLike) -> Array:
+        """Scale the state block of a square-root process noise by ``sigma^2``.
+
+        A scalar scales the whole state block; a length-``d`` vector (the
+        per-component calibration) scales each component's columns across all
+        ``q + 1`` derivatives. A joint prior's input block is left alone
+        (Schmidt et al. 2021).
+        """
+        D_x = self._state_block[0]
+        return Q_sqr.at[:, :D_x].multiply(self._state_scale(sigma_sqr)[None, :])
 
     def apply_state_sigma_to_cov_sqr(self, P_sqr: Array, sigma_sqr: ArrayLike) -> Array:
-        """Apply ``sigma_sqr`` to the state block of a full-state covariance sqrt.
+        """Scale the state block of a square-root covariance by ``sigma^2`` (post hoc)."""
+        return self.apply_state_sigma_sqr(P_sqr, sigma_sqr)
 
-        A post-hoc covariance-rescaling utility (multiplies the stored square-root
-        covariance by ``sqrt(sigma_sqr)``). Default scales everything; joint priors
-        override to scale only the state block.
+    def sample(
+        self,
+        key: Array,
+        ts: ArrayLike,
+        *,
+        m_0: ArrayLike | None = None,
+        P_0_sqr: ArrayLike | None = None,
+    ) -> Array:
+        """A sample path of the prior at the times ``ts``.
+
+        Exact: each interval is the prior's transition over ``h_i = ts[i+1] -
+        ts[i]`` (``ts`` may be non-uniform). The key is split into one key for
+        the initial state and one per interval.
+
+        Args:
+            key: A ``jax.random`` key.
+            ts: Increasing times, shape ``[K]``.
+            m_0: Mean of the initial state; required unless the prior has a
+                stationary law (``stationary_cov_sqr``), which is then used with
+                zero mean.
+            P_0_sqr: Square-root covariance of the initial state (with ``m_0``).
+
+        Returns:
+            The path, shape ``[K, D]``.
+
+        Raises:
+            ValueError: If no initial law is given and the prior has no
+                stationary one, or only one of ``m_0`` / ``P_0_sqr`` is given.
         """
-        return _safe_sqrt(sigma_sqr) * P_sqr
+        ts = np.asarray(ts, dtype=float)
+        if (m_0 is None) != (P_0_sqr is None):
+            raise ValueError("Pass both m_0 and P_0_sqr, or neither.")
+        if m_0 is None:
+            stationary = getattr(self, "stationary_cov_sqr", None)
+            if stationary is None:
+                raise ValueError(
+                    f"{type(self).__name__} has no stationary law: pass m_0 and P_0_sqr."
+                )
+            m_0, P_0_sqr = np.zeros(self.state_dim), stationary()
+        m_0, P_0_sqr = np.asarray(m_0), np.asarray(P_0_sqr)
+        keys = jax.random.split(key, ts.shape[0])
+        x_0 = m_0 + jax.random.normal(keys[0], m_0.shape) @ P_0_sqr
+
+        def step(x, inputs):
+            h, k = inputs
+            noise = jax.random.normal(k, x.shape) @ self.Q_sqr(h)
+            x_next = self.A(h) @ x + self.b(h) + noise
+            return x_next, x_next
+
+        _, path = jax.lax.scan(step, x_0, (np.diff(ts), keys[1:]))
+        return np.concatenate([x_0[None], path], axis=0)

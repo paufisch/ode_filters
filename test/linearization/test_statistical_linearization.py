@@ -181,12 +181,12 @@ def test_R_eff_is_R_plus_omega():
     """The effective noise square root must factor ``R + Omega`` exactly."""
     prior = IWP(q=3, d=1)
     measure = ODEInformation(cubic_vf, prior.E0, prior.E1)
-    measure.R = 1e-4
+    measure = measure.with_noise(1e-4)
     m, P_sqr = _random_gaussian(prior.E0.shape[1])
 
     model = slr_linearize(measure, m, P_sqr, t=0.3, n_nodes=4)
     Omega = model.Omega_sqr.T @ model.Omega_sqr
-    R_sqr = measure.get_noise(t=0.3)
+    R_sqr = measure.noise_sqr(t=0.3)
     R_eff = model.R_eff_sqr.T @ model.R_eff_sqr
     assert onp.allclose(R_eff, R_sqr.T @ R_sqr + Omega, atol=1e-14)
     assert model.R_eff_sqr.shape == (1, 1)
@@ -321,7 +321,7 @@ def test_check_arg_projection_catches_a_bad_declaration():
     class BadE0Args(SecondOrderODEInformation):
         @property
         def E_args(self):  # claims x only, but the field also reads v
-            return self._E0
+            return self.E0
 
     measure = BadE0Args(
         lambda x, v, *, t: x**3 - v**3, prior.E0, prior.E1, np.eye(4)[2:3]

@@ -169,7 +169,7 @@ model = BlackBoxMeasurement(
 
 # Use like any other measurement model
 H, c = model.linearize(state, t=0.0)
-R = model.get_noise(t=0.0)
+R = model.noise_sqr(t=0.0)
 ```
 
 As the `measure` of a solver, `g` plays the role of the ODE residual: the filter
@@ -179,7 +179,7 @@ pass `ode_dim=` to say how many leading rows are ODE defect.
 
 ### Transformed Measurement Models
 
-`TransformedMeasurement` wraps any existing measurement model with a nonlinear state transformation `sigma(state)`. The Jacobian of the mean is composed correctly via the chain rule: `J_total = J_g(sigma(state)) @ J_sigma(state)`. Note, however, that only the mean/linearization is transformed: the measurement-noise covariance `R` is delegated to and taken unchanged from the base model (see `get_noise`), and is *not* propagated through `sigma`. `R` must therefore already be expressed in the base model's post-transform coordinates.
+`TransformedMeasurement` wraps any existing measurement model with a nonlinear state transformation `sigma(state)`. The Jacobian of the mean is composed correctly via the chain rule: `J_total = J_g(sigma(state)) @ J_sigma(state)`. Note, however, that only the mean/linearization is transformed: the measurement-noise covariance `R` is delegated to and taken unchanged from the base model (see `noise_sqr`), and is *not* propagated through `sigma`. `R` must therefore already be expressed in the base model's post-transform coordinates.
 
 **Use cases:**
 
@@ -223,12 +223,7 @@ def sigma_jacobian(state):
     # Custom Jacobian implementation
     return jax.jacfwd(softmax_transform)(state)
 
-model = TransformedMeasurement(
-    base_model,
-    softmax_transform,
-    use_autodiff_jacobian=False,
-    sigma_jacobian=sigma_jacobian
-)
+model = TransformedMeasurement(base_model, softmax_transform, sigma_jacobian=sigma_jacobian)
 ```
 
 ## ODE information
@@ -251,11 +246,13 @@ model = TransformedMeasurement(
 
 ::: ode_filters.information.ObsModel
 
-::: ode_filters.information.ODEconservation
-
-::: ode_filters.information.SecondOrderODEconservation
-
 ## Custom measurement models
+
+Any object with the `MeasurementModel` interface works as a solver's `measure`.
+
+::: ode_filters.information.MeasurementModel
+
+::: ode_filters.information.BaseODEInformation
 
 ::: ode_filters.information.BlackBoxMeasurement
 

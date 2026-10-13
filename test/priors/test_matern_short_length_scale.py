@@ -11,7 +11,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.scipy.linalg import expm
 
 from ode_filters import (
     MaternPrior,
@@ -20,17 +19,14 @@ from ode_filters import (
     gaussian_filter,
     taylor_mode_initialization,
 )
+from test.helpers import matern_companion, van_loan
 
 jax.config.update("jax_enable_x64", True)
 
 
-def _block_form(prior, h):
+def _block_form(q, length_scale, h):
     """The former implementation: `expm` of `[[F, S], [0, -F.T]] h`."""
-    n = prior.n
-    H = jnp.block([[prior._F, prior.S], [jnp.zeros_like(prior._F), -prior._F.T]])
-    E = expm(H * h)
-    A = E[:n, :n]
-    return A, E[:n, n:] @ A.T
+    return van_loan(*matern_companion(length_scale, q), h)
 
 
 # (q, length_scale, h) cells where the block form is finite AND accurate; at
@@ -47,9 +43,9 @@ def _block_form(prior, h):
 )
 def test_matches_block_form_where_finite(q, length_scale, h):
     prior = MaternPrior(q, 1, length_scale=length_scale, Xi=np.eye(1))
-    A_ref, Q_ref = (np.asarray(v) for v in _block_form(prior, h))
+    A_ref, Q_ref = (np.asarray(v) for v in _block_form(q, length_scale, h))
     assert np.isfinite(A_ref).all()
-    A, Q = (np.asarray(v) for v in prior.A_and_Q(h))
+    A, Q = np.asarray(prior.A(h)), np.asarray(prior.Q(h))
     assert np.allclose(A, A_ref, rtol=1e-10, atol=1e-12 * np.abs(A_ref).max())
     assert np.allclose(Q, Q_ref, rtol=1e-8, atol=1e-10 * np.abs(Q_ref).max())
 

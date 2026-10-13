@@ -112,7 +112,7 @@ class TestNoiseExclusion:
         ts = np.asarray([0.0, 0.1])
         clean = ODEInformation(vf, prior.E0, prior.E1)
         noisy = ODEInformation(vf, prior.E0, prior.E1)
-        noisy.R = 0.5  # large, so any leakage would show
+        noisy = noisy.with_noise(0.5)  # large, so any leakage would show
         sigma_clean = gaussian_filter(m_0, P_0_sqr, prior, clean, ts).sigma_sqr[0]
         sigma_noisy = gaussian_filter(m_0, P_0_sqr, prior, noisy, ts).sigma_sqr[0]
         assert float(sigma_noisy) == pytest.approx(float(sigma_clean), rel=1e-10)

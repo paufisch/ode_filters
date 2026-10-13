@@ -1,356 +1,165 @@
-"""Matern priors: ``MaternPrior`` and ``PrecondMaternPrior``."""
+"""Matern priors: ``MaternPrior`` and ``PrecondMaternPrior``.
+
+A Matern process of smoothness ``nu = q + 1/2`` is the stationary solution of a
+linear SDE on ``[u, u', ..., u^(q)]`` with the companion drift ``F`` whose last
+row holds ``-C(q+1, j) lam^(q+1-j)``, ``lam = sqrt((2q+1) / length_scale)``.
+In the coordinates ``D_lam^-1 Y`` with ``D_lam = diag(1, lam, ..., lam^q)`` the
+drift becomes ``lam M`` with the fixed binomial companion ``M`` and the
+diffusion ``lam c_q e_q e_q.T``: all of the length scale's dynamic range sits in
+the diagonal ``D_lam``. Every quantity here is computed in those coordinates
+and mapped back, which keeps it finite at short length scales and high order.
+"""
 
 from __future__ import annotations
 
+import functools
 from math import comb, factorial
 
+import equinox as eqx
 import jax.numpy as np
+import numpy as onp
 from jax import Array
 from jax.scipy.linalg import expm
 from jax.typing import ArrayLike
 
 from ..gaussian.algebra import _cholesky_upper
-from ._lti import _MATERN_QUAD_NODES, _gauss_legendre, _sqr_noise_via_quadrature
-from .base import BasePrior, Transition
-from .iwp import _make_iwp_precond_state_matrices
+from ._lti import QUAD_NODES, _gauss_legendre, _sqr_noise_via_quadrature
+from .base import BasePrior, Transition, check_order_and_dimension, component_matrix
+from .iwp import _iwp_T_diag
 
 
-def _matern_companion_form(length_scale: float, q: int) -> tuple[Array, Array, Array]:
-    """Construct the companion form matrices for a Matern GP prior.
+@functools.lru_cache
+def _matern_constants(q: int) -> tuple[onp.ndarray, float, onp.ndarray]:
+    """Length-scale-free pieces of the scalar Matern prior, built once per ``q``.
 
-    Parameters
-    ----------
-    length_scale : float
-        Length scale parameter.
-    q : int
-        Smoothness parameter exponent (nu = q + 1/2, q in 1,2,3,...).
-
-    Returns
-    -------
-    F : Array
-        Drift matrix (shape [D, D]) - companion form matrix.
-    L : Array
-        Diffusion vector (shape [D]).
-    q_coeff : float
-        Diffusion coefficient.
+    Returns ``(M, c, P_n_sqr)``: the binomial companion ``M`` (drift ``lam M`` in
+    normalized coordinates), the diffusion constant ``c`` (diffusion
+    ``lam c e_q e_q.T``, which normalizes the stationary variance of ``u`` to
+    one), and the upper-triangular square root of the stationary covariance in
+    normalized coordinates, which solves ``M P + P M.T + c e_q e_q.T = 0`` and so
+    does not depend on the length scale.
     """
-    if not isinstance(q, int) or q < 0:
-        raise ValueError("Smoothness exponent q must be a non-negative integer.")
-
-    # Compute nu = q + 1/2 and state dimensionality D = nu + 1/2 = q + 1
-    D = q + 1
-
-    # Compute lambda = sqrt(2*nu / length_scale) = sqrt((2q + 1) / length_scale)
-    lam = np.sqrt((2.0 * q + 1.0) / length_scale)
-
-    # Construct F matrix (companion form)
-    F = np.zeros((D, D), dtype=float)
-
-    # Super-diagonal: ones
-    for i in range(D - 1):
-        F = F.at[i, i + 1].set(1.0)
-
-    # Last row: [-a_j * λ^(D-j) for j = 0, ..., D-1]
-    # where a_j = C(D, j) are binomial coefficients
-    for j in range(D):
-        a_j = comb(D, j)  # Binomial coefficient C(D, j)
-        power = D - j  # Power goes from D down to 1
-        F = F.at[D - 1, j].set(-a_j * (lam**power))
-
-    # Construct L vector: [0, 0, ..., 0, 1]ᵀ
-    L = np.zeros((D, 1), dtype=float).at[-1, 0].set(1.0)
-
-    # Diffusion coefficient: q = sigma^2 [(D-1)!]^2 / (2D-2)! * (2*lambda)^(2D-1)
-    # assuming sigma = 1
-    numerator = float(factorial(D - 1) ** 2)
-    denominator = float(factorial(2 * D - 2))
-    q_coeff = (numerator / denominator) * ((2.0 * lam) ** (2 * D - 1))
-
-    return F, L, q_coeff
+    dim = q + 1
+    M = onp.zeros((dim, dim))
+    M[onp.arange(q), onp.arange(1, dim)] = 1.0
+    M[q, :] = [-comb(dim, j) for j in range(dim)]
+    c = factorial(q) ** 2 / factorial(2 * q) * 2.0 ** (2 * q + 1)
+    C = onp.zeros((dim, dim))
+    C[q, q] = c
+    # Lyapunov equation by vectorization (row-major vec): (M kron I + I kron M).
+    eye = onp.eye(dim)
+    P_n = onp.linalg.solve(onp.kron(M, eye) + onp.kron(eye, M), -C.reshape(-1))
+    P_n = P_n.reshape(dim, dim)
+    P_n = 0.5 * (P_n + P_n.T)
+    return M, c, onp.linalg.cholesky(P_n).T
 
 
-def _make_matern_sqr_noise(
-    length_scale: float, q: int, n_quad: int
-) -> tuple[Array, Array, Array, Array, Array]:
-    """Precompute the step-size-independent pieces of the square-root matrix-
-    fraction decomposition of the (scalar) Matern process noise.
-
-    In the length-scale-normalized coordinates ``D_lam = diag(1, lam, ..., lam**q)``
-    (``lam = sqrt((2q+1)/length_scale)``) the companion drift becomes the fixed
-    binomial companion ``F_bar = lam * M`` -- independent of ``length_scale`` -- and
-    the rank-1 diffusion is ``g_bar @ g_bar.T``. This normalization removes the
-    ``lam**(q-j)`` dynamic range of the raw companion form (the dominant driver of
-    the high-order conditioning blow-up), the analogue along the length-scale axis
-    of the IWP step-size preconditioner.
-
-    Returns ``(F_bar, g_bar, D_lam, gl_nodes, gl_weights)`` with ``gl_nodes`` /
-    ``gl_weights`` the Gauss-Legendre nodes/weights on ``[-1, 1]``.
-
-    Raises:
-        ValueError: If ``n_quad <= q`` (see ``_gauss_legendre``).
-    """
-    gl_nodes, gl_weights = _gauss_legendre(n_quad, q)
-    D = q + 1
-    lam = np.sqrt((2.0 * q + 1.0) / length_scale)
-
-    M = np.zeros((D, D))
-    for i in range(D - 1):
-        M = M.at[i, i + 1].set(1.0)
-    for j in range(D):
-        M = M.at[D - 1, j].set(-comb(D, j))
-    F_bar = lam * M
-
-    q_coeff = (factorial(D - 1) ** 2 / factorial(2 * D - 2)) * (2.0 * lam) ** (
-        2 * D - 1
-    )
-    s_bar = q_coeff / lam ** (2 * q)
-    g_bar = np.zeros((D, 1)).at[D - 1, 0].set(np.sqrt(s_bar))
-
-    D_lam = np.diag(lam ** np.arange(D, dtype=float))
-
-    return F_bar, g_bar, D_lam, gl_nodes, gl_weights
-
-
-def _matern_scalar_Q_sqr(
-    consts: tuple[Array, Array, Array, Array, Array], h: ArrayLike
-) -> Array:
-    """Upper-triangular square root ``R`` of the scalar Matern process noise
-    ``Q(h)`` (the ``[q+1, q+1]`` block, before the ``kron`` with ``Xi``):
-    ``R.T @ R == Q(h)``.
-
-    Square-root matrix-fraction decomposition: ``Q(h) = int_0^h e^{F u} S e^{F.T u} du``
-    with ``S`` rank one, so a square-root factor is the ``R`` of a QR of the
-    Gauss-Legendre-propagated diffusion columns ``sqrt(w_k) e^{F_bar u_k} g_bar``
-    (Bosch, Hennig & Tronarp 2023, used there for the IOUP prior). The dense,
-    severely ill-conditioned ``Q(h)`` is never formed or factorized, and the
-    matrix exponentials are evaluated in the well-scaled normalized coordinates of
-    ``_make_matern_sqr_noise``; the factor is mapped back with ``D_lam``. This
-    is jit/vmap/grad-safe (reduced-mode QR).
-    """
-    F_bar, g_bar, D_lam, gl_nodes, gl_weights = consts
-    R_bar = _sqr_noise_via_quadrature(F_bar, g_bar, gl_nodes, gl_weights, h)
-    return R_bar @ D_lam
-
-
-def _matern_scalar_A(
-    consts: tuple[Array, Array, Array, Array, Array], h: ArrayLike
-) -> Array:
-    """Scalar Matern transition ``A(h) = expm(F h)`` (the ``[q+1, q+1]`` block).
-
-    Evaluated as ``D_lam expm(lam M h) D_lam^-1`` in the length-scale-normalized
-    coordinates of ``_make_matern_sqr_noise``: the companion drift is
-    ``F = D_lam (lam M) D_lam^-1``, so the exponential is taken of a matrix whose
-    entries are ``O(lam h)`` instead of ``O(lam^(q+1) h)``. This stays finite at
-    short length scales, where the ``expm`` of the ``[[F, S], [0, -F.T]]``
-    Hamiltonian block (``S ~ lam^(2q+1)``) overflows to NaN.
-    """
-    F_bar, _, D_lam, _, _ = consts
-    D_inv = np.diag(1.0 / np.diag(D_lam))
-    return D_lam @ expm(F_bar * h) @ D_inv
+def _rate(length_scale: ArrayLike, q: int) -> Array:
+    return np.sqrt((2.0 * q + 1.0) / np.asarray(length_scale, dtype=float))
 
 
 class MaternPrior(BasePrior):
-    """Matern Gaussian process prior model using block matrix exponential.
+    """Matern Gauss-Markov prior: a stationary process with a length scale.
 
-    Note:
-        ``Q(h)`` is the dense block-matrix-exponential (matrix-fraction) noise,
-        which is severely ill-conditioned at high smoothness. The square-root
-        factor ``Q_sqr`` that the filter consumes is therefore *not* a
-        Cholesky of that dense ``Q``; it is built directly by a square-root
-        matrix-fraction decomposition in length-scale-normalized coordinates
-        (see ``_matern_scalar_Q_sqr``), which stays finite and accurate up to
-        the float64 order ceiling (roughly ``q ~ 18``). The number of quadrature
-        nodes is configurable via ``n_quad``. (``Q(h)`` itself still loses
-        positive-definiteness around ``q >= 6``; prefer ``Q_sqr`` downstream.)
+    Each of the ``d`` components is a Matern process of smoothness
+    ``nu = q + 1/2`` with unit marginal variance; ``Xi`` correlates them and sets
+    their scale, ``Q(h) = kron(Q_scalar(h), Xi)``. Unlike the IWP it reverts to
+    zero over the length scale. The square-root process noise is a square-root
+    matrix-fraction decomposition (Bosch, Hennig & Tronarp 2023), which stays
+    accurate up to the float64 order ceiling (``q ~ 18``).
+
+    Args:
+        q: Smoothness order (``nu = q + 1/2``).
+        d: Dimension of the solution.
+        length_scale: Length scale of the process.
+        Xi: Component-correlation matrix, shape ``[d, d]``; defaults to the
+            identity. Per-component calibration requires it diagonal.
+        n_quad: Gauss-Legendre nodes of the square-root decomposition (must
+            exceed ``q``; the default is robust to the order ceiling).
     """
+
+    q: int = eqx.field(static=True)
+    d: int = eqx.field(static=True)
+    xi: Array
+    length_scale: Array
+    n_quad: int = eqx.field(static=True)
 
     def __init__(
         self,
         q: int,
         d: int,
-        length_scale: float,
+        length_scale: ArrayLike,
         Xi: ArrayLike | None = None,
         *,
-        n_quad: int = _MATERN_QUAD_NODES,
+        n_quad: int = QUAD_NODES,
     ):
-        """Initialize the Matern prior.
+        check_order_and_dimension(q, d)
+        _gauss_legendre(n_quad, q)  # validates n_quad
+        self.q, self.d, self.n_quad = q, d, n_quad
+        self.xi = component_matrix(Xi, d)
+        self.length_scale = np.asarray(length_scale, dtype=float)
 
-        This creates a Matern process prior for a d-dimensional process whose
-        dimensions share the same smoothness ``q`` and length scale and are
-        coupled by the component-correlation matrix ``Xi``: the process noise is
-        ``kron(Q_scalar(h), Xi)``. ``Xi`` may be any positive-(semi)definite
-        matrix -- a diagonal ``Xi`` gives independent per-dimension output
-        scales, off-diagonal entries add cross-dimension correlation. (The
-        per-component ``"diagonal"`` calibration modes additionally require
-        ``Xi`` diagonal; that is checked at solve time.)
+    def _normalized(self) -> tuple[Array, Array, Array]:
+        """``(F_bar, g_bar, D_lam diagonal)`` of the normalized coordinates."""
+        M, c, _ = _matern_constants(self.q)
+        lam = _rate(self.length_scale, self.q)
+        g_bar = np.zeros((self.q + 1, 1)).at[self.q, 0].set(np.sqrt(c * lam))
+        return lam * np.asarray(M), g_bar, lam ** np.arange(self.q + 1, dtype=float)
 
-        Args:
-            q: Smoothness order.
-            d: State dimension.
-            length_scale: Length scale of the process.
-            Xi: Optional component-correlation matrix (shape [d, d]).
-            n_quad: Number of Gauss-Legendre nodes for the square-root
-                matrix-fraction decomposition used by ``Q_sqr`` (must exceed
-                ``q``; the default is robust to the float64 order ceiling).
-        """
-        super().__init__(q, d, Xi)
-        self._F, self._L, self._q = _matern_companion_form(length_scale, q)
-        self.S = self._q * self._L @ self._L.T  # Precompute S = L @ Q @ L.T
-        self.n = self._F.shape[0]
-        # Square-root process noise consumed by the filter: a stable square-root
-        # matrix-fraction decomposition (never the Cholesky of the dense, severely
-        # ill-conditioned Q(h)). See ``Q_sqr`` / ``_matern_scalar_Q_sqr``.
-        self._xi_sqr = _cholesky_upper(self.xi)
-        self._sqr_noise = _make_matern_sqr_noise(length_scale, q, n_quad)
+    def _scalar_A(self, h: ArrayLike) -> Array:
+        F_bar, _, scale = self._normalized()
+        return scale[:, None] * expm(F_bar * h) / scale[None, :]
 
-        # Defensive checks - _matern_companion_form always returns valid shapes
-        if self._F.shape != (self.n, self.n):  # pragma: no cover
-            raise ValueError(f"F must be square, got shape {self._F.shape}")
-        if self._L.shape[0] != self.n:  # pragma: no cover
-            raise ValueError(
-                f"L first dimension must match F: {self._L.shape[0]} != {self.n}"
-            )
-        if self.S.shape != (self.n, self.n):  # pragma: no cover
-            raise ValueError(
-                f"L @ Q @ L.T must be square with shape ({self.n}, {self.n}), "
-                f"got {self.S.shape}"
-            )
-
-    def A_and_Q(self, h: ArrayLike) -> tuple[Array, Array]:
-        """Scalar ``(A(h), Q(h))``: the ``[q+1, q+1]`` blocks before the ``kron``.
-
-        Both are in the original coordinates; they are *computed* via the
-        length-scale-normalized form for stability.
-
-        ``A(h) = D_lam expm(lam M h) D_lam^-1`` -- the companion drift is
-        ``F = D_lam (lam M) D_lam^-1`` with ``M`` the fixed binomial companion of
-        ``_make_matern_sqr_noise``, so the exponential is taken of a matrix
-        whose entries are ``O(lam h)`` instead of ``O(lam^(q+1) h)``.  ``Q(h)`` is
-        ``R.T @ R`` from the square-root matrix-fraction decomposition that
-        ``Q_sqr`` already uses.
-
-        Both used to come out of one ``expm`` of the ``[[F, S], [0, -F.T]]``
-        Hamiltonian block (matrix fraction decomposition).  That
-        block carries ``S ~ lam^(2q+1)``, and the scaling-and-squaring exponential
-        of it returns NaN once the length scale is short relative to the step --
-        measured: ``q = 2``, ``length_scale = 2.6e-3`` (``lam ~ 44``), ``h = 1e-2``,
-        i.e. ``lam h = 0.44`` -- which is exactly what a problem re-expressed on a
-        unit time interval looks like.  The normalized form is finite there and
-        agrees with the block form to ~1e-12 wherever the block form is finite.
-
-        Args:
-            h: Step size.
-
-        Returns:
-            Tuple ``(A_h, Q_h)`` of the scalar transition matrix and process-noise
-            covariance, each of shape ``[q+1, q+1]``.
-        """
-        h = self._validate_h(h)
-        A_h = self._A_scalar(h)
-        R = _matern_scalar_Q_sqr(self._sqr_noise, h)
-        return A_h, R.T @ R
-
-    def _A_scalar(self, h: ArrayLike) -> Array:
-        """``expm(F h)`` for the scalar companion drift, via the normalized form."""
-        return _matern_scalar_A(self._sqr_noise, h)
+    def _scalar_Q_sqr(self, h: ArrayLike) -> Array:
+        F_bar, g_bar, scale = self._normalized()
+        nodes, weights = _gauss_legendre(self.n_quad, self.q)
+        R_bar = _sqr_noise_via_quadrature(F_bar, g_bar, nodes, weights, h)
+        return R_bar * scale[None, :]
 
     def A(self, h: ArrayLike) -> Array:
-        """Return the state transition matrix for step size h.
-
-        Args:
-            h: Step size.
-
-        Returns:
-            State transition matrix (shape ``[(q+1)*d, (q+1)*d]``).
-        """
-        return np.kron(self._A_scalar(self._validate_h(h)), self._id)
-
-    def b(self, h: ArrayLike) -> Array:
-        """Return the drift vector for step size h.
-
-        Args:
-            h: Step size.
-
-        Returns:
-            Zero drift vector (shape ``[(q+1)*d]``).
-        """
-        # ``self._b`` is the Kron-lifted zero drift of length ``(q+1)*d`` set by
-        # ``BasePrior.__init__`` -- using it (rather than ``np.zeros(self.n)``,
-        # which has the un-lifted length ``q+1``) keeps ``b`` consistent with the
-        # ``(q+1)*d`` state for ``d > 1``.
-        return self._b
-
-    def Q(self, h: ArrayLike) -> Array:
-        """Return the diffusion matrix for step size h.
-
-        Args:
-            h: Step size.
-
-        Returns:
-            Diffusion matrix (shape ``[(q+1)*d, (q+1)*d]``).
-        """
-        _, Q_h = self.A_and_Q(h)
-        Q_h = 0.5 * (Q_h + Q_h.T)
-        return np.kron(Q_h, self.xi)
+        """Transition matrix ``kron(expm(F h), I_d)``."""
+        return np.kron(self._scalar_A(h), np.eye(self.d))
 
     def Q_sqr(self, h: ArrayLike) -> Array:
-        """Upper-triangular square root of ``Q(h)``: ``Q_sqr.T @ Q_sqr == Q(h)``.
+        """``kron(R(h), chol(Xi))`` with ``R`` the scalar noise factor."""
+        return np.kron(self._scalar_Q_sqr(h), _cholesky_upper(self.xi))
 
-        ``Q(h)_sqr = kron(R(h), chol(Xi))`` where ``R`` is the scalar Matern noise
-        factor from ``_matern_scalar_Q_sqr`` (a square-root matrix-fraction
-        decomposition in length-scale-normalized coordinates). Unlike the
-        dense-Cholesky default this never forms the severely ill-conditioned
-        ``Q(h)``, so it stays finite and accurate up to the float64 order ceiling
-        (``q ~ 18``) rather than NaN-ing around ``q >= 6``.
+    def stationary_cov_sqr(self) -> Array:
+        """Upper-triangular square root of the stationary covariance.
+
+        The covariance of ``[u, u', ..., u^(q)]`` under the stationary law, for
+        all ``d`` components: ``kron(P_scalar, Xi)``, whose top-left entry is
+        ``Xi`` (unit marginal variance per component). Computed in normalized
+        coordinates, where it does not depend on the length scale, so it is
+        finite at short length scales and differentiable in ``length_scale``
+        and ``Xi``.
         """
-        R = _matern_scalar_Q_sqr(self._sqr_noise, self._validate_h(h))
-        return np.kron(R, self._xi_sqr)
+        _, _, P_n_sqr = _matern_constants(self.q)
+        _, _, scale = self._normalized()
+        scalar = np.asarray(P_n_sqr) * scale[None, :]
+        return np.kron(scalar, _cholesky_upper(self.xi))
 
 
 class PrecondMaternPrior(MaternPrior):
     """``MaternPrior`` computed in step-size-preconditioned coordinates.
 
-    The same process as ``MaternPrior`` -- ``A(h)``, ``Q(h)`` and ``Q_sqr(h)``
-    are ``MaternPrior``'s -- but the filters compute each step in the
-    coordinates ``x_bar = T(h)^-1 x`` with the diagonal preconditioner of
+    The same process as ``MaternPrior`` -- ``A(h)``, ``Q(h)``, ``Q_sqr(h)`` and
+    the stationary law are ``MaternPrior``'s -- but the filters compute each step
+    in the coordinates ``x_bar = T(h)^-1 x`` with the diagonal preconditioner of
     ``PrecondIWP``. Unlike for the IWP, the preconditioned transition and noise
-    still depend on ``h`` (they tend to the IWP constants as ``h -> 0``). The
-    preconditioner removes the step-size scaling only; the length-scale and
-    order conditioning is handled by the square-root matrix-fraction
-    decomposition both priors share (see ``_matern_scalar_Q_sqr``).
+    still depend on ``h`` (they tend to the IWP constants as ``h -> 0``).
 
     Args:
-        q: Smoothness order (nu = q + 1/2).
-        d: State dimension.
-        length_scale: Length scale of the Matern process.
-        Xi: Optional component-correlation matrix (shape [d, d]).
-        n_quad: Number of Gauss-Legendre nodes for the square-root
-            matrix-fraction decomposition used by ``Q_sqr`` (must exceed
-            ``q``; the default is robust to the float64 order ceiling).
+        q: Smoothness order (``nu = q + 1/2``).
+        d: Dimension of the solution.
+        length_scale: Length scale of the process.
+        Xi: Component-correlation matrix, shape ``[d, d]``.
+        n_quad: Gauss-Legendre nodes of the square-root decomposition.
     """
 
-    def __init__(
-        self,
-        q: int,
-        d: int,
-        length_scale: float,
-        Xi: ArrayLike | None = None,
-        *,
-        n_quad: int = _MATERN_QUAD_NODES,
-    ):
-        super().__init__(q, d, length_scale, Xi, n_quad=n_quad)
-        _, _, self._T_scalar = _make_iwp_precond_state_matrices(q)
-
     def T(self, h: ArrayLike) -> Array:
-        """The diagonal preconditioner ``T(h)`` of ``PrecondIWP`` (``x = T x_bar``).
-
-        Args:
-            h: Step size.
-
-        Returns:
-            Preconditioning matrix, shape ``[(q+1)*d, (q+1)*d]``.
-        """
-        return np.kron(self._T_scalar(self._validate_h(h)), self._id)
+        """The diagonal preconditioner ``T(h)`` of ``PrecondIWP``, ``[D, D]``."""
+        return np.diag(np.repeat(_iwp_T_diag(self.q, h), self.d))
 
     def transition(self, h: ArrayLike) -> Transition:
         """``T^-1 A T`` and ``Q_sqr T^-T`` with the preconditioner ``T(h)``.
@@ -358,13 +167,12 @@ class PrecondMaternPrior(MaternPrior):
         Scaling the columns of the upper-triangular square-root factor by the
         diagonal ``T^-1`` keeps it upper triangular.
         """
-        h = self._validate_h(h)
-        t = np.diag(self._T_scalar(h))
-        A_bar = self._A_scalar(h) * t[None, :] / t[:, None]
-        R_bar = _matern_scalar_Q_sqr(self._sqr_noise, h) / t[None, :]
+        t = _iwp_T_diag(self.q, h)
+        A_bar = self._scalar_A(h) * t[None, :] / t[:, None]
+        R_bar = self._scalar_Q_sqr(h) / t[None, :]
         return Transition(
-            np.kron(A_bar, self._id),
-            self._b,
-            np.kron(R_bar, self._xi_sqr),
-            np.repeat(t, self._dim),
+            np.kron(A_bar, np.eye(self.d)),
+            self.b(h),
+            np.kron(R_bar, _cholesky_upper(self.xi)),
+            np.repeat(t, self.d),
         )
