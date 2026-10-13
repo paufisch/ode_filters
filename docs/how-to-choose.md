@@ -79,7 +79,7 @@ How the nonlinear vector field is linearized in the update — a pluggable
 | **Adaptive** | `gaussian_filter_adaptive` (jit/vmap/grad-able) | you want tolerance-based efficiency |
 
 Both paths are `jit`/`grad`/`vmap`-compatible (see [Sharp bits](sharp-bits.md)).
-See [Adaptive step-size control](adaptive-steps.md) for the controller.
+See [Adaptive step-size control](adaptive-steps.ipynb) for the controller.
 
 ## Calibration
 
@@ -107,4 +107,4 @@ What the filter conditions on — see the [measurement API](api/measurement/inde
 ## See also
 
 - [What is a probabilistic ODE solver?](probabilistic-ode-solvers.md)
-- [Linearization schemes](corrections.md) · [Diffusion calibration](calibration.md) · [Adaptive steps](adaptive-steps.md)
+- [Linearization schemes](corrections.md) · [Diffusion calibration](calibration.md) · [Adaptive steps](adaptive-steps.ipynb)

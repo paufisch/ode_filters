@@ -9,8 +9,9 @@ minor bump, non-breaking changes in a patch bump).
 
 Correctness fixes: several inputs that used to return silently wrong
 results now raise, `diagonal_ekf0` is fixed for second-order
-ODEs, and gradients stay finite at equilibria. No valid call changes its result
-except where noted below.
+ODEs, and gradients stay finite at equilibria. Measurement models validate their
+inputs up front, and the docs are fixed and reworked. No valid call changes its
+result except where noted below.
 
 ### Fixed
 
@@ -62,11 +63,52 @@ except where noted below.
   band ~1e4 times too wide; the logistic observation test compared against the
   analytic solution for the wrong initial value.
 
+- Input checks for configurations that used to fail silently or deep inside a
+  solve:
+  - `ODEInformation` and its siblings validate their selection matrices (one
+    column per state entry; `E1` / `E2` with as many rows as `E0`; a missing
+    `E2` names the `q >= 2` requirement). A sliced `E1` used to broadcast into
+    a wrong residual.
+  - Noise covariances (`Measurement(noise=...)`, the `R` setters,
+    `BlackBoxMeasurement(noise=...)`) are checked up front: noise-free
+    channels (zero rows and columns) are fine, but a singular covariance that
+    mixes channels, or an indefinite one, now raises `ValueError` instead of
+    producing NaN in the solve. A wrongly shaped `Measurement` noise raises too.
+  - `constraints=` rejects entries that are not `Conservation` (they used to be
+    dropped silently) and copies the list, so appending to it later no longer
+    changes the model. `Conservation` and `Measurement` accept array-likes such
+    as nested lists.
+  - `TransformedMeasurement` used a given `sigma_jacobian` only when
+    `use_autodiff_jacobian=False` was passed as well; it now uses it whenever it
+    is given (see Changed).
+- `JointPrior.xi` / `PrecondJointPrior.xi` raised `AttributeError`; they return
+  the block-diagonal `blkdiag(Xi_x, Xi_u)`.
+- `TransformedMeasurement` around a `BlackBoxMeasurement` now forwards `ode_dim`,
+  so it runs in the solvers.
+- Docs: `gaussian_filter` was missing from the API reference (the generator
+  resolved the name to the module of the same name), the calibration functions
+  had no API page, every cross-link inside the notebooks was broken on the site,
+  the measurement page's joint state-parameter example crashed, `sharp-bits`
+  claimed the solvers were already jitted, the README / home install command
+  installed no dev tools, and the preconditioned-coordinate fields of
+  `FilterResult` were undocumented (the post-hoc calibration recipe used them as
+  if they were in the original coordinates).
+- Tests: about 20 "scan vs Python loop" parity tests compared `gaussian_filter`
+  with the function it calls; they now compare plain against preconditioned
+  priors, and the stacked-residual test recomputes `sigma^2` independently.
+  The solver-validity accuracy tolerances were 5-9 orders of magnitude looser
+  than the measured errors.
+
 ### Added
 
 - `BlackBoxMeasurement(..., ode_dim=...)` and `BlackBoxMeasurement.ode_dim`: the
   number of leading rows of `g` that drive diffusion calibration (default: all
   rows, i.e. `g` is the ODE residual).
+
+- An API page for `ode_filters.calibration`.
+- CI checks every internal link of the built docs site
+  (`.github/scripts/check_site_links.py`); `mkdocs --strict` does not see links
+  inside notebooks.
 
 ### Changed
 
@@ -76,6 +118,36 @@ except where noted below.
   `None`. The `StepSizeController` protocol requires only `propose` (it no
   longer lists `safety`, `min_factor`, `max_factor` and the private `_alpha`).
   A custom controller passed to `gaussian_filter_adaptive` must be traceable.
+- `TransformedMeasurement(use_autodiff_jacobian=...)` defaults to `None`: autodiff
+  exactly when no `sigma_jacobian` is given. Passing `True` together with a
+  `sigma_jacobian` now raises instead of silently ignoring the Jacobian.
+- The docs build fails when a notebook cell raises (`allow_errors: false`); it
+  used to render the traceback into the page.
+- Docs layout: wider content column, link cards on the home page, API pages
+  grouped by topic with one entry per object, cross-references in docstrings
+  rendered as code instead of raw Sphinx roles, and notebook pages without the
+  `In [n]:` prompts. The tutorials compile with `equinox.filter_jit`, which
+  accepts every argument, instead of a `jax.jit` recipe that broke as soon as a
+  keyword argument was passed.
+- The "Calibration & adaptive steps" tutorial is now a "Calibration modes"
+  notebook (`docs/examples/calibration-modes.ipynb`) that explains what
+  calibration does: without it the band width is set by the arbitrary prior
+  scale; calibration matches the predicted size of the ODE residuals to the
+  observed one, which makes the band independent of that scale; and post-hoc,
+  `"dynamic"` and `"diagonal"` differ in whether the estimate is global, per step
+  or per component. Step-size control is covered by the adaptive-steps guide.
+- The adaptive step-size guide is a shorter, executed page
+  (`docs/adaptive-steps.ipynb`) with a figure of where the solver places its
+  steps on a pulse-forced problem; the internal driver's knobs, dense smoothing
+  and the per-step diffusion trace are no longer covered there.
+- All notebook figures use the `tueplots` `tue_ai_beamer` style with Paul Tol's
+  colorblind-safe "bright" palette (`tueplots` is added to the `docs` dependency
+  group) instead of `docs/examples/ode_filters.mplstyle`, which
+  is removed; titles moved into the text, one legend per figure, placed inside
+  the axes where there is room. Figures are rendered as SVG and scaled to the
+  content width, so they stay sharp.
+- The home page no longer calls the library "`solve_ivp`, but with a calibrated
+  uncertainty"; it says what the library does and explains the comparison.
 
 ## [0.7.3] - 2026-10-04
 

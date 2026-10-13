@@ -103,11 +103,14 @@ on merge to `main`, gated on green CI. The manual surface is just the release PR
 ## Documentation
 
 Docs are built with MkDocs; example notebooks in `docs/examples/` are executed
-during the build, so they must run end-to-end.
+during the build, and a cell that raises fails it, so they must run end-to-end.
+Inside notebooks, link to other pages by their site URL (`../../calibration/`),
+not by the `.md` file: mkdocs-jupyter copies notebook links verbatim.
 
 ```bash
 uv run --group docs mkdocs serve         # live preview at http://localhost:8000
-uv run --group docs mkdocs build --strict  # what CI checks
+uv run --group docs mkdocs build --strict  # what CI checks, plus the link check:
+uv run python .github/scripts/check_site_links.py site /ode_filters/
 ```
 
 When you change the public API, verify the notebooks still execute:

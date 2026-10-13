@@ -13,4 +13,28 @@ maximizing the marginal log-likelihood of external observations under the
 ODE-constrained Gauss-Markov model. (`fit` minimizes the negative log-likelihood
 via a caller-supplied Optax optimizer.)
 
-::: ode_filters.inference
+## Parameter inference
+
+::: ode_filters.inference.model.ODEFilter
+
+::: ode_filters.inference.model.fit
+
+::: ode_filters.inference.parameter_inference.marginal_loglik
+
+::: ode_filters.inference.parameter_inference.InferenceProblem
+
+## Parameters
+
+::: ode_filters.inference.parameters.Real
+
+::: ode_filters.inference.parameters.PositiveReal
+
+::: ode_filters.inference.parameters.AbstractParameter
+
+::: ode_filters.inference.parameters.unwrap
+
+## Square-root Gaussian algebra
+
+::: ode_filters.inference.sqr_gaussian_inference.sqr_marginalization
+
+::: ode_filters.inference.sqr_gaussian_inference.sqr_inversion

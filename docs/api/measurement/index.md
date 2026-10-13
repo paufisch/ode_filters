@@ -4,7 +4,7 @@ The measurement module provides classes for defining ODE constraints and observa
 models used in probabilistic ODE solvers. The design separates concerns cleanly:
 
 - **ODE classes** define the dynamical system constraint
-- **Constraint dataclasses** define additional constraints (conservation laws, measurements)
+- **Constraint and data classes** add conservation laws (`Conservation`) and noisy observations (`Measurement`, via an `obs_model`)
 - **Black-box models** allow arbitrary user-defined measurement functions
 - **Transformed models** apply nonlinear state transformations with proper Jacobians
 
@@ -86,37 +86,55 @@ For estimating unknown parameters alongside the state, use `JointPrior` with
 the hidden state classes:
 
 ```python
+import jax
+import jax.numpy as np
+
 from ode_filters import gaussian_filter, prepare_observations
+from ode_filters.measurement import Measurement, SecondOrderODEInformationWithHidden
 from ode_filters.priors import IWP, JointPrior
-from ode_filters.measurement import SecondOrderODEInformationWithHidden, Measurement
 
-# Prior for state x and unknown damping parameter u
-prior_x = IWP(q=2, d=1)
-prior_u = IWP(q=2, d=1)
-prior_joint = JointPrior(prior_x, prior_u)
+jax.config.update("jax_enable_x64", True)
 
-# Damped oscillator with unknown damping
-def vf(x, v, u, *, t):
-    omega = 1.0
-    return -(omega**2) * x - u * v
+# Prior for the state x (q >= 2, so E2 exists) and the unknown damping u, a
+# slowly drifting constant (a random walk with a small diffusion)
+prior_joint = JointPrior(IWP(q=3, d=1), IWP(q=0, d=1, Xi=1e-4 * np.eye(1)))
+
+
+def vf(x, v, u, *, t):  # damped oscillator x'' = -x - u x'
+    return -x - u * v
+
 
 model = SecondOrderODEInformationWithHidden(
     vf,
-    E0=prior_joint.E0_x,        # extracts x
-    E1=prior_joint.E1,          # extracts dx/dt
-    E2=prior_joint.E2,          # extracts d^2x/dt^2
+    E0=prior_joint.E0_x,  # extracts x
+    E1=prior_joint.E1,  # extracts dx/dt
+    E2=prior_joint.E2,  # extracts d^2x/dt^2
     E0_hidden=prior_joint.E0_hidden,  # extracts u
 )
 
-# Data observations go through obs_model, not the measure constraints.
-# Observe position x only; align observation times to the filter grid `ts`.
-A_obs = prior_joint.E0_x[:1, :]  # observe x only
-meas = Measurement(A=A_obs, z=observations, z_t=obs_times, noise=0.01)
+# Synthetic position data from the true damping u = 0.3
+tspan, N = (0.0, 10.0), 200
+ts = np.linspace(*tspan, N + 1)
+gamma = 0.15
+omega_d = np.sqrt(1.0 - gamma**2)
+obs_times = ts[10::10]
+x_true = np.exp(-gamma * obs_times) * (
+    np.cos(omega_d * obs_times) + gamma / omega_d * np.sin(omega_d * obs_times)
+)
+
+# Data go through obs_model, not the measure. Measurement.A acts on E0_x @ state
+# (the position x), so it is [n_obs, d_x]; observation times lie on the grid.
+meas = Measurement(A=np.eye(1), z=x_true[:, None], z_t=obs_times, noise=1e-4)
 obs_model = prepare_observations([meas], prior_joint.E0_x, ts)
+
+# State layout [x, x', x'', x''', u]: start at rest at x = 1, u unknown
+mu_0 = np.array([1.0, 0.0, -1.0, 0.0, 0.0])
+P_0_sqr = np.diag(np.array([0.0, 0.0, 0.0, 1.0, 1.0]))
 
 result = gaussian_filter(
     mu_0, P_0_sqr, prior_joint, model, tspan, N, obs_model=obs_model
 )
+u_hat = prior_joint.E0_hidden @ result.m[-1]  # estimated damping: ~0.297
 ```
 
 ### Adding Conservation Laws
@@ -217,8 +235,32 @@ model = TransformedMeasurement(
 )
 ```
 
----
+## ODE information
 
-## API Reference
+::: ode_filters.measurement.measurement_models.ODEInformation
 
-::: ode_filters.measurement
+::: ode_filters.measurement.measurement_models.ODEInformationWithHidden
+
+::: ode_filters.measurement.measurement_models.SecondOrderODEInformation
+
+::: ode_filters.measurement.measurement_models.SecondOrderODEInformationWithHidden
+
+## Constraints and observations
+
+::: ode_filters.measurement.measurement_models.Conservation
+
+::: ode_filters.measurement.measurement_models.Measurement
+
+::: ode_filters.measurement.measurement_models.prepare_observations
+
+::: ode_filters.measurement.measurement_models.ObsModel
+
+::: ode_filters.measurement.measurement_models.ODEconservation
+
+::: ode_filters.measurement.measurement_models.SecondOrderODEconservation
+
+## Custom measurement models
+
+::: ode_filters.measurement.measurement_models.BlackBoxMeasurement
+
+::: ode_filters.measurement.measurement_models.TransformedMeasurement

@@ -34,7 +34,7 @@ Coarse grids / loose tolerances where a solver diverges are dropped (the converg
 branch is what a work-precision diagram shows). Calibration quality (whether the
 posterior uncertainty is honest) is an *internal* ode_filters concern rather than a
 cross-library comparison, so it lives in the docs --
-``docs/examples/adaptive-and-calibration.ipynb`` and ``docs/calibration.md`` -- not
+``docs/examples/calibration-modes.ipynb`` and ``docs/calibration.md`` -- not
 here.
 
 Run with: ``uv run --extra benchmarks python benchmarks/work_precision.py``

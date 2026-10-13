@@ -1,0 +1,44 @@
+/* Site-wide tweaks on top of the Material theme. */
+
+/* Wider content column. The default 61rem leaves ~620px for text between the
+   two sidebars, so code blocks scroll and table columns squeeze. */
+.md-grid {
+  max-width: 1440px;
+}
+
+/* Identifiers in table cells: keep them on one line instead of breaking
+   mid-word (Material's default `word-break: break-word` on code). */
+.md-typeset td code,
+.md-typeset th code {
+  white-space: nowrap;
+  word-break: normal;
+}
+
+/* Notebook pages: drop the "In [n]:" / "Out [n]:" prompts so code cells line
+   up with the prose like on every other page. */
+.jp-InputPrompt,
+.jp-OutputPrompt {
+  display: none !important;
+}
+
+/* API reference: a little air between consecutive objects. */
+.md-typeset .doc-object + .doc-object {
+  margin-top: 2.5rem;
+}
+
+/* Home page cards: equal height, link pinned to the bottom. */
+.md-typeset .grid.cards > ul > li {
+  display: flex;
+  flex-direction: column;
+}
+
+.md-typeset .grid.cards > ul > li > :last-child {
+  margin-top: auto;
+}
+
+/* Notebook figures are SVG (vector): let them fill the content width; they stay
+   sharp at any size. */
+.jp-RenderedSVG img {
+  width: 100%;
+  height: auto;
+}
