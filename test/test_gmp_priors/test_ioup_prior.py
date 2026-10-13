@@ -138,3 +138,14 @@ class TestIOUPSolve:
         assert np.all(np.isfinite(out.m))
         assert np.isfinite(out.log_likelihood)
         assert err < 1e-5
+
+
+@pytest.mark.parametrize("rate", [-1.0, np.array([[-1.0, 0.2], [0.0, -2.0]])])
+def test_ioup_rejects_too_few_quadrature_nodes(rate):
+    """n_quad <= q gives a factor with too few rows (it used to return a
+    (n_quad * d, (q+1) * d) Q_sqr silently); MaternPrior already rejected it."""
+    d = 1 if np.ndim(rate) == 0 else 2
+    with pytest.raises(ValueError, match="n_quad must exceed q"):
+        IOUPPrior(q=3, d=d, rate=rate, n_quad=3)
+    prior = IOUPPrior(q=3, d=d, rate=rate, n_quad=4)
+    assert prior.Q_sqr(0.1).shape == (4 * d, 4 * d)

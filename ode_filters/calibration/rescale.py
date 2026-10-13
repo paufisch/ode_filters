@@ -14,14 +14,19 @@ the result is identical to the plain path there).
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import jax
 import jax.numpy as np
 from jax import Array
 from jax.typing import ArrayLike
 
+from ..priors.gmp_priors import _safe_sqrt
 
+
+# runtime_checkable so the opt-in jaxtyping/beartype hook
+# (ODE_FILTERS_TYPECHECK=1) can check ``prior=`` annotations against it.
+@runtime_checkable
 class _StateRescalable(Protocol):
     """A prior exposing the block-aware post-hoc rescaling hook."""
 
@@ -54,7 +59,7 @@ def rescale_sqr(
     """
     if prior is not None:
         return prior.apply_state_sigma_to_cov_sqr(P_sqr, sigma_sqr)
-    return np.sqrt(np.asarray(sigma_sqr)) * P_sqr
+    return _safe_sqrt(sigma_sqr) * P_sqr
 
 
 def rescale_sqr_seq(
@@ -87,7 +92,7 @@ def rescale_sqr_seq(
             f"sigma_sqr must be scalar or shape ({P_arr.shape[0]},); got {s.shape}"
         )
 
-    factor = np.sqrt(s)
+    factor = _safe_sqrt(s)
     if factor.ndim == 0:
         return factor * P_arr
     if factor.ndim == 1 and factor.shape[0] == P_arr.shape[0]:

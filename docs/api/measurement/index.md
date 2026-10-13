@@ -158,6 +158,11 @@ H, c = model.linearize(state, t=0.0)
 R = model.get_noise(t=0.0)
 ```
 
+As the `measure` of a solver, `g` plays the role of the ODE residual: the filter
+conditions on `g(state) = 0`, and all rows drive the diffusion calibration. If
+`g` stacks further rows after the ODE residual (e.g. conservation constraints),
+pass `ode_dim=` to say how many leading rows are ODE defect.
+
 ### Transformed Measurement Models
 
 `TransformedMeasurement` wraps any existing measurement model with a nonlinear state transformation `sigma(state)`. The Jacobian of the mean is composed correctly via the chain rule: `J_total = J_g(sigma(state)) @ J_sigma(state)`. Note, however, that only the mean/linearization is transformed: the measurement-noise covariance `R` is delegated to and taken unchanged from the base model (see `get_noise`), and is *not* propagated through `sigma`. `R` must therefore already be expressed in the base model's post-transform coordinates.

@@ -4,6 +4,12 @@ import jax
 import jax.numpy as np
 import pytest
 
+from ode_filters import (
+    IWP,
+    gaussian_filter,
+    gaussian_filter_adaptive,
+    taylor_mode_initialization,
+)
 from ode_filters.measurement.measurement_models import (
     BlackBoxMeasurement,
     Conservation,
@@ -662,3 +668,48 @@ class TestMeasurementEdgeCases:
 
         with pytest.raises(ValueError, match="must match state dimension"):
             ODEInformation(vf, E0, E1, constraints=[conservation])
+
+
+class TestBlackBoxMeasurementInSolvers:
+    """BlackBoxMeasurement used to raise AttributeError ('ode_dim') in every
+    solver, although the docs present it as a drop-in measurement model."""
+
+    def test_ode_dim_defaults_to_obs_dim_and_validates(self):
+        model = BlackBoxMeasurement(lambda s, *, t: s[:2], state_dim=4, obs_dim=2)
+        assert model.ode_dim == 2
+        partial = BlackBoxMeasurement(
+            lambda s, *, t: s[:2], state_dim=4, obs_dim=2, ode_dim=1
+        )
+        assert partial.ode_dim == 1
+        for bad in (0, 3, 1.0):
+            with pytest.raises(ValueError, match="'ode_dim' must be"):
+                BlackBoxMeasurement(
+                    lambda s, *, t: s[:2], state_dim=4, obs_dim=2, ode_dim=bad
+                )
+
+    @pytest.mark.parametrize("adaptive", [False, True], ids=["fixed", "adaptive"])
+    def test_residual_black_box_matches_ode_information(self, adaptive):
+        """A black box returning the ODE residual E1 Y - f(E0 Y) is exactly
+        the ODEInformation model, so both must give the same solution."""
+
+        def vf(x, *, t):
+            return -x
+
+        prior = IWP(q=2, d=1)
+        black_box = BlackBoxMeasurement(
+            lambda s, *, t: prior.E1 @ s - vf(prior.E0 @ s, t=t),
+            state_dim=3,
+            obs_dim=1,
+        )
+        reference = ODEInformation(vf, prior.E0, prior.E1)
+        mu_0, P0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
+        save_at = np.linspace(0.0, 2.0, 5)
+
+        def run(measure):
+            if adaptive:
+                return gaussian_filter_adaptive(mu_0, P0_sqr, prior, measure, save_at)
+            return gaussian_filter(mu_0, P0_sqr, prior, measure, (0.0, 2.0), N=20)
+
+        got, want = run(black_box), run(reference)
+        assert np.allclose(got.m, want.m, atol=1e-12)
+        assert np.allclose(got.log_likelihood, want.log_likelihood, atol=1e-10)

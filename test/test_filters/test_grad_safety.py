@@ -338,3 +338,34 @@ def test_grad_adaptive_smoother():
         return np.sum(m_s[:, 0])
 
     _assert_grad_matches_fd(f)
+
+
+@pytest.mark.parametrize(
+    "calibration", ["dynamic", "none", "diagonal", "diagonal_ekf0"]
+)
+@pytest.mark.parametrize("adaptive", [False, True], ids=["fixed", "adaptive"])
+def test_grad_is_zero_not_nan_at_an_equilibrium(calibration, adaptive):
+    """x' = theta (1 - x) started at x0 = 1 sits at its equilibrium for every
+    theta, so d x(t) / d theta = 0. Every residual -- hence every sigma estimate
+    and the adaptive local error -- is exactly zero there, and sqrt'(0) = inf
+    used to turn the backward pass into 0 * inf = NaN."""
+
+    def final_state(theta):
+        def vf(x, *, t):
+            return theta * (1.0 - x)
+
+        prior = IWP(q=2, d=1)
+        mu_0, P0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
+        measure = ODEInformation(vf, prior.E0, prior.E1)
+        if adaptive:
+            res = gaussian_filter_adaptive(
+                mu_0, P0_sqr, prior, measure, SAVE, calibration=calibration
+            )
+        else:
+            res = gaussian_filter(
+                mu_0, P0_sqr, prior, measure, TSPAN, N, calibration=calibration
+            )
+        return res.m[-1, 0]
+
+    assert final_state(THETA) == 1.0
+    assert jax.grad(final_state)(THETA) == 0.0

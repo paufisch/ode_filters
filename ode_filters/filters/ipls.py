@@ -49,8 +49,12 @@ from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalizatio
 from ..measurement.measurement_models import BaseODEInformation, ObsModel
 from ..priors.gmp_priors import BasePrior
 from .correction import QuadratureCorrection
-from .gaussian_filter import _is_preconditioned, gaussian_filter, rts_smoother
-from .ode_filter_loop import _log_likelihood_contrib, rts_sqr_smoother_loop
+from .gaussian_filter import gaussian_filter, rts_smoother
+from .ode_filter_loop import (
+    _is_preconditioned,
+    _log_likelihood_contrib,
+    rts_sqr_smoother_loop,
+)
 from .statistical_linearization import QuadratureRule, slr_linearize
 
 

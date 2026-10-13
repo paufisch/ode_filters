@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as np
 import pytest
 
-from ode_filters.calibration.rescale import rescale_sqr, rescale_sqr_seq
+from ode_filters.calibration.rescale import (
+    _StateRescalable,
+    rescale_sqr,
+    rescale_sqr_seq,
+)
 from ode_filters.priors.gmp_priors import IWP, JointPrior
 
 
@@ -100,3 +105,23 @@ def test_joint_rescale_seq_per_step():
     assert np.allclose(out[0, :, D_x:], P_seq[0, :, D_x:])
     assert np.allclose(out[1, :, :D_x], 3.0 * P_seq[1, :, :D_x])
     assert np.allclose(out[1, :, D_x:], P_seq[1, :, D_x:])
+
+
+def test_state_rescalable_protocol_is_runtime_checkable():
+    """The opt-in jaxtyping/beartype hook (ODE_FILTERS_TYPECHECK=1) checks the
+    ``prior=`` annotation with isinstance, which needs @runtime_checkable."""
+    assert isinstance(IWP(q=1, d=1), _StateRescalable)
+    assert isinstance(JointPrior(IWP(q=1, d=1), IWP(q=1, d=1)), _StateRescalable)
+    assert not isinstance(object(), _StateRescalable)
+
+
+def test_rescale_by_zero_has_a_finite_gradient():
+    """sqrt'(0) is infinite; sigma_sqr = 0 must not give a NaN gradient."""
+    P_sqr = np.asarray([[1.0, 0.5], [0.0, 2.0]])
+    for f in (
+        lambda s: np.sum(rescale_sqr(P_sqr, s)),
+        lambda s: np.sum(rescale_sqr(P_sqr, s, prior=IWP(q=0, d=2))),
+        lambda s: np.sum(rescale_sqr_seq(P_sqr[None], s)),
+    ):
+        assert f(0.0) == 0.0
+        assert np.isfinite(jax.grad(f)(0.0))

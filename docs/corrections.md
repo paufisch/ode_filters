@@ -73,7 +73,9 @@ differ for nonlinear dynamics, with EK1 generally more accurate per step.
 `calibration` argument) has its own linearization choice, because the ODE-defect
 residual that drives `sigma^2` is identical for EK0 and EK1 -- only the
 denominator's Jacobian differs. To pair an EK0 update with an EK0-style
-(`E1`-based) sigma estimate, use `calibration="diagonal_ekf0"`. See
+sigma estimate (built from the measurement's `E_constraint`: `E1` for a
+first-order ODE, `E2` for a second-order one), use
+`calibration="diagonal_ekf0"`. See
 [Diffusion Calibration](calibration.md).
 
 ## Statistical linearization

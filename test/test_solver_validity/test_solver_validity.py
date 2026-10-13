@@ -20,9 +20,10 @@ def _solve_standard(vf, x0, *, tspan, N, q=3, Xi_scale=0.5):
     Returns:
         ts: Time grid, shape [N+1].
         m_filter: Filtered solution (E0 @ state), shape [N+1, d].
-        P_filter_sqr: Filtered covariance (E0 @ state), shape [N+1, d, d].
+        P_filter_sqr: Square-root factor F of the filtered marginal covariance
+            of E0 @ state (cov = F.T @ F), shape [N+1, D, d].
         m_smooth: Smoothed solution (E0 @ state), shape [N+1, d].
-        P_smooth_sqr: Smoothed covariance (E0 @ state), shape [N+1, d, d].
+        P_smooth_sqr: Same as P_filter_sqr for the smoothed marginal.
     """
     d = x0.shape[0]
     prior = IWP(q=q, d=d, Xi=Xi_scale * np.eye(d))
@@ -43,8 +44,10 @@ def _solve_standard(vf, x0, *, tspan, N, q=3, Xi_scale=0.5):
     m_filter = np.einsum("ij,nj->ni", E0, m_seq)
     m_smooth_x = np.einsum("ij,nj->ni", E0, m_smooth)
 
-    P_filter_sqr = np.einsum("ij,njk->nik", E0, P_seq_sqr_arr)
-    P_smooth_sqr_x = np.einsum("ij,njk->nik", E0, P_smooth_sqr)
+    # P = P_sqr.T @ P_sqr, so E0 P E0.T = (P_sqr @ E0.T).T @ (P_sqr @ E0.T):
+    # the marginal factor is P_sqr @ E0.T (right-multiplied), not E0 @ P_sqr.
+    P_filter_sqr = P_seq_sqr_arr @ E0.T
+    P_smooth_sqr_x = P_smooth_sqr @ E0.T
 
     return ts, m_filter, P_filter_sqr, m_smooth_x, P_smooth_sqr_x
 
@@ -73,8 +76,10 @@ def _solve_preconditioned(vf, x0, *, tspan, N, q=3, Xi_scale=0.5):
     m_filter = np.einsum("ij,nj->ni", E0, m_seq)
     m_smooth_x = np.einsum("ij,nj->ni", E0, m_smooth)
 
-    P_filter_sqr = np.einsum("ij,njk->nik", E0, P_seq_sqr_arr)
-    P_smooth_sqr_x = np.einsum("ij,njk->nik", E0, P_smooth_sqr)
+    # P = P_sqr.T @ P_sqr, so E0 P E0.T = (P_sqr @ E0.T).T @ (P_sqr @ E0.T):
+    # the marginal factor is P_sqr @ E0.T (right-multiplied), not E0 @ P_sqr.
+    P_filter_sqr = P_seq_sqr_arr @ E0.T
+    P_smooth_sqr_x = P_smooth_sqr @ E0.T
 
     return ts, m_filter, P_filter_sqr, m_smooth_x, P_smooth_sqr_x
 
@@ -368,10 +373,9 @@ class TestProbabilisticProperties:
         )
         y_exact = np.exp(-ts)[:, None]
 
-        # Posterior std: diag of P_sqr.T @ P_sqr for each time step
-        # P_smooth_sqr has shape [N+1, d, d_state] after E0 projection
-        # Variance = sum of squares of the sqr-form column
-        std = np.sqrt(np.sum(P_smooth_sqr**2, axis=-1))  # [N+1, d]
+        # Posterior std: the marginal covariance is F.T @ F with the factor F of
+        # shape [N+1, D, d], so each variance is a column's sum of squares.
+        std = np.sqrt(np.sum(P_smooth_sqr**2, axis=-2))  # [N+1, d]
 
         residual = np.abs(m_smooth - y_exact)
         within_3sigma = residual < 3.0 * std

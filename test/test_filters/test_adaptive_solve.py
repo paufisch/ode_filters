@@ -6,13 +6,26 @@ import pytest
 
 from ode_filters import (
     IWP,
+    JointPrior,
     ODEInformation,
+    PIController,
+    PrecondIWP,
+    PrecondJointPrior,
+    PrecondMaternPrior,
+    StepSizeController,
+    gaussian_filter_adaptive,
     prepare_observations,
     taylor_mode_initialization,
 )
-from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_solve
+from ode_filters.filters.ode_filter_adaptive import (
+    sqr_adaptive_loop,
+    sqr_adaptive_solve,
+)
 from ode_filters.filters.ode_filter_loop import sqr_loop_dynamic_scan
-from ode_filters.measurement.measurement_models import Measurement
+from ode_filters.measurement.measurement_models import (
+    Measurement,
+    ODEInformationWithHidden,
+)
 
 SAVE_AT = np.linspace(0.0, 2.0, 5)
 
@@ -429,3 +442,101 @@ def test_smoother_with_obs_raises():
         gaussian_filter_adaptive(
             mu_0, S0_sqr, prior, measure, SAVE_AT, obs_model=obs, smoother=True
         )
+
+
+# --------------------------------------------------------------------------- #
+# Entry-point validation: the adaptive solvers accept exactly what the
+# fixed-grid gaussian_filter accepts.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "prior",
+    [
+        PrecondIWP(q=2, d=1),
+        PrecondMaternPrior(q=2, d=1, length_scale=1.0),
+        PrecondJointPrior(PrecondIWP(q=2, d=1), PrecondIWP(q=1, d=1)),
+    ],
+    ids=["PrecondIWP", "PrecondMaternPrior", "PrecondJointPrior"],
+)
+def test_adaptive_solvers_reject_preconditioned_priors(prior):
+    """The adaptive step body uses A(h)/Q_sqr(h) as plain-space matrices; a
+    preconditioned prior used to run silently, returning success=False and a
+    wrong state instead of raising."""
+    D = prior.E0.shape[1]
+    measure = ODEInformation(lambda x, *, t: -x, prior.E0[:1], prior.E1)
+    mu_0, S0_sqr = np.zeros(D), np.zeros((D, D))
+    with pytest.raises(NotImplementedError, match="preconditioned priors"):
+        gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    with pytest.raises(NotImplementedError, match="preconditioned priors"):
+        sqr_adaptive_loop(mu_0, S0_sqr, prior, measure, (0.0, 2.0))
+
+
+def test_adaptive_solve_rejects_unknown_calibration():
+    """A misspelled mode used to fall through to "none" on the adaptive path."""
+    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    with pytest.raises(ValueError, match="calibration must be one of"):
+        gaussian_filter_adaptive(
+            mu_0, S0_sqr, prior, measure, SAVE_AT, calibration="diagnoal"
+        )
+
+
+@pytest.mark.parametrize("calibration", ["diagonal", "diagonal_ekf0"])
+def test_adaptive_solve_rejects_non_diagonal_xi_in_diagonal_modes(calibration):
+    prior = IWP(q=2, d=2, Xi=np.array([[1.0, 0.5], [0.5, 1.0]]))
+    measure = ODEInformation(lambda x, *, t: -x, prior.E0, prior.E1)
+    with pytest.raises(ValueError, match="requires the state-block"):
+        gaussian_filter_adaptive(
+            np.ones(6),
+            np.zeros((6, 6)),
+            prior,
+            measure,
+            SAVE_AT,
+            calibration=calibration,
+        )
+
+
+class _HalvingController:
+    """Duck-typed controller: only ``propose``, never grows the step."""
+
+    def propose(self, h, err, err_prev):
+        return 0.5 * h
+
+
+def test_adaptive_solve_calls_the_controllers_propose():
+    """gaussian_filter_adaptive used to read private PI coefficients and run its
+    own copy of the PI law, so a custom ``propose`` was silently ignored."""
+    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    controller = _HalvingController()
+    assert isinstance(controller, StepSizeController)
+    default = gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    halving = gaussian_filter_adaptive(
+        mu_0, S0_sqr, prior, measure, SAVE_AT, controller=controller, max_steps=32
+    )
+    assert bool(default.success)
+    # Halving every step cannot reach the first save time in 32 steps.
+    assert not bool(halving.success)
+
+
+def test_adaptive_solve_with_explicit_default_controller_is_unchanged():
+    """Passing the default controller explicitly gives the default result."""
+    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    default = gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    explicit = gaussian_filter_adaptive(
+        mu_0, S0_sqr, prior, measure, SAVE_AT, controller=PIController(order=2)
+    )
+    assert np.array_equal(default.m, explicit.m)
+
+
+def test_adaptive_solve_runs_joint_prior():
+    """Plain joint priors are still supported on the adaptive path."""
+    joint = JointPrior(IWP(q=2, d=1), IWP(q=1, d=1))
+
+    def vf(x, u, *, t):
+        return -x
+
+    measure = ODEInformationWithHidden(vf, joint.E0_x, joint.E1, joint.E0_hidden)
+    mu_0 = np.array([1.0, -1.0, 1.0, 0.0, 0.0])
+    res = gaussian_filter_adaptive(mu_0, np.zeros((5, 5)), joint, measure, SAVE_AT)
+    assert bool(res.success)
+    assert np.allclose(res.m[:, 0], np.exp(-SAVE_AT), atol=1e-3)

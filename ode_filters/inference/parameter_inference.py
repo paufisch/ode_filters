@@ -41,7 +41,7 @@ from ..measurement.measurement_models import BaseODEInformation, ObsModel
 from .parameters import unwrap
 
 if TYPE_CHECKING:
-    from ..filters.ode_filter_adaptive import CalibrationMode
+    from ..filters.ode_filter_loop import CalibrationMode
 
 
 class InferenceProblem(NamedTuple):

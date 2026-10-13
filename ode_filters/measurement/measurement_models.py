@@ -782,6 +782,11 @@ class BlackBoxMeasurement:
         obs_dim: Dimension of the observation vector.
         noise: Measurement noise (scalar, 1D diagonal, or 2D covariance matrix).
             Default is 0.0 (no noise).
+        ode_dim: Number of leading rows of ``g`` that are ODE-defect residuals.
+            The solvers condition on every row (``g(state) = 0``) but estimate
+            the diffusion ``sigma^2`` only from these rows. Defaults to
+            ``obs_dim``, i.e. ``g`` is the ODE residual itself; pass a smaller
+            value when ``g`` stacks further (e.g. conservation) rows after it.
 
     Example:
         >>> def custom_g(state, *, t):
@@ -796,6 +801,8 @@ class BlackBoxMeasurement:
         state_dim: int,
         obs_dim: int,
         noise: float | ArrayLike = 0.0,
+        *,
+        ode_dim: int | None = None,
     ):
         if not callable(g_func):
             raise TypeError("'g_func' must be callable.")
@@ -803,10 +810,18 @@ class BlackBoxMeasurement:
             raise ValueError("'state_dim' must be a positive integer.")
         if not isinstance(obs_dim, int) or obs_dim <= 0:
             raise ValueError("'obs_dim' must be a positive integer.")
+        if ode_dim is None:
+            ode_dim = obs_dim
+        if not isinstance(ode_dim, int) or not 0 < ode_dim <= obs_dim:
+            raise ValueError(
+                f"'ode_dim' must be an integer in [1, obs_dim={obs_dim}]; "
+                f"got {ode_dim!r}."
+            )
 
         self._g_func = g_func
         self._state_dim = state_dim
         self._obs_dim = obs_dim
+        self._ode_dim = ode_dim
         self._jacobian_g_func = jax.jacrev(lambda s, t: g_func(s, t=t))
 
         # Initialize noise matrix
@@ -828,6 +843,15 @@ class BlackBoxMeasurement:
             self._R = noise_arr
         else:
             raise ValueError("'noise' must be scalar, 1D, or 2D array.")
+
+    @property
+    def ode_dim(self) -> int:
+        """Number of leading rows of ``g`` that drive diffusion calibration.
+
+        The filter loops slice ``H[:ode_dim]`` / ``mz[:ode_dim]`` for the
+        ``sigma^2`` estimate (see the ``ode_dim`` constructor argument).
+        """
+        return self._ode_dim
 
     @property
     def R(self) -> Array:

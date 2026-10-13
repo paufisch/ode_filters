@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 import jax
 import jax.numpy as np
@@ -14,7 +14,12 @@ from ..measurement.measurement_models import (
     BaseODEInformation,
     ObsModel,
 )
-from ..priors.gmp_priors import BasePrior
+from ..priors.gmp_priors import (
+    BasePrior,
+    PrecondIWP,
+    PrecondJointPrior,
+    PrecondMaternPrior,
+)
 from .correction import Correction, TaylorCorrection
 from .ode_filter_step import (
     rts_sqr_smoother_step,
@@ -26,6 +31,10 @@ from .ode_filter_step import (
 
 StateFunction = Callable[[Array], Array]
 JacobianFunction = Callable[[Array], Array]
+
+CalibrationMode = Literal["dynamic", "diagonal", "diagonal_ekf0", "none"]
+_CALIBRATION_MODES = ("dynamic", "diagonal", "diagonal_ekf0", "none")
+_DIAGONAL_MODES = ("diagonal", "diagonal_ekf0")
 
 
 class _PrecondPrior(Protocol):
@@ -61,9 +70,34 @@ def _check_state_xi_diagonal(prior: BasePrior, calibration: str) -> None:
     if not onp.allclose(xi_h - onp.diag(onp.diag(xi_h)), 0.0):
         raise ValueError(
             f"calibration={calibration!r} requires the state-block "
-            "Xi to be diagonal (joint priors: this is "
-            "``prior._prior_x.xi``)."
+            "Xi to be diagonal (``prior.xi_state``; for joint priors this is "
+            "the state prior's Xi)."
         )
+
+
+def _validate_calibration(calibration: str, prior: BasePrior) -> None:
+    """Check ``calibration`` once, at a solver's entry point.
+
+    Raises ``ValueError`` for an unknown mode, and for a diagonal mode whose
+    state-block ``Xi`` is not diagonal (see :func:`_check_state_xi_diagonal`).
+    Every fixed-grid and adaptive entry point calls this, so all solver paths
+    accept exactly the same configurations.
+    """
+    if calibration not in _CALIBRATION_MODES:
+        raise ValueError(
+            f"calibration must be one of {_CALIBRATION_MODES}; got {calibration!r}."
+        )
+    if calibration in _DIAGONAL_MODES:
+        _check_state_xi_diagonal(prior, calibration)
+
+
+def _is_preconditioned(prior: BasePrior) -> bool:
+    """Whether ``prior`` works in preconditioned (bar) coordinates.
+
+    All preconditioned priors (incl. the joint one, which is not a BasePrior
+    subclass) carry a preconditioner ``T(h)`` and need the bar-space recursion.
+    """
+    return isinstance(prior, (PrecondIWP, PrecondMaternPrior, PrecondJointPrior))
 
 
 def rts_sqr_smoother_loop(
@@ -178,11 +212,26 @@ def _log_likelihood_contrib(mz: Array, Pz_sqr: Array) -> Array:
     return -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
 
 
+def _ekf0_jacobian(measure: BaseODEInformation, calibration: str) -> Array | None:
+    """EK0 Jacobian of the ODE-defect rows for ``"diagonal_ekf0"`` calibration.
+
+    This is the measurement's ``E_constraint`` -- the selector of the ODE's
+    left-hand-side derivative (``E1`` for ``x' = f``, ``E2`` for ``x'' = f``),
+    the same matrix :class:`TaylorCorrection` uses for its EK0 update. It is not
+    the prior's ``E1``: for a second-order ODE that selects the wrong derivative
+    and inflates ``sigma_hat^2`` by orders of magnitude. Only read when needed,
+    so measures without ``E_constraint`` keep working in the other modes.
+    """
+    if calibration != "diagonal_ekf0":
+        return None
+    return measure.E_constraint
+
+
 def _calibrate_diffusion(
     calibration: str,
     mz_ode: Array,
     H_ode: Array,
-    E1: Array,
+    E_ekf0: Array | None,
     Q_sqr: Array,
     prior: BasePrior,
     min_sigma_sqr: float,
@@ -191,8 +240,8 @@ def _calibrate_diffusion(
     ``diagonal_ekf0`` / ``none`` modes.
 
     Shared by every fixed-grid loop variant and the adaptive step body (plain
-    and preconditioned; the preconditioned callers pass the bar-space ``E1`` /
-    ``H_ode`` / ``Q_sqr``).
+    and preconditioned; the preconditioned callers pass the bar-space
+    ``E_ekf0`` / ``H_ode`` / ``Q_sqr``).
 
     Works entirely from the square-root process noise ``Q_sqr`` -- the diagonal
     denominator ``diag(H Q H.T)`` is computed as the row-norms of ``H @ Q_sqr.T``
@@ -204,7 +253,10 @@ def _calibrate_diffusion(
             ``"none"``.
         mz_ode: ODE-defect innovation mean (``mz[:d_ode]``).
         H_ode: ODE-defect rows of the (effective) observation Jacobian.
-        E1: First-derivative selection matrix (used by ``"diagonal_ekf0"``).
+        E_ekf0: EK0 Jacobian of the ODE-defect rows, i.e. the measurement's
+            ``E_constraint`` (``E1`` for a first-order ODE, ``E2`` for a
+            second-order one). Used only by ``"diagonal_ekf0"``; may be ``None``
+            otherwise.
         Q_sqr: Square-root process noise ``Q(h)_sqr`` (``Q = Q_sqr.T @ Q_sqr``);
             also the noise that gets scaled by the diffusion and propagated.
         prior: Prior, for ``apply_state_sigma_sqr``.
@@ -215,8 +267,12 @@ def _calibrate_diffusion(
         the diagonal modes and a scalar otherwise; ``Q_step_sqr`` is the (possibly
         scaled) square-root process noise to propagate.
     """
-    if calibration in ("diagonal", "diagonal_ekf0"):
-        H_for_calib = E1 if calibration == "diagonal_ekf0" else H_ode
+    if calibration in _DIAGONAL_MODES:
+        if calibration == "diagonal_ekf0":
+            assert E_ekf0 is not None, "diagonal_ekf0 needs the EK0 Jacobian"
+            H_for_calib = E_ekf0
+        else:
+            H_for_calib = H_ode
         # diag(H Q H.T)_i = || (H @ Q_sqr.T)[i] ||^2, since Q = Q_sqr.T @ Q_sqr.
         HQ_sqr = H_for_calib @ Q_sqr.T
         denom = np.sum(HQ_sqr * HQ_sqr, axis=1)
@@ -236,7 +292,13 @@ def _calibrate_diffusion(
     )
     if calibration == "dynamic":
         return sigma_scalar, prior.apply_state_sigma_sqr(Q_sqr, sigma_scalar)
-    return sigma_scalar, Q_sqr  # "none"
+    if calibration == "none":
+        return sigma_scalar, Q_sqr
+    # The mode is a static Python string, so this raises at trace time. Entry
+    # points validate up front; this guards against a mode slipping through.
+    raise ValueError(
+        f"calibration must be one of {_CALIBRATION_MODES}; got {calibration!r}."
+    )
 
 
 DynamicScanLoopResult = tuple[
@@ -296,7 +358,7 @@ def _sqr_loop_dynamic_obs_scan(
     A_h = prior.A(h)
     b_h = prior.b(h)
     Q_h_sqr = prior.Q_sqr(h)
-    E1 = prior.E1
+    E_ekf0 = _ekf0_jacobian(measure, calibration)
     d_ode = measure.ode_dim
 
     H_obs = obs_model.H
@@ -320,7 +382,7 @@ def _sqr_loop_dynamic_obs_scan(
         mz_ode_prov = mz_pred[:d_ode]
 
         sigma_sqr, Q_step_sqr = _calibrate_diffusion(
-            calibration, mz_ode_prov, H_ode, E1, Q_h_sqr, prior, min_sigma_sqr
+            calibration, mz_ode_prov, H_ode, E_ekf0, Q_h_sqr, prior, min_sigma_sqr
         )
 
         (
@@ -439,7 +501,7 @@ def sqr_loop_dynamic_scan(
         calibration: ``"dynamic"`` (default), ``"diagonal"``,
             ``"diagonal_ekf0"``, or ``"none"``. All modes work with
             :class:`JointPrior` / :class:`PrecondJointPrior`; diagonal modes
-            require ``prior._prior_x.xi`` to be diagonal.
+            require the state-block ``prior.xi_state`` to be diagonal.
         min_sigma_sqr: Lower bound applied to per-step ``sigma_hat^2`` (or
             each component in diagonal modes) before baking into
             ``Q_step_sqr``. Default ``0.0`` preserves unclamped behavior.
@@ -452,8 +514,8 @@ def sqr_loop_dynamic_scan(
             update (default ``TaylorCorrection(order=1)``, i.e. EK1). Note that
             this controls only the *update*; the diffusion calibration uses its
             own linearization selected by ``calibration`` (the
-            ``"diagonal_ekf0"`` mode pairs an ``E1``-based sigma estimate with
-            an EK0 update). Works with ``obs_model`` (the ODE update is corrected;
+            ``"diagonal_ekf0"`` mode pairs an EK0 (``measure.E_constraint``)
+            sigma estimate with any update). Works with ``obs_model`` (the ODE update is corrected;
             the observation update is linear).
 
     Returns:
@@ -464,12 +526,7 @@ def sqr_loop_dynamic_scan(
         log_likelihood_obs)``. ``sigma_sqr_seq`` has shape ``(N, d_ode)``
         in the diagonal modes, ``(N,)`` otherwise.
     """
-    _valid = ("dynamic", "diagonal", "diagonal_ekf0", "none")
-    if calibration not in _valid:
-        raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
-    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
-    if is_diagonal:
-        _check_state_xi_diagonal(prior, calibration)
+    _validate_calibration(calibration, prior)
 
     if obs_model is not None:
         return _sqr_loop_dynamic_obs_scan(
@@ -492,7 +549,7 @@ def sqr_loop_dynamic_scan(
     A_h = prior.A(h)
     b_h = prior.b(h)
     Q_h_sqr = prior.Q_sqr(h)
-    E1 = prior.E1
+    E_ekf0 = _ekf0_jacobian(measure, calibration)
     d_ode = measure.ode_dim
 
     def scan_body(carry, step_data):
@@ -510,7 +567,7 @@ def sqr_loop_dynamic_scan(
         mz_ode = mz_pred[:d_ode]
 
         sigma_sqr, Q_step_sqr = _calibrate_diffusion(
-            calibration, mz_ode, H_ode, E1, Q_h_sqr, prior, min_sigma_sqr
+            calibration, mz_ode, H_ode, E_ekf0, Q_h_sqr, prior, min_sigma_sqr
         )
 
         (
@@ -625,8 +682,8 @@ def sqr_loop_preconditioned_dynamic_scan(
         N: Number of filter steps.
         calibration: ``"dynamic"`` (default), ``"diagonal"``,
             ``"diagonal_ekf0"``, or ``"none"``. All modes work with
-            :class:`PrecondJointPrior`; diagonal modes require
-            ``prior._prior_x.xi`` to be diagonal.
+            :class:`PrecondJointPrior`; diagonal modes require the state-block
+            ``prior.xi_state`` to be diagonal.
         min_sigma_sqr: Lower bound applied to per-step ``sigma_hat^2``
             before baking into ``Q_step_sqr_bar``. Default ``0.0``.
         correction: Linearization/correction strategy for the measurement update
@@ -639,19 +696,15 @@ def sqr_loop_preconditioned_dynamic_scan(
         scalar log-marginal-likelihood. ``sigma_sqr_seq`` shape is
         ``(N, d_ode)`` in diagonal modes, ``(N,)`` otherwise.
     """
-    _valid = ("dynamic", "diagonal", "diagonal_ekf0", "none")
-    if calibration not in _valid:
-        raise ValueError(f"calibration must be one of {_valid}; got {calibration!r}.")
-    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
-    if is_diagonal:
-        _check_state_xi_diagonal(prior, calibration)
+    _validate_calibration(calibration, prior)
 
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     A_bar = prior.A(h)
     b_bar = prior.b(h)
     Q_sqr_bar = prior.Q_sqr(h)
     T_h = cast("_PrecondPrior", prior).T(h)
-    E1 = prior.E1
+    E_ekf0 = _ekf0_jacobian(measure, calibration)
+    E_ekf0_bar = None if E_ekf0 is None else E_ekf0 @ T_h
     d_ode = measure.ode_dim
 
     m_0_bar = np.linalg.solve(T_h, mu_0)
@@ -671,12 +724,11 @@ def sqr_loop_preconditioned_dynamic_scan(
         H_ode_bar = H_t_bar[:d_ode]
         mz_ode = mz_pred[:d_ode]
 
-        E1_bar = E1 @ T_h
         sigma_sqr, Q_step_sqr_bar = _calibrate_diffusion(
             calibration,
             mz_ode,
             H_ode_bar,
-            E1_bar,
+            E_ekf0_bar,
             Q_sqr_bar,
             prior,
             min_sigma_sqr,

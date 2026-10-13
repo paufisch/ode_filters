@@ -9,6 +9,7 @@ from ode_filters.priors.gmp_priors import (
     MaternPrior,
     PrecondIWP,
     PrecondJointPrior,
+    PrecondMaternPrior,
 )
 
 
@@ -435,3 +436,18 @@ class TestPrecondJointPriorProjections:
         assert joint.E0_x.shape == (2, 10)
         assert joint.E0_hidden.shape == (3, 10)
         assert joint.E1.shape == (2, 10)
+
+
+@pytest.mark.parametrize(
+    "precond",
+    [PrecondIWP(q=2, d=1), PrecondMaternPrior(q=2, d=1, length_scale=1.0)],
+    ids=["PrecondIWP", "PrecondMaternPrior"],
+)
+@pytest.mark.parametrize("slot", ["prior_x", "prior_u"])
+def test_joint_prior_rejects_a_preconditioned_sub_prior(precond, slot):
+    """A preconditioned sub-prior's A/Q_sqr are in bar coordinates, which
+    JointPrior (no T(h)) would silently treat as plain-space matrices."""
+    plain = IWP(q=1, d=1)
+    args = (precond, plain) if slot == "prior_x" else (plain, precond)
+    with pytest.raises(TypeError, match=f"{slot} is preconditioned.*PrecondJointPrior"):
+        JointPrior(*args)

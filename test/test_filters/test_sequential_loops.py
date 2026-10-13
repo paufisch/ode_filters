@@ -22,6 +22,11 @@ def _vf_logistic(x, *, t):
     return x * (1 - x)
 
 
+def _logistic_solution(t, x0):
+    """Exact solution of dx/dt = x(1-x) with x(0) = x0."""
+    return 1.0 / (1.0 + (1.0 / x0 - 1.0) * np.exp(-t))
+
+
 # ---------------------------------------------------------------------------
 # Test: observation assimilation
 # ---------------------------------------------------------------------------
@@ -116,7 +121,7 @@ class TestSeqWithObservations:
         # True solution at some grid points
         ts = np.linspace(tspan[0], tspan[1], N + 1)
         z_t = ts[5:15]
-        z_true = 1.0 / (1.0 + 9.0 * np.exp(-z_t))
+        z_true = _logistic_solution(z_t, x0[0])
         z = z_true[:, None]
         A = np.array([[1.0]])
         observation = Measurement(A, z, z_t, noise=0.001)
@@ -141,7 +146,7 @@ class TestSeqWithObservations:
         m_obs = np.array(result_obs.m)
 
         # Compare at observed time steps (indices 5-14)
-        y_true = 1.0 / (1.0 + 9.0 * np.exp(-ts))
+        y_true = _logistic_solution(ts, x0[0])
         err_no_obs = np.mean(np.abs((E0 @ m_no_obs[5:15].T)[0] - y_true[5:15]))
         err_obs = np.mean(np.abs((E0 @ m_obs[5:15].T)[0] - y_true[5:15]))
 
