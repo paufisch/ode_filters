@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="4 4 86 57" width="258" height="171" role="img" aria-labelledby="title">
+  <title id="title">ODE Filters</title>
+  <g fill="none" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round">
+    <path stroke="#5C6BC0" d="M8 32A16 17 0 0 1 40 32L40 44Q40 49 45 49L50 49A16 17 0 0 0 66 32L66 20Q66 15 71 15L86 15M66 32L82 32"/>
+    <path stroke="#E8EAF6" d="M8 32A16 17 0 0 0 40 32L40 20Q40 15 45 15L50 15A16 17 0 0 1 66 32L66 44Q66 49 71 49L86 49"/>
+  </g>
+  <g fill="#FFA726">
+    <circle cx="24" cy="56" r="3.2"/>
+    <circle cx="47" cy="8.5" r="3.2"/>
+    <circle cx="79" cy="55.5" r="3.2"/>
+  </g>
+</svg>
