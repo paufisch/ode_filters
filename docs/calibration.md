@@ -153,6 +153,52 @@ must pass a noise-free `Pz_sqr` to `posthoc_mle_sigma_sqr` -- the
 covariances returned by the filter include `R` and must be recomputed from the
 saved `(result.m_pred, result.P_pred_sqr)` first.
 
+## Selecting hyperparameters from data
+
+The diffusion is one hyperparameter; a prior's length scale, `Xi`, or the
+parameters of a hidden input are others. With data, they are selected from the
+evidence the data carry, and the library reports three versions of it. Write
+`Z` for the ODE information (observed as zero), `Y` for the data and `U` for a
+hidden input's trajectory.
+
+**The sequential data evidence**, `result.log_likelihood_obs`
+(`marginal_loglik(..., channel="obs")`), is `sum_n log p(y_n | z_<=n, y_<n)`:
+each observation conditioned on the ODE information up to its own time. Together
+with the ODE-information evidence `result.log_likelihood` it sums to
+`log p(Z, Y)`.
+
+**The conditional evidence** `log p(Y | Z) = log p(Z, Y) - log p(Z)` conditions
+each observation on *all* of the ODE information, also the later one. It differs
+from the sequential one whenever later ODE information says something about
+earlier data, which is the usual case. Two estimators:
+
+- `fenrir_loglik(data_free, obs_model)` (`channel="fenrir"`): one pass on the
+  ODE information alone, then a Kalman filter backwards through its backward
+  conditionals that updates on the data (Tronarp, Bosch & Hennig, 2022).
+- `conditional_loglik(data, data_free)` (`channel="dalton"`): a pass with data
+  minus a pass without. On one frozen linearization (two `affine_filter` runs
+  of the same `AffineSurrogate`) it equals Fenrir's value exactly; with one-shot
+  filters each pass linearizes at its own predictions, and it is Dalton's
+  estimator (Wu & Lysy, 2024), which generally differs.
+
+Use the conditional evidence to compare hyperparameters by how well the
+ODE-constrained model explains the data; use the sequential one when the data
+should be judged as they arrive (filtering, online use).
+
+**Information criteria.** `information_criteria(m_0, P_0_sqr, prior, surrogate,
+ts, obs_model)` returns, at a frozen linearization and for a `JointPrior` with a
+hidden input `U`,
+
+- `I_UZ = I(U; Z)`: what the ODE information says about the input;
+- `I_UY_given_Z = I(U; Y | Z)`: what the data add to it;
+- `D = sum_n I(U; y_n | z_<=n, y_<n)`: the directed information of the data
+  about the input, as the filter sees it.
+
+They come from the innovation log-determinants of four `affine_filter` passes
+(the joint model and the state block given `U`, each with and without the
+data), so they are exact for the frozen model and differentiable in its
+hyperparameters.
+
 ## What calibration cannot fix
 
 Calibration scales the posterior to match the size of the residuals. It does

@@ -16,6 +16,18 @@ via a caller-supplied Optax optimizer.)
 
 ::: ode_filters.inference.likelihood.InferenceProblem
 
+## Conditional evidence and information criteria
+
+See [Selecting hyperparameters from data](../../calibration.md#selecting-hyperparameters-from-data).
+
+::: ode_filters.inference.fenrir_loglik
+
+::: ode_filters.inference.conditional_loglik
+
+::: ode_filters.inference.information_criteria
+
+::: ode_filters.inference.InformationCriteria
+
 ## Parameters
 
 ::: ode_filters.inference.parameters.Real
