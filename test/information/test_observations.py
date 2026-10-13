@@ -1,27 +1,40 @@
-"""Validation / dataclass coverage for Measurement, prepare_observations, and the
-Conservation-only constraint guard on the ODE-information models."""
+"""Data observations: ``Measurement`` and ``prepare_observations``."""
 
 from __future__ import annotations
 
 import jax.numpy as np
 import pytest
 
-from ode_filters.information import (
-    Measurement,
-    ODEInformation,
-    prepare_observations,
-)
+from ode_filters.information import Measurement, prepare_observations
+from ode_filters.priors import IWP
 
 
-def _E0_E1(d=1, q=2):
-    eye = np.eye(d)
-    basis = np.eye(q + 1)
-    return np.kron(basis[0:1], eye), np.kron(basis[1:2], eye)
+class TestMeasurementDataclass:
+    """Tests for the Measurement dataclass."""
+
+    def test_measurement_creation(self):
+        """Test creating a Measurement constraint."""
+        A = np.array([[1.0]])
+        z = np.array([[0.5], [0.8]])
+        z_t = np.array([0.5, 1.0])
+
+        m = Measurement(A=A, z=z, z_t=z_t)
+        assert m.dim == 1
+
+    def test_measurement_noise_scalar(self):
+        """Test measurement noise from scalar."""
+        A = np.array([[1.0], [0.0]])
+        z = np.array([[0.5, 0.3]])
+        z_t = np.array([0.5])
+
+        m = Measurement(A=A, z=z, z_t=z_t, noise=0.1)
+        R = m.R
+        assert R.shape == (2, 2)
+        assert np.allclose(R, 0.1 * np.eye(2))
 
 
 def test_prepare_observations_empty_returns_none():
-    E0, _ = _E0_E1()
-    assert prepare_observations([], E0, np.linspace(0.0, 1.0, 5)) is None
+    assert prepare_observations([], IWP(q=2, d=1).E0, np.linspace(0.0, 1.0, 5)) is None
 
 
 def test_measurement_A_must_be_2d():
@@ -47,10 +60,3 @@ def test_measurement_z_t_bad_ndim_raises():
 def test_measurement_z_t_length_mismatch_raises():
     with pytest.raises(ValueError, match="length must match"):
         Measurement(A=np.eye(1), z=np.zeros((2, 1)), z_t=np.zeros(3))
-
-
-def test_measurement_rejected_as_measure_constraint():
-    E0, E1 = _E0_E1()
-    m = Measurement(A=np.eye(1), z=np.zeros((1, 1)), z_t=np.array([0.0]))
-    with pytest.raises(TypeError, match="not part of the ODE information"):
-        ODEInformation(lambda x, *, t: -x, E0, E1, constraints=[m])

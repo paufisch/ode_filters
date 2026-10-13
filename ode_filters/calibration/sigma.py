@@ -54,9 +54,8 @@ def quasi_mle_sigma_sqr(m_z: Array, P_z_sqr: Array) -> Array:
     denominator inflates it by a constant and biases ``sigma_hat^2`` down.
     For pure ODE-information filtering (``measure.noise_sqr`` returns zero
     -- the typical case) the distinction is moot. For data-assimilation
-    workflows with ``R != 0``, pre-compute the noise-free covariance via
-    ``sqr_marginalization``
-    with a zero ``R_sqr`` (or use ``quasi_mle_sigma_sqr_from_Q``, which
+    workflows with ``R != 0``, pre-compute the noise-free covariance with
+    ``ode_filters.gaussian.marginalize`` and a zero noise factor (or use ``quasi_mle_sigma_sqr_from_Q``, which
     builds ``H Q H.T`` directly and never sees ``R``).
 
     Args:

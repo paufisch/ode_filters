@@ -7,7 +7,8 @@ repos:
     rev: v0.14.7
     hooks:
       - id: ruff-check
-        types_or: [python, pyi]
+        # Lint the notebooks too (formatting them is left to their authors).
+        types_or: [python, pyi, jupyter]
         args: [--fix]
       - id: ruff-format
         types_or: [python, pyi]
@@ -35,6 +36,14 @@ repos:
         args: ["--extra-keys", "metadata.kernelspec metadata.language_info"]
   - repo: local
     hooks:
+      # Package source stays ASCII (CONTRIBUTING: "ASCII only -- no Unicode math
+      # symbols"): such symbols render inconsistently across terminals, help()
+      # and the API docs.
+      - id: ascii-only-source
+        name: ASCII-only package source
+        language: pygrep
+        entry: '[^\x00-\x7F]'
+        files: ^ode_filters/.*\.py$
       # Static type checking. Run through `uv` (rather than a pinned mirror) so
       # the pyright version is single-sourced from the locked dev dependencies.
       # Checks the whole `ode_filters` package per [tool.pyright] -- hence

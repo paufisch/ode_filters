@@ -27,23 +27,29 @@ def taylor_mode_initialization(
     t0: float = 0.0,
     order: int = 1,
 ) -> tuple[Array, Array]:
-    """Return flattened Taylor-mode coefficients produced via JAX Jet.
+    """Exact initial derivatives of an ODE solution, by Taylor-mode autodiff.
+
+    Expands the solution through ``x0`` (and ``dx0`` for ``order=2``) with
+    ``jax.experimental.jet`` and returns the state ``[x, x', ..., x^(q)]`` with
+    a zero covariance: the initial state is known exactly. The vector field is
+    evaluated at the fixed time ``t0``.
 
     Args:
-        vf: Vector field whose Taylor coefficients are required.
-            For order=1: vf(x, *, t) -> dx/dt
-            For order=2: vf(x, dx, *, t) -> d²x/dt²
-        inits: Initial value(s) around which the expansion takes place.
-            For order=1: x0 (initial state)
-            For order=2: (x0, dx0) tuple of initial state and velocity
-        q: Number of higher-order coefficients to compute.
-        t0: Initial time for Taylor expansion (default 0.0).
-        order: ODE order (1 or 2, default 1).
+        vf: Vector field, ``vf(x, *, t) -> dx/dt`` for ``order=1`` or
+            ``vf(x, dx, *, t) -> d^2x/dt^2`` for ``order=2``.
+        inits: ``x0`` for ``order=1``; the tuple ``(x0, dx0)`` for ``order=2``.
+        q: Number of derivatives to compute (the prior's order).
+        t0: Time of the initial value (default 0.0).
+        order: Order of the ODE (1 or 2, default 1).
 
     Returns:
-        Tuple of (coefficients, covariance) where:
-        - coefficients are the flattened Taylor coefficients as numpy array
-        - covariance is a zero covariance matrix as numpy array
+        ``(m_0, P_0_sqr)``: the derivative-major state, shape ``[(q+1) d]``, and
+        a zero square-root covariance, shape ``[(q+1) d, (q+1) d]``.
+
+    Raises:
+        TypeError: If ``vf`` is not callable.
+        ValueError: If ``q`` is negative, ``order`` is not 1 or 2, or ``inits``
+            does not match ``order``.
     """
     if not callable(vf):
         raise TypeError("vf must be callable.")

@@ -1,4 +1,17 @@
-"""Filters over a given time grid: ``gaussian_filter``, ``affine_filter`` and their scan core."""
+"""Filters over a given time grid: ``gaussian_filter`` and ``affine_filter``.
+
+Both scan ``filter_step`` (``ode_filters.filters.kernel``) over the steps of
+the grid ``ts`` and differ only in the ODE information of a step:
+``gaussian_filter`` linearizes the measurement model at each prediction with a
+``Correction``; ``affine_filter`` takes a frozen ``AffineSurrogate``, one
+affine model per step, and so is an exact square-root Kalman filter of that
+linear-Gaussian model.
+
+The grid may be non-uniform. On a concrete uniform grid the prior's transition
+is computed once; otherwise once per step. Data (an ``ObsModel`` from
+``prepare_observations`` on the same grid) are conditioned on after the ODE
+information at each step.
+"""
 
 from __future__ import annotations
 
@@ -61,6 +74,7 @@ def grid_transitions(
 
 
 def check_obs_model(obs_model: ObsModel, n_steps: int) -> None:
+    """Raise if ``obs_model`` was built for a grid with another number of steps."""
     if obs_model.c_seq.shape[0] != n_steps or obs_model.mask.shape[0] != n_steps:
         raise ValueError(
             f"obs_model has {obs_model.c_seq.shape[0]} steps but the grid has "

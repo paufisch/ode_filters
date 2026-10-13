@@ -36,7 +36,7 @@ class BlackBoxMeasurement(eqx.Module):
 
     Example:
         >>> def custom_g(state, *, t):
-        ...     return jnp.array([state[1] - state[0] ** 2])
+        ...     return np.array([state[1] - state[0] ** 2])
         >>> measure = BlackBoxMeasurement(custom_g, state_dim=3, obs_dim=1)
     """
 

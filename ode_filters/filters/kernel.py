@@ -106,17 +106,21 @@ class OnlineInformation(NamedTuple):
 
     @property
     def ode_dim(self) -> int:
+        """The measurement model's number of ODE rows."""
         return self.measure.ode_dim
 
     def linearize(self, m: Array, *, t: ArrayLike) -> AffineModel:
+        """Linearize the measurement model at ``m`` with the correction."""
         return self.correction.linearize(self.measure, m, t=t)
 
     def condition(
         self, x: Gaussian, model: AffineModel, *, t: ArrayLike
     ) -> tuple[Gaussian, Gaussian]:
+        """Update ``x`` with the correction (which may relinearize)."""
         return self.correction.correct(self.measure, x, model, t=t)
 
     def lhs_selector(self) -> Array:
+        """The measurement model's ``E_lhs``."""
         return self.measure.E_lhs  # type: ignore[attr-defined]
 
 
@@ -130,17 +134,21 @@ class FrozenInformation(NamedTuple):
 
     @property
     def ode_dim(self) -> int:
+        """All rows of the affine model."""
         return self.model.H.shape[0]
 
     def linearize(self, m: Array, *, t: ArrayLike) -> AffineModel:
+        """The fixed affine model, whatever ``m``."""
         return self.model
 
     def condition(
         self, x: Gaussian, model: AffineModel, *, t: ArrayLike
     ) -> tuple[Gaussian, Gaussian]:
+        """A Kalman update of ``x`` with the affine model."""
         return update(model, x)
 
     def lhs_selector(self) -> Array:
+        """Not available: raises ``NotImplementedError``."""
         raise NotImplementedError(
             "A frozen affine model has no ODE left-hand-side selector; use a "
             "calibration that does not need one."

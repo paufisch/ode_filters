@@ -1,4 +1,12 @@
-"""``FilterResult``: what every filter returns."""
+"""``FilterResult``: what every filter returns, and the adaptive step record.
+
+A ``FilterResult`` holds the filtered marginals at the grid nodes (or save
+times), the evidence, the diffusion estimates, and per step the prediction,
+the backward conditional and the innovations (on the adaptive path some of
+these are per save interval or ``None``). Every field is in the original state
+coordinates, whatever the prior's preconditioning. ``StepRecord`` lists
+the accepted steps of an adaptive solve (``record_steps=``).
+"""
 
 from __future__ import annotations
 

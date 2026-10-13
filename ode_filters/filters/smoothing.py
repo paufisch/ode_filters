@@ -1,4 +1,15 @@
-"""Smoothing, posterior sampling and interpolation of filter results."""
+"""Smoothing, posterior sampling and interpolation of filter results.
+
+A filter pass stores, per step, the backward conditional ``p(x_n | x_{n+1})``
+of the prediction. Run backwards from the last filtered marginal, these
+conditionals give the smoothing posterior of the whole trajectory:
+
+- ``rts_smoother`` marginalizes through them: the Rauch-Tung-Striebel
+  smoothed marginals at the grid nodes;
+- ``sample_posterior`` samples through them: joint sample paths;
+- ``interpolate`` bridges between two nodes with the prior, for filtered or
+  smoothed marginals at any time inside the grid.
+"""
 
 from __future__ import annotations
 

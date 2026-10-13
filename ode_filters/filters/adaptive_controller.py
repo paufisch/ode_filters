@@ -1,9 +1,9 @@
-"""Step-size controllers for the adaptive EKF loop.
+"""Step-size controllers for the adaptive solver (``gaussian_filter_adaptive``).
 
 A controller's job is to propose a new step size ``h_new`` given the current
 step ``h`` and a *normalised* error estimate ``err`` (one means "at tolerance",
 greater than one means "rejected, shrink"). Accept/reject is decided by the
-loop driver, not by the controller.
+solver, not by the controller.
 
 Two controllers are provided:
 
@@ -77,7 +77,7 @@ class PController:
 
     Default ``alpha = 1 / order`` matches the standard "I-controller" of
     Hairer-Wanner-Norsett (1993) and the elementary controller in scipy's
-    ``solve_ivp``. For an EKF1 with IWP(q) prior, ``order = q``.
+    ``solve_ivp``. For an EK1 filter with an IWP(q) prior, ``order = q``.
 
     Args:
         order: Convergence order of the local error estimate.
@@ -128,7 +128,7 @@ class PIController:
 
     Defaults follow Gustafsson (1991): ``alpha = 0.7 / order``, ``beta = 0.4 /
     order``, which are also the values used in Bosch et al. (2021). For an
-    EKF1 with IWP(q) prior, ``order = q``.
+    EK1 filter with an IWP(q) prior, ``order = q``.
 
     Args:
         order: Convergence order of the local error estimate.

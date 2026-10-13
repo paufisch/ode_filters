@@ -163,3 +163,12 @@ def test_marginalize_rejects_mismatched_shapes(A, b, Q_sqr, P_sqr, match):
     x = Gaussian(np.zeros(P_sqr.shape[0]), P_sqr)
     with pytest.raises(ValueError, match=match):
         marginalize(A, b, Q_sqr, x)
+
+
+def test_gaussian_cov_and_std_from_the_factor():
+    P_sqr = jax.random.normal(jax.random.PRNGKey(7), (4, 3, 3))
+    x = Gaussian(np.zeros((4, 3)), P_sqr)
+    P = np.einsum("nij,nik->njk", P_sqr, P_sqr)
+    assert np.allclose(x.cov, P, rtol=1e-12)
+    assert x.std.shape == (4, 3)
+    assert np.allclose(x.std, np.sqrt(jax.vmap(np.diag)(P)), rtol=1e-12)

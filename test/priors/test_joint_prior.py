@@ -324,3 +324,27 @@ def test_joint_xi_is_block_diagonal(joint):
     """``xi`` used to raise AttributeError (JointPrior skips BasePrior.__init__)."""
     assert np.allclose(joint.xi, np.diag(np.array([2.0, 2.0, 3.0])))
     assert np.allclose(joint.xi_state, 2.0 * np.eye(2))
+
+
+def test_joint_apply_state_sigma_sqr_bad_shape_raises():
+    prior = JointPrior(IWP(q=2, d=1), IWP(q=1, d=1))
+    with pytest.raises(ValueError, match="must be scalar or length"):
+        prior.apply_state_sigma_sqr(np.eye(5), np.zeros(2))
+
+
+def test_preconditioned_joint_state_accessor_and_scaling():
+    pj = JointPrior(PrecondIWP(q=2, d=1), PrecondIWP(q=1, d=1))
+
+    # State-only value projection accessor.
+    assert pj.E0_state.shape[0] == 1
+
+    # Bad-shape per-component sigma -> ValueError.
+    with pytest.raises(ValueError, match="must be scalar or length"):
+        pj.apply_state_sigma_sqr(np.eye(5), np.zeros(2))
+
+    # Scalar scaling of a full-state covariance sqrt touches only the state cols.
+    D_x = pj.prior_x.state_dim  # 3
+    P_sqr = np.arange(1.0, 26.0).reshape(5, 5)
+    out = pj.apply_state_sigma_to_cov_sqr(P_sqr, 4.0)
+    assert np.allclose(out[:, :D_x], 2.0 * P_sqr[:, :D_x])
+    assert np.allclose(out[:, D_x:], P_sqr[:, D_x:])

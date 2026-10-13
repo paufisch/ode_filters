@@ -1,7 +1,8 @@
-"""Tests for ODE information classes and constraint dataclasses."""
+"""The ODE information models: residuals, noise, constraints and hidden states."""
 
 import jax
 import jax.numpy as np
+import numpy as onp
 import pytest
 
 from ode_filters.information import (
@@ -203,30 +204,6 @@ class TestNoisePropertyAndSetters:
 
         with pytest.raises(ValueError, match="must be a scalar, a length"):
             model = model.with_noise(np.array([[[0.1]]]))
-
-
-class TestMeasurementDataclass:
-    """Tests for the Measurement dataclass."""
-
-    def test_measurement_creation(self):
-        """Test creating a Measurement constraint."""
-        A = np.array([[1.0]])
-        z = np.array([[0.5], [0.8]])
-        z_t = np.array([0.5, 1.0])
-
-        m = Measurement(A=A, z=z, z_t=z_t)
-        assert m.dim == 1
-
-    def test_measurement_noise_scalar(self):
-        """Test measurement noise from scalar."""
-        A = np.array([[1.0], [0.0]])
-        z = np.array([[0.5, 0.3]])
-        z_t = np.array([0.5])
-
-        m = Measurement(A=A, z=z, z_t=z_t, noise=0.1)
-        R = m.R
-        assert R.shape == (2, 2)
-        assert np.allclose(R, 0.1 * np.eye(2))
 
 
 class TestConservationDataclass:
@@ -549,3 +526,175 @@ class TestNoiseCovarianceValidation:
             ).R
 
         assert np.allclose(jax.jit(noise_matrix)(0.5), 0.5)
+
+
+def test_observation_matches_manual_computation():
+    def vf(state, *, t):
+        return state**2
+
+    E0, E1 = make_projection_matrices(d=1, q=1)
+    model = ODEInformation(vf=vf, E0=E0, E1=E1)
+    state = np.array([2.0, 3.0])
+    time = 0.0
+
+    manual = model.E_lhs @ state - vf(model.E0 @ state, t=time)
+    computed = model.g(state, t=time)
+
+    onp.testing.assert_allclose(np.asarray(computed), np.asarray(manual))
+
+
+def test_jacobian_matches_expected_linearization():
+    def vf(state, *, t):
+        return state**2
+
+    E0, E1 = make_projection_matrices(d=1, q=1)
+    model = ODEInformation(vf=vf, E0=E0, E1=E1)
+    state = np.array([1.5, -0.5])
+    time = 1.0
+
+    jacobian = model.jacobian_g(state, t=time)
+    jacobian_vf = jax.jacfwd(vf)(model.E0 @ state, t=time)
+    expected = model.E_lhs - jacobian_vf @ model.E0
+
+    onp.testing.assert_allclose(np.asarray(jacobian), np.asarray(expected))
+
+
+@pytest.mark.parametrize("d, q", [(1, 1), (2, 2), (3, 1)])
+def test_projection_matrices_have_expected_shapes(d, q):
+    def vf(state, *, t):
+        return state
+
+    E0, E1 = make_projection_matrices(d=d, q=q)
+    model = ODEInformation(vf=vf, E0=E0, E1=E1)
+    state_dim = (q + 1) * d
+
+    assert model.E0.shape == (d, state_dim)
+    assert model.E_lhs.shape == (d, state_dim)
+
+
+def test_invalid_state_dimension_raises_error():
+    def vf(state, *, t):
+        return state
+
+    E0, E1 = make_projection_matrices(d=1, q=1)
+    model = ODEInformation(vf=vf, E0=E0, E1=E1)
+
+    with pytest.raises(ValueError):
+        model.g(np.array([1.0]), t=0.0)
+
+
+def test_state_with_wrong_rank_raises_error():
+    def vf(state, *, t):
+        return state
+
+    E0, E1 = make_projection_matrices(d=1, q=1)
+    model = ODEInformation(vf=vf, E0=E0, E1=E1)
+    bad_state = np.array([[1.0, 2.0]])  # shape (1, 2) → ndim = 2
+
+    with pytest.raises(ValueError, match="must be a one-dimensional"):
+        model.g(bad_state, t=0.0)
+
+
+class TestConservationConstruction:
+    """Tests for ODE information with a conservation law."""
+
+    def test_basic_construction(self):
+        """Test basic construction with a conservation law."""
+
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=2, q=1)
+        A = np.array([[1.0, 1.0]])  # Conservation: x1 + x2 = const
+        p = np.array([1.0])
+
+        model = ODEInformation(vf, E0, E1, constraints=[Conservation(A, p)])
+        # Model has one Conservation constraint
+        assert len(model.constraints) == 1
+        assert isinstance(model.constraints[0], Conservation)
+
+    def test_rejects_mismatched_A_p_shapes(self):
+        """Test that mismatched A and p shapes raise error."""
+
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=2, q=1)
+        A = np.array([[1.0, 1.0], [1.0, -1.0]])  # 2 constraints
+        p = np.array([1.0])  # Only 1 value
+
+        with pytest.raises(ValueError, match="must match"):
+            ODEInformation(vf, E0, E1, constraints=[Conservation(A, p)])
+
+    def test_rejects_mismatched_A_E0_shapes(self):
+        """Test that mismatched A and E0 shapes raise error."""
+
+        def vf(x, *, t):
+            return x
+
+        E0, E1 = make_projection_matrices(d=2, q=1)
+        A = np.array([[1.0, 1.0, 1.0]])  # 3 columns but d=2
+        p = np.array([1.0])
+
+        with pytest.raises(ValueError):
+            ODEInformation(vf, E0, E1, constraints=[Conservation(A, p)])
+
+
+class TestConservationMethods:
+    """Tests for the conservation rows."""
+
+    @pytest.fixture
+    def conservation_model(self):
+        """A first-order ODE information with one conservation law."""
+
+        def vf(x, *, t):
+            return -x  # Simple decay
+
+        E0, E1 = make_projection_matrices(d=2, q=1)
+        A = np.array([[1.0, 1.0]])  # Conservation: x1 + x2 = const
+        p = np.array([2.0])  # x1 + x2 = 2
+
+        return ODEInformation(vf, E0, E1, constraints=[Conservation(A, p)])
+
+    def test_g_returns_combined_residual(self, conservation_model):
+        """Test that g returns ODE residual plus conservation residual."""
+        # State: [x1, x1', x2, x2'] = [1.0, 0.5, 1.0, -0.5]
+        state = np.array([1.0, 0.5, 1.0, -0.5])
+        result = conservation_model.g(state, t=0.0)
+
+        # Should have d + k = 2 + 1 = 3 components
+        assert result.shape == (3,)
+
+    def test_g_conservation_constraint_satisfied(self, conservation_model):
+        """Test g when conservation constraint is satisfied."""
+        # State layout for d=2, q=1: [x1, x2, x1', x2']
+        # x1 + x2 = 2 (satisfied), with derivatives x' = -x (matching vf)
+        state = np.array([1.0, 1.0, -1.0, -1.0])  # x=[1,1], x'=[-1,-1]
+        result = conservation_model.g(state, t=0.0)
+
+        # ODE residual: x' - vf(x) = x' - (-x) = x' + x
+        # For x1: -1 + 1 = 0, x2: -1 + 1 = 0
+        # Conservation: 1 + 1 - 2 = 0
+        assert np.allclose(result, np.zeros(3), atol=1e-6)
+
+    def test_jacobian_g_returns_correct_shape(self, conservation_model):
+        """Test that jacobian_g returns correct shape."""
+        state = np.array([1.0, 0.5, 1.0, -0.5])
+        jacobian = conservation_model.jacobian_g(state, t=0.0)
+
+        # Shape should be (d + k, (q+1)*d) = (3, 4)
+        assert jacobian.shape == (3, 4)
+
+    def test_get_noise_returns_correct_shape(self, conservation_model):
+        """Test that get_noise returns correct shape."""
+        R = conservation_model.noise_sqr(t=0.0)
+
+        # Shape should be (d + k, d + k) = (3, 3)
+        assert R.shape == (3, 3)
+
+
+def test_measurement_rejected_as_measure_constraint():
+    E0, E1 = make_projection_matrices(1, 2)
+    m = Measurement(A=np.eye(1), z=np.zeros((1, 1)), z_t=np.array([0.0]))
+    with pytest.raises(TypeError, match="not part of the ODE information"):
+        ODEInformation(lambda x, *, t: -x, E0, E1, constraints=[m])

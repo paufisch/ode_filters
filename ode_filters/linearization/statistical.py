@@ -80,9 +80,10 @@ class SLRModel(NamedTuple):
             covariance as inflated measurement noise, which is exactly how a
             sigma-point filter's ``S`` differs from the EKF's ``H P H^T + R``.
         Omega_sqr: Square-root factor of the linearisation-residual covariance
-            alone, shape ``[n_nodes, obs_dim]`` (``Omega = Omega_sqr.T @
-            Omega_sqr``). Not triangular and not square -- it is the stacked
-            weighted fit residuals at the quadrature nodes. Exposed for
+            alone, shape ``[K, obs_dim]`` with ``K`` the total number of
+            quadrature nodes (``n_nodes ** p`` for Gauss-Hermite, ``2 p`` for
+            cubature; ``Omega = Omega_sqr.T @ Omega_sqr``). Not triangular and
+            not square -- it is the stacked weighted fit residuals at the nodes. Exposed for
             diagnostics; ``R_eff_sqr`` already contains it. Zero for an affine
             vector field.
     """

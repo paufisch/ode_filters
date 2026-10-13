@@ -1587,6 +1587,7 @@ dependencies = [
 benchmarks = [
     { name = "diffrax" },
     { name = "matplotlib" },
+    { name = "probdiffeq" },
 ]
 examples = [
     { name = "matplotlib" },
@@ -1623,7 +1624,10 @@ docs = [
     { name = "mkdocs-jupyter" },
     { name = "mkdocs-material" },
     { name = "mkdocstrings", extra = ["python"] },
+    { name = "numpyro" },
+    { name = "optax" },
     { name = "ruff" },
+    { name = "scipy" },
     { name = "tueplots" },
 ]
 
@@ -1638,6 +1642,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.3.4" },
     { name = "numpyro", marker = "extra == 'inference'", specifier = ">=0.16.0" },
     { name = "optax", marker = "extra == 'inference'", specifier = ">=0.2.0" },
+    { name = "probdiffeq", marker = "extra == 'benchmarks'", specifier = ">=0.8.0" },
     { name = "scipy", marker = "extra == 'inference'", specifier = ">=1.13" },
 ]
 provides-extras = ["examples", "inference", "benchmarks"]
@@ -1667,7 +1672,10 @@ docs = [
     { name = "mkdocs-jupyter", specifier = ">=0.24.1" },
     { name = "mkdocs-material", specifier = ">=9.5,<9.6" },
     { name = "mkdocstrings", extras = ["python"], specifier = ">=0.28.3" },
+    { name = "numpyro", specifier = ">=0.16.0" },
+    { name = "optax", specifier = ">=0.2.0" },
     { name = "ruff", specifier = ">=0.6" },
+    { name = "scipy", specifier = ">=1.13" },
     { name = "tueplots", specifier = ">=0.2.5" },
 ]
 

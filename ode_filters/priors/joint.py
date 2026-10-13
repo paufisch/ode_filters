@@ -61,6 +61,7 @@ class JointPrior(BasePrior):
 
     @property
     def state_dim(self) -> int:
+        """Dimension of the joint state, ``D_x + D_u``."""
         return self.prior_x.state_dim + self.prior_u.state_dim
 
     def _pad(self, x_rows: Array | None, u_rows: Array | None) -> Array:
@@ -75,6 +76,7 @@ class JointPrior(BasePrior):
 
     @property
     def E0(self) -> Array:
+        """Selector of ``[x, u]``, shape ``[d_x + d_u, D]``."""
         return self._pad(self.prior_x.E0, self.prior_u.E0)
 
     @property
@@ -89,17 +91,21 @@ class JointPrior(BasePrior):
 
     @property
     def E1(self) -> Array:
+        """Selector of ``x'``, shape ``[d_x, D]``."""
         return self._pad(self.prior_x.E1, None)
 
     @property
     def E2(self) -> Array | None:
+        """Selector of ``x''``, shape ``[d_x, D]``, or ``None`` if ``q_x < 2``."""
         E2 = self.prior_x.E2
         return None if E2 is None else self._pad(E2, None)
 
     def A(self, h: ArrayLike) -> Array:
+        """Block-diagonal of the blocks' transition matrices."""
         return block_diag(self.prior_x.A(h), self.prior_u.A(h))
 
     def b(self, h: ArrayLike) -> Array:
+        """The blocks' drifts, stacked."""
         return np.concatenate([self.prior_x.b(h), self.prior_u.b(h)])
 
     def Q_sqr(self, h: ArrayLike) -> Array:

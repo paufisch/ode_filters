@@ -83,3 +83,9 @@ def test_selectors_and_dimensions():
     assert np.allclose(prior.E2 @ state, state[4:])
     assert IWP(q=1, d=1).E2 is None
     assert np.allclose(prior.b(0.3), 0.0)
+
+
+def test_iwp_apply_state_sigma_sqr_bad_shape_raises():
+    prior = IWP(q=2, d=2)
+    with pytest.raises(ValueError, match="must be scalar or length"):
+        prior.apply_state_sigma_sqr(np.eye(6), np.zeros(3))
