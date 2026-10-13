@@ -54,6 +54,8 @@ class StepOutput(NamedTuple):
         innovation: Predictive distribution of the ODE-information residual.
         filtered: The updated state at ``t_{n+1}``.
         sigma_sqr: The diffusion estimate of the step.
+        diffusion: The diffusion the step propagated with: ``sigma_sqr`` under a
+            scaling policy, one under ``NoCalibration``.
         log_likelihood: The ODE-information evidence of the step.
         innovation_obs: Predictive distribution of the data residual (``None``
             without data). Rows without data at this step have zero mean and
@@ -67,6 +69,7 @@ class StepOutput(NamedTuple):
     innovation: Gaussian
     filtered: Gaussian
     sigma_sqr: Array
+    diffusion: Array
     log_likelihood: Array
     innovation_obs: Gaussian | None = None
     log_likelihood_obs: Array | None = None
@@ -239,13 +242,13 @@ def filter_step(
     def in_frame(H: Array) -> Array:
         return H if s is None else H * s[None, :]
 
-    sigma_sqr, Q_sqr = calibration.calibrate(
+    sigma_sqr, diffusion = calibration.calibrate(
         residual,
         in_frame(model.H[:d]),
         transition.Q_sqr,
-        scale=scale_noise,
         H_ek0=lambda: in_frame(information.lhs_selector()),
     )
+    Q_sqr = scale_noise(transition.Q_sqr, diffusion)
     predicted, backward = predict(x, transition._replace(Q_sqr=Q_sqr))
     filtered, innovation = information.condition(predicted, model, t=t)
     output = StepOutput(
@@ -254,6 +257,7 @@ def filter_step(
         innovation=innovation,
         filtered=filtered,
         sigma_sqr=sigma_sqr,
+        diffusion=diffusion,
         log_likelihood=log_likelihood(innovation),
     )
     if observation is None:

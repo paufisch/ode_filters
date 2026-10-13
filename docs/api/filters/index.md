@@ -7,6 +7,8 @@ The solvers all return a `FilterResult` in the original state coordinates:
 - `gaussian_filter_adaptive` — adaptive steps between given save times.
 - `affine_filter` — a frozen linearization (an `AffineSurrogate`).
 - `rts_smoother` — smoothing of any result that carries backward conditionals.
+- `sample_posterior` — a joint sample path from the smoothing posterior.
+- `interpolate` — filtered or smoothed marginals between the grid nodes.
 - `iterated_smoother` — the IEKS and the IPLS: linearize along the smoothed
   trajectory, filter and smooth, repeat.
 
@@ -29,6 +31,7 @@ the step from `t[n]` to `t[n + 1]`.
 | `log_likelihood` | ODE-information evidence, after calibration (not comparable across calibration policies) |
 | `log_likelihood_obs` | data evidence, each observation conditioned on the ODE information up to its time (`None` without data) |
 | `sigma_sqr` | per-step diffusion estimate (`None` on the adaptive path) |
+| `diffusion` | the diffusion each step propagated with: `sigma_sqr` under a calibrating policy, ones under `"none"` (`None` on the adaptive path); `interpolate` bridges with it |
 | `m_pred`, `P_pred_sqr` | predictions before each update (`None` on the adaptive path) |
 | `G_back`, `d_back`, `P_back_sqr` | backward conditionals `p(x_n \| x_{n+1})`, consumed by `rts_smoother` |
 | `mz`, `Pz_sqr` | ODE-information innovations |
@@ -54,6 +57,14 @@ its backward fields are then `None` and `rts_smoother` raises. With
 ::: ode_filters.filters.affine_filter
 
 ::: ode_filters.filters.rts_smoother
+
+## Posterior samples and dense output
+
+::: ode_filters.filters.sample_posterior
+
+::: ode_filters.filters.interpolate
+
+## Result types
 
 ::: ode_filters.filters.FilterResult
 

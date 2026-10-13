@@ -16,7 +16,9 @@ up, and assumes the [notation](../notation.md).
 | choose a prior | [`IWP` / `MaternPrior` / `IOUPPrior` / `JointPrior`](priors/index.md) |
 | initialize the state | [`taylor_mode_initialization`](priors/index.md) |
 | calibrate posterior uncertainty (diffusion `sigma^2`) | the `calibration=` argument, or [post-hoc](calibration/index.md) ([guide](../calibration.md)) |
-| fit ODE parameters to data (max-likelihood) | [`ODEFilter` / `fit` / `marginal_loglik`](inference/index.md) |
+| fit ODE parameters to data (max-likelihood) | [`ODEFilter` / `fit` / `fit_scipy` / `marginal_loglik`](inference/index.md) |
+| check a fit against its data | [`nis` / `whitened_residuals` / `observation_predictive`](inference/index.md) |
+| draw posterior paths, evaluate between nodes | [`sample_posterior` / `interpolate`](filters/index.md) |
 
 ## Subpackages
 

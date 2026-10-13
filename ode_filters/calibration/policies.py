@@ -41,7 +41,6 @@ from jax import Array
 from .sigma import quasi_mle_sigma_sqr_from_Q
 
 CalibrationMode = Literal["none", "dynamic", "diagonal", "diagonal_ekf0"]
-ScaleNoise = Callable[[Array, Array], Array]
 
 
 class Calibration(eqx.Module):
@@ -54,23 +53,22 @@ class Calibration(eqx.Module):
         H: Array,
         Q_sqr: Array,
         *,
-        scale: ScaleNoise,
         H_ek0: Callable[[], Array],
     ) -> tuple[Array, Array]:
-        """Estimate ``sigma^2`` for one step and return the noise to propagate.
+        """Estimate ``sigma^2`` for one step and choose the diffusion to apply.
 
         Args:
             residual: ODE residual at the predicted mean, shape ``[d]``.
             H: Its Jacobian (the linearization's ODE rows), shape ``[d, D]``.
             Q_sqr: Square-root process noise of the step, shape ``[D, D]``.
-            scale: ``(Q_sqr, sigma_sqr) -> Q_sqr`` applying a diffusion to the
-                prior's state block (``prior.apply_state_sigma_sqr``).
             H_ek0: Returns the ODE's left-hand-side selector in the same
                 coordinates as ``H``; only called by policies that need it.
 
         Returns:
-            ``(sigma_sqr, Q_step_sqr)``: the estimate (scalar, or one per
-            component) and the square-root noise the step propagates with.
+            ``(sigma_sqr, diffusion)``: the estimate (scalar, or one per
+            component) and the diffusion the step propagates with, which the
+            step applies to the prior's state block
+            (``prior.apply_state_sigma_sqr``).
         """
         raise NotImplementedError  # pragma: no cover - abstract method
 
@@ -89,8 +87,9 @@ class NoCalibration(Calibration):
     run can be rescaled post hoc (see ``posthoc_mle_sigma_sqr``).
     """
 
-    def calibrate(self, residual, H, Q_sqr, *, scale, H_ek0):
-        return _scalar_estimate(residual, H, Q_sqr), Q_sqr
+    def calibrate(self, residual, H, Q_sqr, *, H_ek0):
+        estimate = _scalar_estimate(residual, H, Q_sqr)
+        return estimate, np.ones_like(estimate)
 
 
 class DynamicCalibration(Calibration):
@@ -104,9 +103,9 @@ class DynamicCalibration(Calibration):
 
     min_sigma_sqr: float = eqx.field(static=True, default=0.0)
 
-    def calibrate(self, residual, H, Q_sqr, *, scale, H_ek0):
+    def calibrate(self, residual, H, Q_sqr, *, H_ek0):
         sigma_sqr = np.maximum(_scalar_estimate(residual, H, Q_sqr), self.min_sigma_sqr)
-        return sigma_sqr, scale(Q_sqr, sigma_sqr)
+        return sigma_sqr, sigma_sqr
 
 
 class DiagonalCalibration(Calibration):
@@ -132,7 +131,7 @@ class DiagonalCalibration(Calibration):
         if self.jacobian not in ("ek1", "ek0"):
             raise ValueError(f'jacobian must be "ek1" or "ek0", got {self.jacobian!r}.')
 
-    def calibrate(self, residual, H, Q_sqr, *, scale, H_ek0):
+    def calibrate(self, residual, H, Q_sqr, *, H_ek0):
         H_calib = H_ek0() if self.jacobian == "ek0" else H
         # diag(H Q H.T)_i = ||(H @ Q_sqr.T)[i]||^2, since Q = Q_sqr.T @ Q_sqr.
         HQ_sqr = H_calib @ Q_sqr.T
@@ -143,7 +142,7 @@ class DiagonalCalibration(Calibration):
         safe_denom = np.where(positive, denom, 1.0)
         estimate = np.where(positive, residual**2 / safe_denom, self.min_sigma_sqr)
         sigma_sqr = np.maximum(estimate, self.min_sigma_sqr)
-        return sigma_sqr, scale(Q_sqr, sigma_sqr)
+        return sigma_sqr, sigma_sqr
 
     def validate(self, prior) -> None:
         # A traced Xi (a differentiated hyperparameter) cannot be checked; the

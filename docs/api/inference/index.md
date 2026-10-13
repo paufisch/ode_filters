@@ -1,16 +1,21 @@
 # Inference
 
-A parameter-inference layer — `ODEFilter`, `fit`, `marginal_loglik`, and
-`InferenceProblem`, plus the `Real` / `PositiveReal` parameter wrappers — for fitting ODE parameters by
-maximizing the marginal log-likelihood of external observations under the
-ODE-constrained Gauss-Markov model. (`fit` minimizes the negative log-likelihood
-via a caller-supplied Optax optimizer.)
+A parameter-inference layer — `ODEFilter`, `fit`, `fit_scipy`, `marginal_loglik`,
+and `InferenceProblem`, plus the `Real` / `PositiveReal` / `NonNegativeReal`
+parameter wrappers — for fitting ODE parameters by maximizing the marginal
+log-likelihood of external observations under the ODE-constrained Gauss-Markov
+model. `fit` minimizes the negative log-likelihood with a caller-supplied Optax
+optimizer; `fit_scipy` with SciPy's quasi-Newton methods (L-BFGS-B by default),
+which usually need far fewer evaluations on low-dimensional problems. The
+diagnostics check a fitted model against its data.
 
 ## Parameter inference
 
 ::: ode_filters.inference.model.ODEFilter
 
 ::: ode_filters.inference.model.fit
+
+::: ode_filters.inference.model.fit_scipy
 
 ::: ode_filters.inference.likelihood.marginal_loglik
 
@@ -28,11 +33,26 @@ See [Selecting hyperparameters from data](../../calibration.md#selecting-hyperpa
 
 ::: ode_filters.inference.InformationCriteria
 
+## Diagnostics and predictives
+
+Under a consistent model the whitened data innovations of a filter pass
+(`result.mz_obs`, `result.Pz_obs_sqr`) are independent standard normal.
+
+::: ode_filters.inference.whitened_residuals
+
+::: ode_filters.inference.nis
+
+::: ode_filters.inference.residual_autocorrelation
+
+::: ode_filters.inference.observation_predictive
+
 ## Parameters
 
 ::: ode_filters.inference.parameters.Real
 
 ::: ode_filters.inference.parameters.PositiveReal
+
+::: ode_filters.inference.parameters.NonNegativeReal
 
 ::: ode_filters.inference.parameters.AbstractParameter
 
