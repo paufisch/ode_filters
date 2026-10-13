@@ -45,17 +45,17 @@ import jax
 import jax.numpy as np
 from jax import Array
 
-from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
-from ..measurement.measurement_models import BaseODEInformation, ObsModel
-from ..priors.gmp_priors import BasePrior
-from .correction import QuadratureCorrection
+from ..gaussian.algebra import sqr_inversion, sqr_marginalization
+from ..information import BaseODEInformation, ObsModel
+from ..linearization.correction import QuadratureCorrection
+from ..linearization.statistical import QuadratureRule, slr_linearize
+from ..priors import BasePrior
 from .gaussian_filter import gaussian_filter, rts_smoother
 from .ode_filter_loop import (
     _is_preconditioned,
     _log_likelihood_contrib,
     rts_sqr_smoother_loop,
 )
-from .statistical_linearization import QuadratureRule, slr_linearize
 
 
 class IPLSResult(NamedTuple):

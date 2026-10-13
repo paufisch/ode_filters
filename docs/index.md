@@ -1,3 +1,6 @@
+![ODE Filters logo](assets/logo.svg#only-light){ width="240" }
+![ODE Filters logo](assets/logo-dark.svg#only-dark){ width="240" }
+
 # ODE Filters
 
 [![PyPI](https://img.shields.io/pypi/v/ode-filters.svg)](https://pypi.org/project/ode-filters/)

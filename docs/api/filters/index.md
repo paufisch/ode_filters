@@ -59,20 +59,6 @@ result)` works directly. `smoother=True` is not supported together with
 
 ::: ode_filters.filters.gaussian_filter.FilterResult
 
-## Linearization (corrections)
-
-See [Linearization schemes](../../corrections.md) for when to use which.
-
-::: ode_filters.filters.correction.Correction
-
-::: ode_filters.filters.correction.CorrectionResult
-
-::: ode_filters.filters.correction.TaylorCorrection
-
-::: ode_filters.filters.correction.IteratedTaylorCorrection
-
-::: ode_filters.filters.correction.QuadratureCorrection
-
 ## Iterated posterior-linearization smoother
 
 ::: ode_filters.filters.ipls.ipls_smoother
@@ -80,20 +66,6 @@ See [Linearization schemes](../../corrections.md) for when to use which.
 ::: ode_filters.filters.ipls.IPLSResult
 
 ::: ode_filters.filters.ipls.affine_filter_scan
-
-## Statistical linearization
-
-::: ode_filters.filters.statistical_linearization.slr_linearize
-
-::: ode_filters.filters.statistical_linearization.SLRModel
-
-::: ode_filters.filters.statistical_linearization.gauss_hermite_rule
-
-::: ode_filters.filters.statistical_linearization.cubature_rule
-
-::: ode_filters.filters.statistical_linearization.quadrature_nodes
-
-::: ode_filters.filters.statistical_linearization.check_arg_projection
 
 ## Step-size control
 

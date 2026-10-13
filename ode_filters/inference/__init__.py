@@ -1,9 +1,8 @@
-"""Inference routines for ODE filtering."""
+"""Parameter inference: marginal likelihoods and fitting."""
 
+from .likelihood import InferenceProblem, marginal_loglik
 from .model import ODEFilter, fit
-from .parameter_inference import InferenceProblem, marginal_loglik
 from .parameters import AbstractParameter, PositiveReal, Real, unwrap
-from .sqr_gaussian_inference import sqr_inversion, sqr_marginalization
 
 __all__ = [
     "AbstractParameter",
@@ -13,7 +12,5 @@ __all__ = [
     "Real",
     "fit",
     "marginal_loglik",
-    "sqr_inversion",
-    "sqr_marginalization",
     "unwrap",
 ]

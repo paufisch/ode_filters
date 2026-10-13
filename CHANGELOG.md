@@ -109,6 +109,8 @@ result except where noted below.
 - CI checks every internal link of the built docs site
   (`.github/scripts/check_site_links.py`); `mkdocs --strict` does not see links
   inside notebooks.
+- A project logo (`docs/assets/`): the ODE lettering on the README and the docs
+  home page, plus a header logo and favicon for the docs site.
 
 ### Changed
 

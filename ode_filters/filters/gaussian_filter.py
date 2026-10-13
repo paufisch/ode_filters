@@ -24,10 +24,10 @@ from typing import NamedTuple, cast
 import jax.numpy as np
 from jax import Array
 
-from ..measurement.measurement_models import BaseODEInformation, ObsModel
-from ..priors.gmp_priors import BasePrior
+from ..information import BaseODEInformation, ObsModel
+from ..linearization.correction import Correction
+from ..priors import BasePrior
 from .adaptive_controller import StepSizeController
-from .correction import Correction
 from .ode_filter_adaptive import sqr_adaptive_solve
 from .ode_filter_loop import (
     CalibrationMode,

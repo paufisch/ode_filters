@@ -21,7 +21,7 @@ import jax.numpy as np
 from jax import Array
 from jax.typing import ArrayLike
 
-from ..priors.gmp_priors import _safe_sqrt
+from ..gaussian.algebra import _safe_sqrt
 
 
 # runtime_checkable so the opt-in jaxtyping/beartype hook

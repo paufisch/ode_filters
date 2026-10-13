@@ -45,7 +45,7 @@ Pass `correction=` to `gaussian_filter`; it defaults to EK1:
 ```python
 import jax.numpy as np
 from ode_filters import gaussian_filter, TaylorCorrection
-from ode_filters.measurement import ODEInformation
+from ode_filters.information import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
 
 

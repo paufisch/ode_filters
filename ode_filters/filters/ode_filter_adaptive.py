@@ -75,18 +75,19 @@ import numpy as onp
 from jax import Array
 from jax.typing import ArrayLike
 
-from ..inference.sqr_gaussian_inference import (
+from ..gaussian.algebra import (
+    _safe_sqrt,
     compose_backward_conditionals,
     sqr_inversion,
     sqr_marginalization,
 )
-from ..measurement.measurement_models import (
+from ..information import (
     BaseODEInformation,
     ObsModel,
 )
-from ..priors.gmp_priors import BasePrior, _safe_sqrt
+from ..linearization.correction import Correction
+from ..priors import BasePrior
 from .adaptive_controller import PIController, StepSizeController
-from .correction import Correction
 from .ode_filter_loop import (
     _DIAGONAL_MODES,
     CalibrationMode,

@@ -28,8 +28,8 @@ import equinox as eqx
 import jax.numpy as np
 from jax import Array
 
-from ..measurement.measurement_models import ObsModel, ODEInformation
-from .parameter_inference import InferenceProblem, marginal_loglik
+from ..information import ObsModel, ODEInformation
+from .likelihood import InferenceProblem, marginal_loglik
 
 
 class ODEFilter(eqx.Module):

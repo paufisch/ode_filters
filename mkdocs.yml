@@ -4,6 +4,8 @@ repo_url: https://github.com/paufisch/ode_filters
 docs_dir: docs
 theme:
   name: material
+  logo: assets/logo-header.svg
+  favicon: assets/favicon.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -108,7 +110,9 @@ nav:
   - API Reference:
       - Overview: api/index.md
       - Filters: api/filters/index.md
+      - Linearization: api/linearization/index.md
+      - Information: api/information/index.md
+      - Priors: api/priors/index.md
       - Calibration: api/calibration/index.md
       - Inference: api/inference/index.md
-      - Measurement: api/measurement/index.md
-      - Priors: api/priors/index.md
+      - Gaussian algebra: api/gaussian/index.md

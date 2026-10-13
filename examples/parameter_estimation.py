@@ -18,7 +18,7 @@ import jax.random as jrandom
 import optax
 
 from ode_filters import ODEFilter, fit
-from ode_filters.measurement import Measurement, prepare_observations
+from ode_filters.information import Measurement, prepare_observations
 from ode_filters.priors import IWP
 
 jax.config.update("jax_enable_x64", True)
