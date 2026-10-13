@@ -7,149 +7,194 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
-Correctness fixes: several inputs that used to return silently wrong
-results now raise, `diagonal_ekf0` is fixed for second-order
-ODEs, and gradients stay finite at equilibria. Measurement models validate their
-inputs up front, and the docs are fixed and reworked. No valid call changes its
-result except where noted below.
-
-### Fixed
-
-- `PrecondMaternPrior.A` / `Q` -- and so every solve with it -- returned NaN at
-  short length scales (e.g. `q = 2`, `length_scale = 2.6e-3`, `h = 1e-2`): the
-  0.7.3 fix reached only `MaternPrior`, and the preconditioned copy still took
-  the `expm` of the overflowing Hamiltonian block. Both priors now share the
-  length-scale-normalized `A(h)` and the square-root MFD `Q(h)`; the
-  preconditioned matrices equal `T^-1 A T` / `T^-1 Q T^-T` of the plain ones.
-- `gaussian_filter_adaptive` (and the internal adaptive loop) accepted
-  preconditioned priors but used their bar-space `A(h)` / `Q_sqr(h)` as
-  plain-space matrices, returning `success=False` and a wrong state without an
-  error. They now raise `NotImplementedError`; use the plain prior on the
-  adaptive path, or the preconditioned prior with `gaussian_filter`.
-- `JointPrior` accepted a preconditioned sub-prior and silently returned a wrong
-  solution (it carries no `T(h)`). It now raises `TypeError` pointing to
-  `PrecondJointPrior`.
-- `calibration="diagonal_ekf0"` built its EK0 denominator from the prior's `E1`
-  instead of the measurement's `E_constraint`. For second-order ODEs
-  (`SecondOrderODEInformation*`) that selects the wrong derivative and inflated
-  `sigma_hat^2` by orders of magnitude (median 190 instead of 0.026 on
-  `x'' = -x`); the mean was unaffected, the uncertainty was not. **This changes
-  the calibrated output of second-order models run with `diagonal_ekf0`**;
-  first-order models are unchanged.
-- `gaussian_filter_adaptive` did not validate `calibration`: a misspelled mode
-  ran as `"none"`, and a diagonal mode with a non-diagonal state-block `Xi` was
-  accepted. Every entry point now runs the same check and raises the same
-  `ValueError` as `gaussian_filter`.
-- Reverse-mode gradients were NaN wherever a diffusion estimate or the adaptive
-  local error is exactly zero -- e.g. any system started at an equilibrium or at
-  rest, under the default `calibration="dynamic"` (and on the adaptive path even
-  with `"none"`): `sqrt'(0) = inf` turned the backward pass into `0 * inf`. The
-  `sigma^2` scaling (`apply_state_sigma_sqr`, `apply_state_sigma_to_cov_sqr`,
-  `rescale_sqr`, `rescale_sqr_seq`) and the adaptive error norm now use a
-  zero-safe square root. Forward values are unchanged.
-- `gaussian_filter_adaptive` ignored a custom controller's `propose`: it read
-  the private `_alpha` / `_beta` coefficients and ran its own copy of the PI
-  law. It now calls `controller.propose`. The built-in controllers produce the
-  same step sizes as before.
-- `BlackBoxMeasurement` could not be used in any solver (`AttributeError: ...
-  'ode_dim'`), although the docs present it as a drop-in measurement model. It
-  now has an `ode_dim` (see Added).
-- `IOUPPrior` accepted `n_quad <= q` and returned a wrongly shaped `Q_sqr`; it
-  now raises `ValueError`, like `MaternPrior`.
-- The opt-in runtime type checking (`ODE_FILTERS_TYPECHECK=1`) failed at import:
-  the `rescale_sqr` `prior=` protocol was not `@runtime_checkable`.
-- Tests: the solver-validity uncertainty-coverage test projected the covariance
-  factor on the wrong side (`E0 @ P_sqr` instead of `P_sqr @ E0.T`), checking a
-  band ~1e4 times too wide; the logistic observation test compared against the
-  analytic solution for the wrong initial value.
-
-- Input checks for configurations that used to fail silently or deep inside a
-  solve:
-  - `ODEInformation` and its siblings validate their selection matrices (one
-    column per state entry; `E1` / `E2` with as many rows as `E0`; a missing
-    `E2` names the `q >= 2` requirement). A sliced `E1` used to broadcast into
-    a wrong residual.
-  - Noise covariances (`Measurement(noise=...)`, the `R` setters,
-    `BlackBoxMeasurement(noise=...)`) are checked up front: noise-free
-    channels (zero rows and columns) are fine, but a singular covariance that
-    mixes channels, or an indefinite one, now raises `ValueError` instead of
-    producing NaN in the solve. A wrongly shaped `Measurement` noise raises too.
-  - `constraints=` rejects entries that are not `Conservation` (they used to be
-    dropped silently) and copies the list, so appending to it later no longer
-    changes the model. `Conservation` and `Measurement` accept array-likes such
-    as nested lists.
-  - `TransformedMeasurement` used a given `sigma_jacobian` only when
-    `use_autodiff_jacobian=False` was passed as well; it now uses it whenever it
-    is given (see Changed).
-- `JointPrior.xi` / `PrecondJointPrior.xi` raised `AttributeError`; they return
-  the block-diagonal `blkdiag(Xi_x, Xi_u)`.
-- `TransformedMeasurement` around a `BlackBoxMeasurement` now forwards `ode_dim`,
-  so it runs in the solvers.
-- Docs: `gaussian_filter` was missing from the API reference (the generator
-  resolved the name to the module of the same name), the calibration functions
-  had no API page, every cross-link inside the notebooks was broken on the site,
-  the measurement page's joint state-parameter example crashed, `sharp-bits`
-  claimed the solvers were already jitted, the README / home install command
-  installed no dev tools, and the preconditioned-coordinate fields of
-  `FilterResult` were undocumented (the post-hoc calibration recipe used them as
-  if they were in the original coordinates).
-- Tests: about 20 "scan vs Python loop" parity tests compared `gaussian_filter`
-  with the function it calls; they now compare plain against preconditioned
-  priors, and the stacked-residual test recomputes `sigma^2` independently.
-  The solver-validity accuracy tolerances were 5-9 orders of magnitude looser
-  than the measured errors.
+A breaking release that rebuilds the package around one filter step and turns it
+towards inference from data. Every solver -- fixed grid, adaptive, frozen
+linearization, iterated smoother -- now runs the same step; preconditioned priors
+work everywhere; priors and information models are `equinox` modules; and the
+release adds the conditional evidence, information criteria, posterior samples,
+dense output and consistency diagnostics. There is no deprecation period: the
+[migration guide](https://paufisch.github.io/ode_filters/migration/) lists every
+change a 0.7 user can hit, old next to new. The input checks and correctness
+fixes below come on top.
 
 ### Added
 
+- **Time grids.** `gaussian_filter` takes the time grid `ts` (any strictly
+  increasing array) instead of `tspan` and `N`; on a concrete uniform grid the
+  prior's transition is computed once.
+- **Calibration policies** `NoCalibration`, `DynamicCalibration` and
+  `DiagonalCalibration(jacobian="ek1" | "ek0")`, which own the floor
+  `min_sigma_sqr`. The strings `"none"`, `"dynamic"`, `"diagonal"` and
+  `"diagonal_ekf0"` remain shorthands.
+- **Preconditioning on every path.** Preconditioning is a change of variables
+  inside each step, so `PrecondIWP` and `PrecondMaternPrior` work with adaptive
+  steps, data and the iterated smoother, and `JointPrior` combines plain and
+  preconditioned blocks. `prior.transition(h)` returns the matrices a step
+  computes with (a `Transition`).
+- **Data.** Each step conditions on the rows that have data, so measurements
+  can have different times. The adaptive solver reports the data evidence in
+  `log_likelihood_obs`, smooths with data (`smoother=True`), records its steps
+  (`record_steps=`, `FilterResult.steps`), counts accepted and rejected steps
+  (`n_accepted`, `n_rejected`) and offers `sigma_in_error="running_mean"`.
+- **Frozen linearizations.** `AffineSurrogate`, `taylor_surrogate`,
+  `slr_surrogate` and `affine_filter`: a square-root Kalman filter of a fixed
+  affine model per step.
+- **`iterated_smoother`**: the IEKS (`linearization="taylor"`) and the IPLS
+  (`"slr"`), with warm starts and a per-pass `diagnostics` callback.
+- **Evidence and information criteria.** `fenrir_loglik` and
+  `conditional_loglik` estimate the conditional evidence `log p(Y | Z)` of the
+  data given the ODE information (`marginal_loglik` channels `"fenrir"` and
+  `"dalton"`); `information_criteria` measures what the ODE information and
+  the data say about a hidden input.
+- **Hidden inputs.** `joint_taylor_initialization` gives a consistent initial
+  law for an ODE driven by a hidden input; `MaternPrior.stationary_cov_sqr()`
+  the stationary law, finite at short length scales; `BasePrior.sample` exact
+  prior sample paths on any grid.
+- **Outputs.** `sample_posterior` draws joint sample paths from the smoothing
+  posterior; `interpolate` evaluates filtered or smoothed marginals between the
+  grid nodes, using the diffusion each step propagated with
+  (`FilterResult.diffusion`).
+- **Diagnostics.** `whitened_residuals`, `nis` and `residual_autocorrelation`
+  check a fitted model against its data; `observation_predictive` gives the
+  predictive distribution of linear observations.
+- **Fitting.** `fit_scipy` minimizes with SciPy's quasi-Newton methods
+  (L-BFGS-B by default) on JAX gradients; SciPy joins the `inference` extra.
+  `NonNegativeReal` is a softplus parameter that may start at zero.
+- **Types.** `Gaussian`, `Conditional` and `AffineModel` with the algebra
+  `marginalize`, `invert`, `update`, `compose` and `log_likelihood`
+  (`ode_filters.gaussian`); `Gaussian.cov` and `Gaussian.std` (e.g.
+  `rts_smoother(result).std`); the `MeasurementModel` protocol; `BasePrior`;
+  `filters.kernel.filter_step`.
 - `BlackBoxMeasurement(..., ode_dim=...)` and `BlackBoxMeasurement.ode_dim`: the
   number of leading rows of `g` that drive diffusion calibration (default: all
   rows, i.e. `g` is the ODE residual).
-
-- An API page for `ode_filters.calibration`.
-- CI checks every internal link of the built docs site
-  (`.github/scripts/check_site_links.py`); `mkdocs --strict` does not see links
-  inside notebooks.
-- A project logo (`docs/assets/`): the ODE lettering on the README and the docs
-  home page, plus a header logo and favicon for the docs site.
+- Docs: an *Inference from data* tutorial track (parameter estimation, a hidden
+  input, Bayesian sampling), a *How it compares* page, the migration guide, and
+  an API page for `ode_filters.calibration`. CI checks every internal link of
+  the built site (`.github/scripts/check_site_links.py`). A project logo.
+- `probdiffeq` joins the `benchmarks` extra.
+- Tooling: ruff's docstring rules (Google convention) and an ASCII-only check
+  for the package source; ruff also lints the notebooks; a `slow` marker for
+  the MCMC runs of the example scripts; a float32 smoke test.
 
 ### Changed
 
+- **Layout.** `ode_filters.measurement` is now `ode_filters.information`,
+  `priors.gmp_priors` is split into `priors.base`, `iwp`, `matern`, `ioup`,
+  `joint` and `initialization`, the corrections and statistical linearization
+  move to `ode_filters.linearization`, the square-root algebra to
+  `ode_filters.gaussian`, and `inference.parameter_inference` becomes
+  `inference.likelihood`.
+- **Models are `equinox` modules.** Hyperparameters, selection matrices and
+  noise covariances are pytree leaves; orders, dimensions and vector fields are
+  static. Compile with `equinox.filter_jit` (`jax.jit` with static model
+  arguments fails). `measure.R = ...` becomes `measure.with_noise(...)`,
+  `E_constraint` becomes `E_lhs`, `get_noise(t=...)` becomes `noise_sqr(t)`.
+- **Results.** `FilterResult` is in the original state coordinates for every
+  prior (`m_bar`, `P_bar_sqr` and `T` are gone), gains `diffusion`,
+  `n_accepted`, `n_rejected` and `steps`, and its field order changed.
+  `rts_smoother(result)` takes no prior and returns a `Gaussian`. On the
+  adaptive path `log_likelihood` is the ODE-information evidence only.
+- **Corrections.** `linearize(measure, m, t=...)` returns an `AffineModel` and
+  `correct(measure, x, model, t=...)` returns `(posterior, innovation)`. Each
+  step linearizes once, so EK0 (`TaylorCorrection(order=0)`) calibrates with
+  its own linearization and evaluates no vector-field Jacobian; its
+  `sigma_sqr` changes slightly.
+- **Priors.** `PrecondIWP` and `PrecondMaternPrior` report `A(h)`, `Q(h)` and
+  `Q_sqr(h)` in the original coordinates. A prior implements `A(h)` and
+  `Q_sqr(h)`; `Q(h)` is derived.
+- **Data.** `prepare_observations` raises when a measurement time is not a grid
+  node (it dropped the data silently). Data innovations at rows without data
+  are zero with unit variance.
+- **Inference.** `InferenceProblem` and `ODEFilter` take `ts` instead of
+  `tspan` and `N`, and a calibration policy instead of `min_sigma_sqr`; `fit`
+  trains `ode_params` only.
 - `PController.propose` / `PIController.propose` are written with `jax.numpy`
   so the jittable solver can call them; they return a 0-d JAX array instead of
   a Python `float`, and a non-positive `err_prev` now means "no memory", like
-  `None`. The `StepSizeController` protocol requires only `propose` (it no
-  longer lists `safety`, `min_factor`, `max_factor` and the private `_alpha`).
-  A custom controller passed to `gaussian_filter_adaptive` must be traceable.
-- `TransformedMeasurement(use_autodiff_jacobian=...)` defaults to `None`: autodiff
-  exactly when no `sigma_jacobian` is given. Passing `True` together with a
-  `sigma_jacobian` now raises instead of silently ignoring the Jacobian.
-- The docs build fails when a notebook cell raises (`allow_errors: false`); it
-  used to render the traceback into the page.
-- Docs layout: wider content column, link cards on the home page, API pages
-  grouped by topic with one entry per object, cross-references in docstrings
-  rendered as code instead of raw Sphinx roles, and notebook pages without the
-  `In [n]:` prompts. The tutorials compile with `equinox.filter_jit`, which
-  accepts every argument, instead of a `jax.jit` recipe that broke as soon as a
-  keyword argument was passed.
-- The "Calibration & adaptive steps" tutorial is now a "Calibration modes"
-  notebook (`docs/examples/calibration-modes.ipynb`) that explains what
-  calibration does: without it the band width is set by the arbitrary prior
-  scale; calibration matches the predicted size of the ODE residuals to the
-  observed one, which makes the band independent of that scale; and post-hoc,
-  `"dynamic"` and `"diagonal"` differ in whether the estimate is global, per step
-  or per component. Step-size control is covered by the adaptive-steps guide.
-- The adaptive step-size guide is a shorter, executed page
-  (`docs/adaptive-steps.ipynb`) with a figure of where the solver places its
-  steps on a pulse-forced problem; the internal driver's knobs, dense smoothing
-  and the per-step diffusion trace are no longer covered there.
-- All notebook figures use the `tueplots` `tue_ai_beamer` style with Paul Tol's
-  colorblind-safe "bright" palette (`tueplots` is added to the `docs` dependency
-  group) instead of `docs/examples/ode_filters.mplstyle`, which
-  is removed; titles moved into the text, one legend per figure, placed inside
-  the axes where there is room. Figures are rendered as SVG and scaled to the
-  content width, so they stay sharp.
-- The home page no longer calls the library "`solve_ivp`, but with a calibrated
-  uncertainty"; it says what the library does and explains the comparison.
+  `None`. The `StepSizeController` protocol requires only `propose`. A custom
+  controller passed to `gaussian_filter_adaptive` must be traceable.
+- `TransformedMeasurement` uses autodiff exactly when no `sigma_jacobian` is
+  given.
+- Docs: the home page and README lead with inference; wider layout, home-page
+  cards, API pages grouped by topic; tutorials compile with
+  `equinox.filter_jit`; the "Calibration modes" notebook explains what
+  calibration does; the adaptive-steps guide is a short executed page; figures
+  use `tueplots` with Paul Tol's bright palette as SVG. The docs build fails
+  when a notebook cell raises.
+
+### Removed
+
+- `ipls_smoother` and `IPLSResult`: use `iterated_smoother(..., linearization="slr")`.
+- `affine_filter_scan`: use `affine_filter`.
+- `PrecondJointPrior`: use `JointPrior` with preconditioned blocks.
+- `ODEconservation` and `SecondOrderODEconservation`: pass
+  `constraints=[Conservation(A, p)]` to the information classes.
+- `CorrectionResult`; `sqr_marginalization`, `sqr_inversion` and
+  `compose_backward_conditionals` (use `marginalize`, `invert`, `compose`).
+- The `min_sigma_sqr=` arguments of the solvers (use a calibration policy).
+- `TransformedMeasurement(use_autodiff_jacobian=...)`;
+  `Measurement.find_index`, `.residual`, `.jacobian` and `.get_noise_matrix()`
+  (use `Measurement.R`); `Conservation.jacobian()` (use `.A`).
+- The internal drivers `filters.ode_filter_loop`, `ode_filter_step`,
+  `ode_filter_adaptive` (with the adaptive loop `sqr_adaptive_loop`, named
+  `ekf1_sqr_adaptive_loop` before 0.7.2) and `ipls`. Its per-step trace is
+  `record_steps=` and its `sigma_in_error="running_mean"` an option of
+  `gaussian_filter_adaptive`.
+- `MaternPrior` internals `_F`, `_L`, `_q`, `S`, `n` and `A_and_Q`.
+- `docs/examples/ode_filters.mplstyle`.
+
+### Fixed
+
+- `PrecondMaternPrior` returned NaN at short length scales (e.g. `q = 2`,
+  `length_scale = 2.6e-3`, `h = 1e-2`): the 0.7.3 fix reached only
+  `MaternPrior`. Both now share the length-scale-normalized `A(h)` and the
+  square-root `Q_sqr(h)`.
+- `gaussian_filter_adaptive` used a preconditioned prior's preconditioned
+  matrices as if they were in the original coordinates, and `JointPrior`
+  ignored a preconditioned block's coordinates; both returned wrong solutions
+  without an error. Both now work (see Added).
+- `calibration="diagonal_ekf0"` took the EK0 Jacobian from the prior's `E1`
+  instead of the model's left-hand-side selector. For second-order ODEs that
+  selects the wrong derivative and inflated `sigma_sqr` by orders of magnitude
+  (median 190 instead of 0.026 on `x'' = -x`); the means were right. **This
+  changes the calibrated output of second-order models run with
+  `diagonal_ekf0`.**
+- `gaussian_filter_adaptive` did not validate `calibration`: a misspelled mode
+  ran as `"none"`, and a diagonal mode with a non-diagonal `Xi` was accepted.
+- Reverse-mode gradients were NaN wherever a diffusion estimate or the adaptive
+  local error is exactly zero -- e.g. any system started at an equilibrium or at
+  rest: `sqrt'(0) = inf` turned the backward pass into `0 * inf`. The scaling
+  and the adaptive error norm use a zero-safe square root; forward values are
+  unchanged.
+- `gaussian_filter_adaptive` ignored a custom controller's `propose` and ran
+  its own copy of the PI law. The built-in controllers produce the same step
+  sizes as before.
+- `BlackBoxMeasurement` could not be used in any solver (`AttributeError: ...
+  'ode_dim'`); `TransformedMeasurement` around it now forwards `ode_dim` too.
+- `IOUPPrior` accepted `n_quad <= q` and returned a wrongly shaped `Q_sqr`.
+- The opt-in runtime type checking (`ODE_FILTERS_TYPECHECK=1`) failed at import.
+- `JointPrior.xi` raised `AttributeError`; it returns `blkdiag(Xi_x, Xi_u)`.
+- Input checks for configurations that failed silently or deep inside a solve:
+  - the information classes validate their selection matrices (a sliced `E1`
+    used to broadcast into a wrong residual);
+  - noise covariances are checked up front: noise-free channels are fine, but a
+    singular covariance that mixes channels, or an indefinite one, raises
+    instead of producing NaN;
+  - `constraints=` rejects entries that are not `Conservation` and copies the
+    list; `Conservation` and `Measurement` accept array-likes;
+  - `TransformedMeasurement` used a given `sigma_jacobian` only with
+    `use_autodiff_jacobian=False`.
+- Docs: `gaussian_filter` was missing from the API reference, cross-links inside
+  the notebooks were broken on the site, the joint state-parameter example
+  crashed, `sharp-bits` claimed the solvers were already jitted, and the README
+  install command installed no dev tools.
+- Tests: the uncertainty-coverage test checked a band ~1e4 times too wide, the
+  logistic observation test compared against the wrong initial value, about 20
+  parity tests compared a function with itself, and the accuracy tolerances
+  were 5-9 orders of magnitude looser than the measured errors. The solvers are
+  now also checked against recorded reference outputs and a dense Kalman
+  oracle.
 
 ## [0.7.3] - 2026-10-04
 

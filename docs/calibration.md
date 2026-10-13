@@ -29,11 +29,12 @@ run carries, and rescale its covariances.
 
 Cheapest workflow: run any existing fixed-step filter, then rescale.
 `posthoc_mle_sigma_sqr` is the joint MLE of `sigma^2` under the assumption
-that one constant scale explains every step's whitened residual -- the same
+that one constant scale explains every step's whitened residual — the same
 Gaussian likelihood the per-step estimator maximises, but with a single
 parameter rather than one per step. The closed form makes
-`posthoc_mle_sigma_sqr` numerically identical to `aggregate_sigma_sqr(seq,
-kind="mean")` applied to the per-step trace.
+`posthoc_mle_sigma_sqr` numerically identical to the mean of the per-step
+terms `quasi_mle_sigma_sqr(mz, Pz_sqr)` (see
+[below](#per-step-estimates-on-a-fixed-grid)).
 
 ```python
 import jax.numpy as np
@@ -67,7 +68,7 @@ the residual size well.
 !!! warning "Joint / latent-force priors: pass `prior=`"
 
     For a `JointPrior`, the diffusion `sigma^2` belongs to
-    the ODE-**state** block only -- the hidden/input block must not be rescaled
+    the ODE-**state** block only — the hidden/input block must not be rescaled
     (Schmidt et al. 2021). The default `rescale_sqr` / `rescale_sqr_seq` scale
     the *whole* covariance, which is wrong for these priors. Pass the prior so
     the rescaling is routed through its block-aware
@@ -102,22 +103,24 @@ result.steps.sigma_sqr[:n]  # one estimate per accepted step
 Pass `calibration="none"` to record the estimates without scaling the stored
 covariances (diagnostics only).
 
-### Manual per-step estimation
+### Per-step estimates on a fixed grid
 
-If you want the per-step number outside the adaptive solver (e.g., for
-diagnostics on an existing fixed-step run):
+Two per-step traces measure different things:
+
+- `result.sigma_sqr` is what each step's policy estimated: the local quasi-MLE
+  `r.T (H Q H.T)^-1 r / d` of the residual `r` against the step's own process
+  noise `Q` (Schober et al. 2019; Bosch et al. 2021). It is reported under every
+  policy, also with `calibration="none"`, where it is not applied
+  (`result.diffusion` is what each step propagated with).
+- The global terms weigh the innovation `result.mz` against its full predicted
+  covariance `result.Pz_sqr`. Their mean is the post-hoc MLE above:
 
 ```python
+import jax
 from ode_filters.calibration import quasi_mle_sigma_sqr
 
-sigma_sqr_per_step = [
-    float(quasi_mle_sigma_sqr(mz, Pz_sqr))
-    for mz, Pz_sqr in zip(result.mz, result.Pz_sqr, strict=True)
-]
+seq = jax.vmap(quasi_mle_sigma_sqr)(result.mz, result.Pz_sqr)
 ```
-
-The estimator is a one-line `solve_triangular` on the existing square-root
-covariance.
 
 ## Aggregation
 
@@ -126,12 +129,12 @@ A per-step trace can be turned into a single number in three ways:
 ```python
 from ode_filters.calibration import aggregate_sigma_sqr
 
-mean_sigma = aggregate_sigma_sqr(seq, kind="mean")       # joint-MLE equivalent
+mean_sigma = aggregate_sigma_sqr(seq, kind="mean")       # == posthoc_mle_sigma_sqr
 last_sigma = aggregate_sigma_sqr(seq, kind="last")       # use the final estimate
 running    = aggregate_sigma_sqr(seq, kind="running")    # cumulative mean trace
 ```
 
-`"running"` returns an array of the same length as `seq` -- useful when you
+`"running"` returns an array of the same length as `seq` — useful when you
 want to display the calibrated uncertainty intermediate during integration
 without waiting for the end.
 
@@ -149,7 +152,7 @@ probdiffeq do. With the default `ODEInformation` (`R = 0`) the distinction is
 moot.
 
 For the post-hoc workflow on a fixed-step run with non-zero `R`, the caller
-must pass a noise-free `Pz_sqr` to `posthoc_mle_sigma_sqr` -- the
+must pass a noise-free `Pz_sqr` to `posthoc_mle_sigma_sqr` — the
 covariances returned by the filter include `R` and must be recomputed from the
 saved `(result.m_pred, result.P_pred_sqr)` first.
 
@@ -204,14 +207,18 @@ hyperparameters.
 Calibration scales the posterior to match the size of the residuals. It does
 not correct a prior with the wrong smoothness (`q` too low), a vector field
 that is miscoded, or a Jacobian that the EKF linearisation cannot
-approximate. To check that the calibrated filter is honest, plot the whitened
-residuals: for each step the standardized innovation `z_n = P_z_sqr^{-T} m_z`
-should look like standard normal noise, so `||z_n||^2 / d` hovers near 1 on a
-well-specified problem (much larger means the uncertainty is too tight; much
-smaller means it is too loose).
+approximate. Since calibration fits the scale of the ODE residuals, their
+average size matches by construction (exactly so for the post-hoc MLE); what
+stays informative is their *structure*. The whitened residuals
+`whitened_residuals(result.mz, result.Pz_sqr)` of an honest filter look like
+white noise: a trend over time in `nis(result.mz, result.Pz_sqr)`, or a
+`residual_autocorrelation` far from zero, points at a misspecified model that
+no scale fixes. Against data with a known noise level (`result.mz_obs`,
+`result.Pz_obs_sqr`) the NIS is a test of the scale too: under a consistent
+model it averages the number of observed rows per step.
 
 ## See also
 
-- [Adaptive Step-Size Control](adaptive-steps.ipynb) -- the controller that uses
+- [Adaptive Step-Size Control](adaptive-steps.ipynb) — the controller that uses
   the per-step quasi-MLE.
 - API reference for `ode_filters.calibration`.

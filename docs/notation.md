@@ -17,6 +17,7 @@ library follows.
 | `E2` | $E_2$ | 2nd derivative $\ddot x$ (second-order ODEs only) |
 | `Xi` | $\Xi$ | structural scale matrix of the prior diffusion (shape $d\times d$) |
 | `sigma^2` | $\sigma^2$ | scalar (or per-component) diffusion scale, set by calibration |
+| `diffusion` | $\sigma^2_n$ | the diffusion step $n$ propagated with (`sigma_sqr` under a calibrating policy, one under `"none"`) |
 | `A`, `b`, `Q` | $A(h), b(h), Q(h)$ | prior transition matrix, drift, and process-noise covariance over a step `h` |
 | `H`, `c`, `R` | $H, c, R$ | linearized measurement: Jacobian, offset, noise covariance |
 | `m_pred`, `P_pred` | $m^-, P^-$ | predicted (prior) mean and covariance before an update |
@@ -37,9 +38,19 @@ dense matrix. A name ending in `_sqr` is an upper-triangular factor `A_sqr` with
 
 $$ A = A_{\text{sqr}}^{\top}\, A_{\text{sqr}}. $$
 
-To recover a covariance, multiply back: `P = P_sqr.T @ P_sqr`. The one name
-ending in `_sqr` that is not a factor is the diffusion `sigma_sqr`, which is
-$\sigma^2$ itself. To extract a standard deviation, take `np.sqrt(np.diag(P_sqr.T @ P_sqr))`. The filter never forms `P`
+To recover a covariance, multiply back: `P = P_sqr.T @ P_sqr`, or use the
+`Gaussian` properties: `rts_smoother(result).cov`, and `.std` for the marginal
+standard deviations (computed from the factor's column norms, without forming
+`P`). Two kinds of names break the suffix rule:
+
+- **`sigma_sqr` is not a factor.** It is $\sigma^2$ itself, and so are the
+  names built on it: `min_sigma_sqr`, `quasi_mle_sigma_sqr`,
+  `apply_state_sigma_sqr`.
+- **Model inputs are covariances, not factors.** `Xi`, `R=` and `noise=` take
+  the covariance (or a variance); the models factor them internally
+  (`measure.noise_sqr(t)`, `ObsModel.R_sqr`).
+
+The filter never forms `P`
 explicitly — predictions and updates are QR-based operations on the factors
 (Krämer & Hennig 2024), which keeps the represented covariance positive-*semi*definite
 by construction (`P = P_sqr.T @ P_sqr` is a Gram matrix) and avoids ever forming the

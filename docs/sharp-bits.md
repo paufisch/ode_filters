@@ -19,8 +19,9 @@ jax.config.update("jax_enable_x64", True)
 ### Covariances are square-root factors
 
 Anything named `*_sqr` is an upper-triangular factor, not a covariance. Reconstruct
-with `P = P_sqr.T @ P_sqr`; for standard deviations use
-`np.sqrt(np.diag(P_sqr.T @ P_sqr))`. The one exception is the diffusion:
+with `P = P_sqr.T @ P_sqr`, or use the `Gaussian` properties: for smoothed
+standard deviations, `rts_smoother(result).std`; for filtered ones,
+`result.filtered.std`. The one exception is the diffusion:
 `sigma_sqr` (and a policy's `min_sigma_sqr`) is sigma *squared*, a variance. See
 [Notation](notation.md).
 
@@ -69,6 +70,18 @@ conditions on the rows that have data.
 Both `gaussian_filter` (fixed grid) and `gaussian_filter_adaptive` (save-at-grid)
 are `jit`/`grad`/`vmap`-compatible, so any `jax.grad` over a solve works either way.
 
+### A system at rest needs a diffusion floor
+
+Dynamic calibration estimates the diffusion from each step's ODE residual. A
+system that starts at rest -- for instance a driven oscillator with zero initial
+state and a zero-mean input -- has residuals that vanish identically for the
+first steps, so the estimate is zero, the state block's process noise vanishes,
+and the predicted covariance is singular. The filter survives that, but the
+smoother's backward gains blow up. Set a floor,
+`calibration=DynamicCalibration(min_sigma_sqr=1e-8)`, or use
+`calibration="none"` with a deliberately chosen `Xi` (the usual choice for
+inference).
+
 ### Dynamic calibration absorbs model–data misfit
 
 Diffusion calibration sizes the uncertainty, but a *dynamic* calibration absorbs
@@ -88,18 +101,19 @@ stiff problems, take smaller steps or use adaptive stepping.
 
 ### The uncertainty band looks far too tight (or too wide)
 
-That is a calibration symptom, not a bug. Plot the whitened residuals (see
-[Diffusion calibration](calibration.md) → *What calibration cannot fix*): a
-well-calibrated filter has `||z_n||^2 / d ≈ 1`. Too tight ≫ 1, too wide ≪ 1.
+That is a calibration symptom, not a bug. With data, check the whitened data
+innovations: under a consistent model `nis(result.mz_obs, result.Pz_obs_sqr)`
+averages the number of observed rows per step — much larger means too tight,
+much smaller too wide. Without data, see [Diffusion calibration](calibration.md)
+-> *What calibration cannot fix*.
 
-### How does this compare to `scipy` / Diffrax / probdiffeq / ProbNum?
+### How does this compare to `scipy` / Diffrax / probdiffeq / ProbNumDiffEq.jl / rodeo?
 
-`scipy`/Diffrax are classical solvers — fast point trajectories, no uncertainty.
-`ode_filters`, [probdiffeq](https://github.com/pnkraemer/probdiffeq), and
-[ProbNum](https://probnum.readthedocs.io/) are *probabilistic* solvers (Gaussian
-posterior + likelihood). `ode_filters` focuses on a transparent square-root
-EKF/RTS substrate with first-class custom measurement models. See
-[What is a probabilistic ODE solver?](probabilistic-ode-solvers.md).
+`scipy` and Diffrax are classical solvers: fast point trajectories, no
+uncertainty. The others are probabilistic solvers. [How it compares](comparison.md)
+sets out what each offers, and where `ode_filters` differs: inference from data
+with the ODE as information, hidden inputs, and the evidence for selecting
+hyperparameters.
 
 ### Which function do I call?
 

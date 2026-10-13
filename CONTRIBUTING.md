@@ -62,7 +62,7 @@ Merging to `main` triggers an automated release (see [Releasing](#releasing-main
    uv run pytest                       # tests + coverage
    ```
 
-4. Add a `CHANGELOG.md` entry under the top `... - Unreleased` section (see below).
+4. Add a `CHANGELOG.md` entry under the `## [Unreleased]` section (see below).
 5. Push and open a PR against `development`. Note whether the change is breaking.
 
 The pull-request template prompts for each of these.
@@ -72,16 +72,16 @@ The pull-request template prompts for each of these.
 The split is deliberate: **contributors describe the change, maintainers assign
 the version.**
 
-- **Contributors:** add a line to `CHANGELOG.md` under the top, not-yet-released
-  section (the `## [...] - Unreleased` heading), in the appropriate
+- **Contributors:** add a line to `CHANGELOG.md` under the `## [Unreleased]`
+  section, in the appropriate
   [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) category (`Added`,
   `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`), and flag it if it is
   breaking. **Do not edit `version` in `pyproject.toml`** -- the right bump
   depends on everything else queued for the release, so it is the maintainer's
   call.
 - **Maintainers (at release time):** decide the version under the project's
-  pre-1.0 rule (breaking changes -> minor bump, otherwise patch), stamp the date
-  on the top section (`## [X.Y.Z] - YYYY-MM-DD`, with the version matching
+  pre-1.0 rule (breaking changes -> minor bump, otherwise patch), rename
+  `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` (the version matching
   `pyproject.toml`), refresh the compare links at the bottom of the file, and
   bump `version` in `pyproject.toml` -- all in the release PR (see below).
 
@@ -91,8 +91,9 @@ Releases are automated: publishing to PyPI and creating the GitHub Release happe
 on merge to `main`, gated on green CI. The manual surface is just the release PR.
 
 1. On `development`, in one commit: bump `version` in `pyproject.toml`, and in
-   `CHANGELOG.md` date the top section (`## [X.Y.Z] - YYYY-MM-DD`, version matching
-   `pyproject.toml`) and update the compare links.
+   `CHANGELOG.md` rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` (version
+   matching `pyproject.toml`), open a new empty `## [Unreleased]` above it, and
+   update the compare links.
 2. Open a PR `development -> main` and merge once CI is green.
 3. That's it. On the `main` push, after CI succeeds, the release workflow
    (`.github/workflows/pypi-publish.yml`) reads the version, and if there is no

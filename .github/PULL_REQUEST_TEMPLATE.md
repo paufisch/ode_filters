@@ -21,7 +21,7 @@ See CONTRIBUTING.md for the full workflow. Fill in the sections below.
 - [ ] `uv run pre-commit run --all-files` passes (ruff lint + format, pyright).
 - [ ] `uv run pytest` passes (suite is gated at 100% line coverage).
 - [ ] If public API changed: the `docs/examples/` notebooks still execute.
-- [ ] **Added a `CHANGELOG.md` entry under the top `... - Unreleased` section**
+- [ ] **Added a `CHANGELOG.md` entry under the `## [Unreleased]` section**
       in the right category (Added / Changed / Deprecated / Removed / Fixed /
       Security), and marked it if it is breaking. Do **not** bump the version in
       `pyproject.toml` -- the maintainer assigns the version at release time.
