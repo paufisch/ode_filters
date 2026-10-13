@@ -40,6 +40,7 @@ from jax import Array
 from ..calibration.policies import Calibration, CalibrationMode
 from ..filters.fixed_grid import gaussian_filter
 from ..information import BaseODEInformation, ObsModel
+from .evidence import conditional_loglik, fenrir_loglik
 from .parameters import unwrap
 
 
@@ -74,13 +75,16 @@ class InferenceProblem(NamedTuple):
     prior_fn: Callable[[Any], Any] | None = None
 
 
+_CHANNELS = ("obs", "ode", "both", "fenrir", "dalton")
+
+
 @overload
 def marginal_loglik(
     theta: Any,
     data: ObsModel,
     *,
     model: InferenceProblem,
-    channel: Literal["obs"] = ...,
+    channel: Literal["obs", "fenrir", "dalton"] = ...,
 ) -> Array: ...
 
 
@@ -136,21 +140,24 @@ def marginal_loglik(
               ``K`` observations respectively -- so weight them deliberately
               when combining; the raw sum makes the residual channel's influence
               scale with the grid density.
+            - ``"fenrir"``: the conditional evidence ``log p(Y | Z)`` by Fenrir:
+              one pass without data, then ``fenrir_loglik``.
+            - ``"dalton"``: ``log p(Y | Z)`` by Dalton: a pass with and one
+              without data, then ``conditional_loglik``. With one-shot
+              linearizations it differs from Fenrir's value (see
+              ``ode_filters.inference.evidence``).
 
     Returns:
-        A scalar for ``channel="obs"`` / ``"ode"``, or ``(ll_ode, ll_obs)`` for
-        ``channel="both"``. Maximize over ``theta`` (or minimize the negative)
+        A scalar, or ``(ll_ode, ll_obs)`` for ``channel="both"``. Maximize over ``theta`` (or minimize the negative)
         to fit parameters. ``jax.jit`` / ``jax.grad`` / ``jax.vmap`` over
         ``theta`` are all supported.
 
     Raises:
-        ValueError: If ``channel`` is not one of the three modes, or if ``data``
-            is ``None`` for a channel that needs observations.
+        ValueError: If ``channel`` is unknown, or if ``data`` is ``None`` for a
+            channel that needs observations.
     """
-    if channel not in ("obs", "ode", "both"):
-        raise ValueError(
-            f"channel must be one of 'obs', 'ode', 'both'; got {channel!r}."
-        )
+    if channel not in _CHANNELS:
+        raise ValueError(f"channel must be one of {_CHANNELS}; got {channel!r}.")
     if data is None and channel != "ode":
         raise ValueError(
             f"marginal_loglik(channel={channel!r}) requires observations; pass an "
@@ -162,16 +169,26 @@ def marginal_loglik(
     m_0, P_0_sqr, measure = model.build(theta)
     # prior_fn puts the prior's hyperparameters inside the traced region.
     prior = model.prior if model.prior_fn is None else model.prior_fn(theta)
-    result = gaussian_filter(
-        m_0,
-        P_0_sqr,
-        prior,
-        measure,
-        model.ts,
-        calibration=model.calibration,
-        obs_model=data,
-        correction=model.correction,
-    )
+
+    def run(obs_model: ObsModel | None):
+        return gaussian_filter(
+            m_0,
+            P_0_sqr,
+            prior,
+            measure,
+            model.ts,
+            calibration=model.calibration,
+            obs_model=obs_model,
+            correction=model.correction,
+        )
+
+    if channel in ("fenrir", "dalton"):
+        assert data is not None
+        data_free = run(None)
+        if channel == "fenrir":
+            return fenrir_loglik(data_free, data)
+        return conditional_loglik(run(data), data_free)
+    result = run(data)
     if channel == "ode":
         return result.log_likelihood
     # data was provided, so the filter always fills in the obs-likelihood.
