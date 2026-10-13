@@ -27,6 +27,9 @@ repos:
     rev: 0.8.2
     hooks:
       - id: nbstripout
+        # Drop IDE/venv-specific kernel metadata so notebook diffs stay stable.
+        # Strip the whole kernelspec: nbformat requires display_name if it exists.
+        args: ["--extra-keys", "metadata.kernelspec metadata.language_info"]
   - repo: local
     hooks:
       # Static type checking. Run through `uv` (rather than a pinned mirror) so
