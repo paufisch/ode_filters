@@ -16,6 +16,14 @@ if os.environ.get("ODE_FILTERS_TYPECHECK") == "1":
     install_import_hook("ode_filters", "beartype.beartype")
 
 import jax
+from hypothesis import settings
+
+# Hypothesis profiles: "dev" (default) keeps local runs quick, "ci" runs more
+# examples. Select with HYPOTHESIS_PROFILE=ci. Deadlines are off because the
+# first call of a jitted function includes its compilation.
+settings.register_profile("dev", max_examples=25, deadline=None)
+settings.register_profile("ci", max_examples=100, deadline=None)
+settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 
 # Enable 64-bit precision for all tests
 # This allows tests to use float64 without truncation warnings

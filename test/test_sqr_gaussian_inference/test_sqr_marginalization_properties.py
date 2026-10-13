@@ -27,7 +27,7 @@ from __future__ import annotations
 import jax.numpy as np
 import numpy as onp  # Regular numpy for exceptions
 import pytest
-from hypothesis import given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 from ode_filters.inference.sqr_gaussian_inference import sqr_marginalization
@@ -111,7 +111,6 @@ def load_random_marginalization_case():
 
 
 @given(valid_sqr_marginalization_inputs())
-@settings(max_examples=100, deadline=None)
 def test_sqr_marginalization_property_output_shapes(inputs):
     """Property: Output shapes are always correct."""
     A, b, Q, mu, Sigma = inputs
@@ -126,7 +125,6 @@ def test_sqr_marginalization_property_output_shapes(inputs):
 
 
 @given(valid_sqr_marginalization_inputs())
-@settings(max_examples=100, deadline=None)
 def test_sqr_marginalization_property_output_types(inputs):
     """Property: Outputs are always numpy arrays."""
     A, b, Q, mu, Sigma = inputs
@@ -143,7 +141,6 @@ def test_sqr_marginalization_property_output_types(inputs):
 
 
 @given(valid_sqr_marginalization_inputs())
-@settings(max_examples=100, deadline=None)
 def test_sqr_marginalization_property_no_nan_or_inf(inputs):
     """Property: Outputs never contain NaN or Inf."""
     A, b, Q, mu, Sigma = inputs
@@ -164,7 +161,6 @@ def test_sqr_marginalization_property_no_nan_or_inf(inputs):
         n_state_min=1, n_state_max=10, n_obs_min=1, n_obs_max=10
     )
 )
-@settings(max_examples=50, deadline=None)
 def test_sqr_marginalization_property_numerical_stability_large_dimensions(inputs):
     """Property: Function remains numerically stable for larger dimensions."""
     A, b, Q, mu, Sigma = inputs
@@ -176,7 +172,6 @@ def test_sqr_marginalization_property_numerical_stability_large_dimensions(input
 
 
 @given(valid_sqr_marginalization_inputs())
-@settings(max_examples=50, deadline=None)
 def test_sqr_marginalization_property_norm_bounds(inputs):
     """Property: Output magnitudes remain reasonable."""
     A, b, Q, mu, Sigma = inputs
@@ -197,7 +192,6 @@ def test_sqr_marginalization_property_norm_bounds(inputs):
 
 
 @given(valid_sqr_marginalization_inputs())
-@settings(max_examples=50, deadline=None)
 def test_sqr_marginalization_property_reconstruction(inputs):
     """Property: Reconstructed covariance from sqr form is PD."""
     A, b, Q, mu, Sigma = inputs
@@ -222,7 +216,6 @@ def test_sqr_marginalization_property_reconstruction(inputs):
 
 
 @given(valid_sqr_marginalization_inputs())
-@settings(max_examples=50, deadline=None)
 def test_sqr_marginalization_property_mean_invariance(inputs):
     """Property: Mean is computed the same regardless of form."""
     A, b, Q, mu, Sigma = inputs
@@ -238,7 +231,6 @@ def test_sqr_marginalization_property_mean_invariance(inputs):
 
 
 @given(valid_sqr_marginalization_inputs())
-@settings(max_examples=50, deadline=None)
 def test_sqr_marginalization_property_square_root_reconstruction(inputs):
     """Property: Sigma_z reconstructs to original covariance when squared."""
     A, b, Q, mu, Sigma = inputs
@@ -263,7 +255,6 @@ def test_sqr_marginalization_property_square_root_reconstruction(inputs):
 
 
 @given(valid_sqr_marginalization_inputs())
-@settings(max_examples=50, deadline=None)
 def test_sqr_marginalization_property_no_singular_square_root(inputs):
     """Property: Square-root matrix is non-singular (no zero diagonal elements)."""
     A, b, Q, mu, Sigma = inputs
