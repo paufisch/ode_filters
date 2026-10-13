@@ -54,6 +54,9 @@ class FilterResult(NamedTuple):
             later ODE information (see ``fenrir_loglik``).
         sigma_sqr: Diffusion estimate per step, shape ``[K - 1]`` (``[K - 1, d]``
             for a per-component policy); ``None`` on the adaptive path.
+        diffusion: The diffusion each step propagated with: ``sigma_sqr`` under
+            a scaling policy, one under ``NoCalibration`` (``None`` on the
+            adaptive path).
         m_pred: Predicted means per step, ``[K - 1, D]`` (``None`` on the
             adaptive path).
         P_pred_sqr: Predicted square-root covariances per step.
@@ -86,6 +89,7 @@ class FilterResult(NamedTuple):
     log_likelihood: Array
     log_likelihood_obs: Array | None = None
     sigma_sqr: Array | None = None
+    diffusion: Array | None = None
     m_pred: Array | None = None
     P_pred_sqr: Array | None = None
     G_back: Array | None = None

@@ -127,3 +127,54 @@ def fit(
         params, opt_state, loss = make_step(params, opt_state)
         losses.append(loss)
     return eqx.combine(params, fixed), np.asarray(losses)
+
+
+def fit_scipy(
+    objective: Callable[[Any], Array],
+    theta0: Any,
+    *,
+    method: str = "L-BFGS-B",
+    **options: Any,
+) -> tuple[Any, Any]:
+    """Minimize ``objective(theta)`` with SciPy, using JAX gradients.
+
+    A two-tier alternative to the Optax ``fit``: quasi-Newton methods such as
+    L-BFGS-B converge in far fewer evaluations on the smooth, low-dimensional
+    objectives of hyperparameter selection. ``theta`` may be any pytree of
+    arrays (it is flattened for SciPy and unflattened for the objective); the
+    objective and its gradient are jitted once.
+
+    Args:
+        objective: Scalar function to minimize, e.g. ``lambda th:
+            -marginal_loglik(th, data, model=problem)``.
+        theta0: Initial parameters (a pytree of arrays).
+        method: A gradient-based ``scipy.optimize.minimize`` method.
+        **options: Passed to ``scipy.optimize.minimize`` (e.g. ``bounds``,
+            ``tol``, ``options``).
+
+    Returns:
+        ``(theta_hat, result)``: the minimizer as a pytree like ``theta0``, and
+        SciPy's ``OptimizeResult``.
+
+    Raises:
+        ImportError: If SciPy is not installed (``pip install ode-filters[inference]``).
+    """
+    try:
+        from scipy.optimize import minimize
+    except ImportError as err:  # pragma: no cover - scipy is a dev dependency
+        raise ImportError(
+            "fit_scipy needs SciPy: pip install 'ode-filters[inference]'."
+        ) from err
+    from jax.flatten_util import ravel_pytree
+
+    flat0, unravel = ravel_pytree(theta0)
+    value_and_grad = jax.jit(jax.value_and_grad(lambda flat: objective(unravel(flat))))
+
+    def fun(flat):
+        value, grad = value_and_grad(np.asarray(flat))
+        return float(value), onp.asarray(grad, dtype=float)
+
+    result = minimize(
+        fun, onp.asarray(flat0, dtype=float), jac=True, method=method, **options
+    )
+    return unravel(np.asarray(result.x)), result

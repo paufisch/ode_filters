@@ -34,8 +34,9 @@ classifiers = [
 # `pip install ode-filters[examples]` to run the example notebooks locally.
 examples = ["matplotlib>=3.10.7"]
 # `pip install ode-filters[inference]` to run the parameter-inference example
-# scripts in `examples/` (Optax-based `fit`, NumPyro / BlackJAX posterior sampling).
-inference = ["blackjax>=1.2.0", "numpyro>=0.16.0", "optax>=0.2.0"]
+# scripts in `examples/` (Optax-based `fit`, SciPy-based `fit_scipy`, NumPyro /
+# BlackJAX posterior sampling).
+inference = ["blackjax>=1.2.0", "numpyro>=0.16.0", "optax>=0.2.0", "scipy>=1.13"]
 # `pip install ode-filters[benchmarks]` to run the work-precision benchmark in
 # `benchmarks/`, which compares against probdiffeq and the classical Diffrax solver.
 benchmarks = ["diffrax>=0.6", "matplotlib>=3.10.7"]

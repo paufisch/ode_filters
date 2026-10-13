@@ -132,6 +132,7 @@ def run_filter(
         log_likelihood=np.sum(out.log_likelihood),
         log_likelihood_obs=None if ll_obs is None else np.sum(ll_obs),
         sigma_sqr=out.sigma_sqr,
+        diffusion=out.diffusion,
         m_pred=out.predicted.m,
         P_pred_sqr=out.predicted.P_sqr,
         G_back=out.backward.G,

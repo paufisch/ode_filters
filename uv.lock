@@ -1595,6 +1595,7 @@ inference = [
     { name = "blackjax" },
     { name = "numpyro" },
     { name = "optax" },
+    { name = "scipy" },
 ]
 
 [package.dev-dependencies]
@@ -1637,6 +1638,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.3.4" },
     { name = "numpyro", marker = "extra == 'inference'", specifier = ">=0.16.0" },
     { name = "optax", marker = "extra == 'inference'", specifier = ">=0.2.0" },
+    { name = "scipy", marker = "extra == 'inference'", specifier = ">=1.13" },
 ]
 provides-extras = ["examples", "inference", "benchmarks"]
 

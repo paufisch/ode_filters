@@ -285,7 +285,6 @@ def test_diagonal_calibration_zero_denominator_floors_without_nan(jacobian):
             residual,
             prior.E1,
             Q_sqr_zero,
-            scale=prior.apply_state_sigma_sqr,
             H_ek0=lambda: prior.E1,
         )
         return np.sum(sigma_sqr)

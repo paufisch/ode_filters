@@ -99,3 +99,29 @@ def unwrap(tree: Any) -> Any:
         tree,
         is_leaf=lambda x: isinstance(x, AbstractParameter),
     )
+
+
+class NonNegativeReal(AbstractParameter):
+    """A non-negative parameter (e.g. a noise floor), via softplus.
+
+    Like ``PositiveReal``, but construction at exactly zero is allowed: it starts
+    at the smallest value softplus represents usefully (about ``2e-9``), so the
+    optimizer can move the parameter away from the boundary or towards it.
+
+    Attributes:
+        unconstrained: The stored unconstrained value.
+    """
+
+    unconstrained: Array
+
+    def __init__(self, value: Any):
+        value = np.asarray(value, dtype=float)
+        self.unconstrained = _softplus_inv(np.maximum(value, _NON_NEGATIVE_FLOOR))
+
+    def unwrap(self) -> Array:
+        return jax.nn.softplus(self.unconstrained)
+
+
+# softplus(-20) ~ 2e-9: small enough to stand for zero next to a noise floor,
+# large enough that the gradient (its sigmoid, ~2e-9) does not underflow.
+_NON_NEGATIVE_FLOOR = 2.0e-9

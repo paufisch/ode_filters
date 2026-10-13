@@ -7,7 +7,7 @@ import jax.numpy as np
 import jax.random as jrandom
 import pytest
 
-from ode_filters import ODEFilter, PositiveReal, Real, fit, unwrap
+from ode_filters import NonNegativeReal, ODEFilter, PositiveReal, Real, fit, unwrap
 from ode_filters.information import Measurement, prepare_observations
 from ode_filters.priors import IWP
 
@@ -24,6 +24,16 @@ def test_positive_real_round_trip():
         p = PositiveReal(v)
         assert np.allclose(p.unwrap(), v, rtol=1e-5)
         assert float(p.unwrap()) > 0.0
+
+
+def test_non_negative_real_accepts_zero():
+    for v in [0.5, 2.0, 100.0]:
+        assert np.allclose(NonNegativeReal(v).unwrap(), v, rtol=1e-5)
+    at_zero = NonNegativeReal(0.0)
+    assert 0.0 < float(at_zero.unwrap()) < 1e-8
+    grad = jax.grad(lambda p: p.unwrap())(at_zero).unconstrained
+    assert np.isfinite(grad) and float(grad) > 0.0
+    assert float(NonNegativeReal(-1.0).unwrap()) < 1e-8
 
 
 def test_real_is_identity():
