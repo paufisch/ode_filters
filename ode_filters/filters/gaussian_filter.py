@@ -25,17 +25,15 @@ import jax.numpy as np
 from jax import Array
 
 from ..measurement.measurement_models import BaseODEInformation, ObsModel
-from ..priors.gmp_priors import (
-    BasePrior,
-    PrecondIWP,
-    PrecondJointPrior,
-    PrecondMaternPrior,
-)
+from ..priors.gmp_priors import BasePrior
+from .adaptive_controller import StepSizeController
 from .correction import Correction
-from .ode_filter_adaptive import CalibrationMode, sqr_adaptive_solve
+from .ode_filter_adaptive import sqr_adaptive_solve
 from .ode_filter_loop import (
+    CalibrationMode,
     DynamicObsScanLoopResult,
     DynamicScanLoopResult,
+    _is_preconditioned,
     rts_sqr_smoother_loop,
     rts_sqr_smoother_loop_preconditioned,
     sqr_loop_dynamic_scan,
@@ -122,12 +120,6 @@ class FilterResult(NamedTuple):
     P_bar_sqr: Array | None
     T: Array | None
     success: Array | None = None
-
-
-def _is_preconditioned(prior: BasePrior) -> bool:
-    # All preconditioned priors (incl. the joint one, which is not a BasePrior
-    # subclass) carry a preconditioner and use the bar-space recursion.
-    return isinstance(prior, (PrecondIWP, PrecondMaternPrior, PrecondJointPrior))
 
 
 def gaussian_filter(
@@ -303,7 +295,7 @@ def gaussian_filter_adaptive(
     rtol: float = 1e-2,
     h_init: float | None = None,
     calibration: CalibrationMode = "dynamic",
-    controller=None,
+    controller: StepSizeController | None = None,
     min_sigma_sqr: float = 0.0,
     max_steps: int = 4096,
     smoother: bool = False,

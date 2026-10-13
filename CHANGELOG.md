@@ -7,6 +7,76 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+Correctness fixes: several inputs that used to return silently wrong
+results now raise, `diagonal_ekf0` is fixed for second-order
+ODEs, and gradients stay finite at equilibria. No valid call changes its result
+except where noted below.
+
+### Fixed
+
+- `PrecondMaternPrior.A` / `Q` -- and so every solve with it -- returned NaN at
+  short length scales (e.g. `q = 2`, `length_scale = 2.6e-3`, `h = 1e-2`): the
+  0.7.3 fix reached only `MaternPrior`, and the preconditioned copy still took
+  the `expm` of the overflowing Hamiltonian block. Both priors now share the
+  length-scale-normalized `A(h)` and the square-root MFD `Q(h)`; the
+  preconditioned matrices equal `T^-1 A T` / `T^-1 Q T^-T` of the plain ones.
+- `gaussian_filter_adaptive` (and the internal adaptive loop) accepted
+  preconditioned priors but used their bar-space `A(h)` / `Q_sqr(h)` as
+  plain-space matrices, returning `success=False` and a wrong state without an
+  error. They now raise `NotImplementedError`; use the plain prior on the
+  adaptive path, or the preconditioned prior with `gaussian_filter`.
+- `JointPrior` accepted a preconditioned sub-prior and silently returned a wrong
+  solution (it carries no `T(h)`). It now raises `TypeError` pointing to
+  `PrecondJointPrior`.
+- `calibration="diagonal_ekf0"` built its EK0 denominator from the prior's `E1`
+  instead of the measurement's `E_constraint`. For second-order ODEs
+  (`SecondOrderODEInformation*`) that selects the wrong derivative and inflated
+  `sigma_hat^2` by orders of magnitude (median 190 instead of 0.026 on
+  `x'' = -x`); the mean was unaffected, the uncertainty was not. **This changes
+  the calibrated output of second-order models run with `diagonal_ekf0`**;
+  first-order models are unchanged.
+- `gaussian_filter_adaptive` did not validate `calibration`: a misspelled mode
+  ran as `"none"`, and a diagonal mode with a non-diagonal state-block `Xi` was
+  accepted. Every entry point now runs the same check and raises the same
+  `ValueError` as `gaussian_filter`.
+- Reverse-mode gradients were NaN wherever a diffusion estimate or the adaptive
+  local error is exactly zero -- e.g. any system started at an equilibrium or at
+  rest, under the default `calibration="dynamic"` (and on the adaptive path even
+  with `"none"`): `sqrt'(0) = inf` turned the backward pass into `0 * inf`. The
+  `sigma^2` scaling (`apply_state_sigma_sqr`, `apply_state_sigma_to_cov_sqr`,
+  `rescale_sqr`, `rescale_sqr_seq`) and the adaptive error norm now use a
+  zero-safe square root. Forward values are unchanged.
+- `gaussian_filter_adaptive` ignored a custom controller's `propose`: it read
+  the private `_alpha` / `_beta` coefficients and ran its own copy of the PI
+  law. It now calls `controller.propose`. The built-in controllers produce the
+  same step sizes as before.
+- `BlackBoxMeasurement` could not be used in any solver (`AttributeError: ...
+  'ode_dim'`), although the docs present it as a drop-in measurement model. It
+  now has an `ode_dim` (see Added).
+- `IOUPPrior` accepted `n_quad <= q` and returned a wrongly shaped `Q_sqr`; it
+  now raises `ValueError`, like `MaternPrior`.
+- The opt-in runtime type checking (`ODE_FILTERS_TYPECHECK=1`) failed at import:
+  the `rescale_sqr` `prior=` protocol was not `@runtime_checkable`.
+- Tests: the solver-validity uncertainty-coverage test projected the covariance
+  factor on the wrong side (`E0 @ P_sqr` instead of `P_sqr @ E0.T`), checking a
+  band ~1e4 times too wide; the logistic observation test compared against the
+  analytic solution for the wrong initial value.
+
+### Added
+
+- `BlackBoxMeasurement(..., ode_dim=...)` and `BlackBoxMeasurement.ode_dim`: the
+  number of leading rows of `g` that drive diffusion calibration (default: all
+  rows, i.e. `g` is the ODE residual).
+
+### Changed
+
+- `PController.propose` / `PIController.propose` are written with `jax.numpy`
+  so the jittable solver can call them; they return a 0-d JAX array instead of
+  a Python `float`, and a non-positive `err_prev` now means "no memory", like
+  `None`. The `StepSizeController` protocol requires only `propose` (it no
+  longer lists `safety`, `min_factor`, `max_factor` and the private `_alpha`).
+  A custom controller passed to `gaussian_filter_adaptive` must be traceable.
+
 ## [0.7.3] - 2026-10-04
 
 A patch release: `MaternPrior` no longer returns NaN transition/process-noise

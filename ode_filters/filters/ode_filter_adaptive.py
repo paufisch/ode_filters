@@ -16,8 +16,10 @@ Four calibration schemes are exposed via the ``calibration`` parameter:
   larger-residual component, which starves smaller-scale components).
 
 - ``"diagonal_ekf0"``: per-component
-  ``sigma_hat^2_i = m_z[i]^2 / (E_1 Q E_1.T)_ii``. Because ``E_1`` selects
-  only the first-derivative block, ``E_1 Q E_1.T`` is *exactly* diagonal
+  ``sigma_hat^2_i = m_z[i]^2 / (H_0 Q H_0.T)_ii`` with the EK0 Jacobian
+  ``H_0 = E_constraint`` of the measurement (``E_1`` for ``x' = f``, ``E_2`` for
+  ``x'' = f``). Because ``H_0`` selects a single derivative block,
+  ``H_0 Q H_0.T`` is *exactly* diagonal
   when ``xi`` is diagonal -- so ``sigma_hat^2_i`` is the genuine MLE in a
   block-diagonal sub-model for component ``i``. This is the standard
   per-component recipe (Bosch et al. 2021 §4.2, ``DynamicMVDiffusion``)
@@ -82,19 +84,21 @@ from ..measurement.measurement_models import (
     BaseODEInformation,
     ObsModel,
 )
-from ..priors.gmp_priors import BasePrior
+from ..priors.gmp_priors import BasePrior, _safe_sqrt
 from .adaptive_controller import PIController, StepSizeController
 from .correction import Correction
 from .ode_filter_loop import (
+    _DIAGONAL_MODES,
+    CalibrationMode,
     _calibrate_diffusion,
-    _check_state_xi_diagonal,
+    _ekf0_jacobian,
+    _is_preconditioned,
     _log_likelihood_contrib,
+    _validate_calibration,
 )
 from .ode_filter_step import sqr_filter_step
 
-CalibrationMode = Literal["dynamic", "diagonal", "diagonal_ekf0", "none"]
 SigmaInError = Literal["per_step", "running_mean"]
-_VALID_CALIBRATIONS = ("dynamic", "diagonal", "diagonal_ekf0", "none")
 
 
 class AdaptiveLoopResult(NamedTuple):
@@ -136,7 +140,9 @@ def _local_error_norm(
     OrdinaryDiffEq and Bosch et al. (2021).
     """
     scale = atol + rtol * np.abs(m_pred_value)
-    return np.sqrt(np.mean((D / scale) ** 2))
+    # _safe_sqrt: an exactly-zero error (e.g. at an equilibrium) would otherwise
+    # give a NaN reverse-mode derivative.
+    return _safe_sqrt(np.mean((D / scale) ** 2))
 
 
 def _make_step_body(
@@ -171,9 +177,22 @@ def _make_step_body(
     (e.g. ``sigma_in_error="running_mean"``). ``sigma_sqr_vec`` is always a
     length-``d`` array (broadcast from the scalar in non-diagonal modes), so
     downstream code has a uniform shape.
+
+    Raises:
+        NotImplementedError: If ``prior`` is preconditioned. The step body uses
+            ``prior.A(h)`` / ``prior.Q_sqr(h)`` as plain-space matrices; for a
+            preconditioned prior those live in bar coordinates, so the solve
+            would silently go wrong.
     """
+    if _is_preconditioned(prior):
+        raise NotImplementedError(
+            f"The adaptive solvers do not support preconditioned priors "
+            f"(got {type(prior).__name__}). Use the plain IWP / MaternPrior / "
+            "JointPrior with gaussian_filter_adaptive, or the preconditioned prior "
+            "with the fixed-grid gaussian_filter."
+        )
     E0_state = prior.E0_state
-    E1 = prior.E1
+    E_ekf0 = _ekf0_jacobian(measure, calibration)
     d = E0_state.shape[0]
     d_ode = measure.ode_dim
 
@@ -201,14 +220,12 @@ def _make_step_body(
         mz_ode = mz_pred[:d_ode]
 
         sigma_sqr, Q_step_sqr = _calibrate_diffusion(
-            calibration, mz_ode, H_ode, E1, Q_h_sqr, prior, min_sigma_sqr
+            calibration, mz_ode, H_ode, E_ekf0, Q_h_sqr, prior, min_sigma_sqr
         )
         # The adaptive driver stores/uses a per-component vector; broadcast the
         # scalar (dynamic / none) modes to length d.
         sigma_vec = (
-            sigma_sqr
-            if calibration in ("diagonal", "diagonal_ekf0")
-            else sigma_sqr * np.ones(d)
+            sigma_sqr if calibration in _DIAGONAL_MODES else sigma_sqr * np.ones(d)
         )
 
         (
@@ -236,7 +253,7 @@ def _make_step_body(
         # dense Q is never formed.
         E0Q_sqr = E0_state @ Q_h_sqr.T
         D_unscaled_sqr_diag = np.sum(E0Q_sqr * E0Q_sqr, axis=1)
-        D = np.sqrt(np.maximum(sigma_vec * D_unscaled_sqr_diag, 0.0))
+        D = _safe_sqrt(np.maximum(sigma_vec * D_unscaled_sqr_diag, 0.0))
         m_value = E0_state @ m_pred
         err = _local_error_norm(D, m_value, atol, rtol)
 
@@ -328,8 +345,10 @@ def sqr_adaptive_loop(
               systems (one component's residual dominates ``sigma_hat^2``
               and starves the others).
             - ``"diagonal_ekf0"`` -- per-component
-              ``sigma_hat^2_i = m_z[i]^2 / (E_1 Q E_1.T)_ii`` using the
-              EK0 observation matrix ``H_0 = E_1``. The denominator is
+              ``sigma_hat^2_i = m_z[i]^2 / (H_0 Q H_0.T)_ii`` using the
+              EK0 observation matrix ``H_0 = measure.E_constraint`` (``E_1``
+              for a first-order ODE, ``E_2`` for a second-order one). The
+              denominator is
               *exactly* diagonal when ``xi`` is diagonal, so the
               per-component estimator is the genuine MLE in a
               block-diagonal sub-model. The recommended choice for
@@ -347,7 +366,7 @@ def sqr_adaptive_loop(
 
             All four modes work with :class:`JointPrior` /
             :class:`PrecondJointPrior`: the diagonal modes scale only the
-            state block per-component and require ``prior._prior_x.xi`` to
+            state block per-component and require ``prior.xi_state`` to
             be diagonal.
 
             For the diagonal modes the per-step entries of
@@ -387,17 +406,12 @@ def sqr_adaptive_loop(
         ValueError: If ``tspan`` is non-increasing or ``calibration`` /
             ``sigma_in_error`` is unknown.
     """
-    if calibration not in _VALID_CALIBRATIONS:
-        raise ValueError(
-            f"calibration must be one of {_VALID_CALIBRATIONS}; got {calibration!r}."
-        )
+    _validate_calibration(calibration, prior)
     if sigma_in_error not in ("per_step", "running_mean"):
         raise ValueError(
             f"sigma_in_error must be 'per_step' or 'running_mean'; "
             f"got {sigma_in_error!r}."
         )
-    if calibration in ("diagonal", "diagonal_ekf0"):
-        _check_state_xi_diagonal(prior, calibration)
     t_start, t_end = float(tspan[0]), float(tspan[1])
     if t_end <= t_start:
         raise ValueError(f"tspan must be increasing; got {tspan!r}")
@@ -425,7 +439,7 @@ def sqr_adaptive_loop(
     P_curr_sqr = Sigma_0_sqr
     err_prev: float | None = None
     d_components = int(prior.E0_state.shape[0])
-    is_diagonal = calibration in ("diagonal", "diagonal_ekf0")
+    is_diagonal = calibration in _DIAGONAL_MODES
 
     t_list: list[float] = [t_start]
     m_seq: list[Array] = [mu_0]
@@ -522,11 +536,11 @@ def sqr_adaptive_loop(
             m_curr = m_new
             P_curr_sqr = P_new_sqr
             t = t_next
-            h = min(h_max, controller.propose(h_try, err_val, err_prev))
+            h = min(h_max, float(controller.propose(h_try, err_val, err_prev)))
             err_prev = err_val
         else:
             n_rejected += 1
-            h = controller.propose(h_try, err_val, err_prev=None)
+            h = float(controller.propose(h_try, err_val, err_prev=None))
             # err_prev unchanged: only successful steps update the I-term memory.
 
     return AdaptiveLoopResult(
@@ -607,28 +621,6 @@ class AdaptiveSolveResult(NamedTuple):
     Pz_obs_sqr: Array | None = None
 
 
-def _controller_coeffs(
-    controller: StepSizeController | None, order: int
-) -> tuple[float, float, float, float, float]:
-    """Static ``(safety, alpha, beta, min_factor, max_factor)`` for the jnp PI law.
-
-    The dataclass controllers cast through Python ``float`` / ``min`` / ``max`` and
-    so cannot run under tracing; here we extract their (static) coefficients and
-    re-implement the proposal in ``jax.numpy`` inside the loop. ``beta = 0``
-    recovers the proportional-only :class:`PController`.
-    """
-    if controller is None:
-        controller = PIController(order=order)
-    beta = float(controller._beta) if isinstance(controller, PIController) else 0.0
-    return (
-        float(controller.safety),
-        float(controller._alpha),
-        beta,
-        float(controller.min_factor),
-        float(controller.max_factor),
-    )
-
-
 def sqr_adaptive_solve(
     mu_0: Array,
     Sigma_0_sqr: Array,
@@ -705,6 +697,8 @@ def sqr_adaptive_solve(
         h_init: Initial step. Defaults to ``(save_at[-1] - save_at[0]) / 100``.
         calibration: Diffusion calibration mode (see :func:`sqr_adaptive_loop`).
         controller: Step-size controller; defaults to ``PIController(order=prior.q)``.
+            Its ``propose`` is called inside the traced loop, so a custom
+            controller must be written with ``jax.numpy``.
         min_sigma_sqr: Lower bound on the per-step ``sigma_hat^2``.
         max_steps: Hard cap on sub-steps per save interval (bounds the checkpointed
             while-loop). Raise it (or loosen tolerances) if a solve fails to reach a
@@ -717,6 +711,12 @@ def sqr_adaptive_solve(
 
     Returns:
         An :class:`AdaptiveSolveResult` with the solution sampled at ``save_at``.
+
+    Raises:
+        ValueError: If ``calibration`` is unknown, or a diagonal mode is used
+            with a non-diagonal state-block ``Xi``.
+        NotImplementedError: If ``prior`` is preconditioned, or ``smoother=True``
+            is combined with ``obs_model``.
     """
     if smoother and obs_model is not None:
         raise NotImplementedError(
@@ -724,10 +724,10 @@ def sqr_adaptive_solve(
             "adaptive smoother without observations, or use the fixed-grid "
             "gaussian_filter + rts_smoother for observation smoothing."
         )
+    _validate_calibration(calibration, prior)
     save_at = np.asarray(save_at, dtype=float)
-    safety, alpha, beta, min_factor, max_factor = _controller_coeffs(
-        controller, prior.q
-    )
+    if controller is None:
+        controller = PIController(order=prior.q)
     step_body = _make_step_body(
         prior,
         measure,
@@ -739,24 +739,6 @@ def sqr_adaptive_solve(
     )
     span = save_at[-1] - save_at[0]
     h0 = span / 100.0 if h_init is None else np.asarray(h_init, dtype=float)
-
-    def propose(h, err, err_prev):
-        # Gustafsson PI law (jax form of adaptive_controller.PIController.propose);
-        # err_prev < 0 signals "no memory" (first step / right after a reject) and
-        # drops the integral term.
-        # A non-finite error (NaN/inf from a blow-up) is mapped to +inf so the
-        # proposed factor collapses to ``min_factor`` (a shrink) instead of
-        # propagating NaN into ``h`` -- which would otherwise turn ``h_try`` NaN
-        # and spin the checkpointed while-loop to ``max_steps`` with no progress.
-        # (cast: jnp.where's overloads widen to Array | tuple under pyright.)
-        err = cast(Array, np.where(np.isfinite(err), err, np.inf))
-        err = np.maximum(err, 1e-12)
-        proportional = err ** (-alpha)
-        integral = np.where(
-            err_prev > 0.0, (np.maximum(err_prev, 1e-12) / err) ** beta, 1.0
-        )
-        factor = np.clip(safety * proportional * integral, min_factor, max_factor)
-        return h * factor
 
     # Identity backward conditional p(u | u) = N(I u + 0, 0); the running composite
     # for the fixed-point smoother is reset to this at the start of each interval.
@@ -789,14 +771,17 @@ def sqr_adaptive_solve(
             mz_step, Pz_step_sqr = out[5], out[6]
             err, loglik_step = out[10], out[11]
             # Reject non-finite errors (NaN/inf): never accept a NaN state, and
-            # ``propose`` shrinks ``h`` so the loop can recover instead of
-            # silently emitting NaN.
+            # the controller shrinks ``h`` (a non-finite error maps to
+            # ``min_factor``) so the loop can recover instead of silently
+            # emitting NaN.
             accept = (err <= 1.0) & np.isfinite(err)
             t2 = np.where(accept, t_next, t)
             m2 = np.where(accept, m_new, m)
             P2 = np.where(accept, P_new_sqr, P_sqr)
             ll2 = np.where(accept, ll + loglik_step, ll)
-            h2 = propose(h_try, err, np.where(accept, err_prev, -1.0))
+            # err_prev < 0 signals "no memory" (first step / right after a
+            # reject) and drops the controller's integral term.
+            h2 = controller.propose(h_try, err, np.where(accept, err_prev, -1.0))
             err_prev2 = np.where(accept, err, err_prev)
             # Carry the ODE-defect innovation of the most recently accepted
             # sub-step; after the loop this is the one clamped onto ``target``

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as np
 import pytest
 
@@ -948,3 +949,29 @@ class TestScanParityWithStackedResidual:
         sigma_loop = np.asarray(r_loop.sigma_sqr)
         sigma_scan = np.asarray(r_scan[9])
         assert np.allclose(sigma_loop, sigma_scan, atol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "ctrl", [PController(order=2), PIController(order=2)], ids=["P", "PI"]
+)
+def test_controller_propose_is_traceable(ctrl):
+    """The jittable adaptive solver calls ``propose`` inside its traced loop."""
+    eager = ctrl.propose(0.1, 0.5, 0.8)
+    jitted = jax.jit(ctrl.propose)(0.1, 0.5, 0.8)
+    assert np.allclose(eager, jitted, rtol=1e-12)
+
+
+def test_pi_controller_non_positive_err_prev_means_no_memory():
+    """Inside traced code "no memory" is a non-positive err_prev, not None."""
+    ctrl = PIController(order=2)
+    no_memory = ctrl.propose(0.1, 0.5, None)
+    assert np.allclose(ctrl.propose(0.1, 0.5, -1.0), no_memory, rtol=1e-12)
+    assert not np.allclose(ctrl.propose(0.1, 0.5, 0.8), no_memory)
+
+
+@pytest.mark.parametrize(
+    "ctrl", [PController(order=2), PIController(order=2)], ids=["P", "PI"]
+)
+def test_controller_shrinks_to_min_factor_on_non_finite_error(ctrl):
+    for err in (np.nan, np.inf):
+        assert np.allclose(ctrl.propose(1.0, err, None), ctrl.min_factor)

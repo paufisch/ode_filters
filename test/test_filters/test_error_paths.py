@@ -7,6 +7,7 @@ import pytest
 
 from ode_filters import IteratedTaylorCorrection, gaussian_filter
 from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
+from ode_filters.filters.ode_filter_loop import _calibrate_diffusion
 from ode_filters.measurement import ODEInformation
 from ode_filters.priors import IWP, PrecondIWP, taylor_mode_initialization
 
@@ -52,3 +53,13 @@ def test_adaptive_loop_exceeds_max_steps():
     prior, measure, mu_0, P0_sqr = _logistic()
     with pytest.raises(RuntimeError, match="exceeded max_steps"):
         sqr_adaptive_loop(mu_0, P0_sqr, prior, measure, (0.0, 5.0), max_steps=1)
+
+
+def test_calibrate_diffusion_rejects_unknown_mode():
+    """Entry points validate up front; the per-step helper must still not fall
+    through to "none" for a mode that slips past them."""
+    prior = IWP(q=1, d=1)
+    with pytest.raises(ValueError, match="calibration must be one of"):
+        _calibrate_diffusion(
+            "dynamc", np.ones(1), prior.E1, None, prior.Q_sqr(0.1), prior, 0.0
+        )

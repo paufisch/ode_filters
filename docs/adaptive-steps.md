@@ -122,7 +122,11 @@ prior is the binding constraint anyway.
 
 Two controllers ship with the library; both implement the
 `StepSizeController` protocol (a single `propose(h, err, err_prev)` method)
-and are interchangeable via the `controller=` argument.
+and are interchangeable via the `controller=` argument. A custom controller
+needs only that method, but `gaussian_filter_adaptive` calls it inside its
+traced loop, so write it with `jax.numpy` (no `float()`, Python `min`/`max` or
+`if` on its inputs). There, "no previous error" (first step, or right after a
+reject) arrives as a non-positive `err_prev` rather than `None`.
 
 ### `PController` -- proportional (memoryless)
 

@@ -30,11 +30,15 @@ from ode_filters.calibration.sigma import (
     posthoc_mle_sigma_sqr,
     quasi_mle_sigma_sqr,
 )
-from ode_filters.filters import PController
+from ode_filters.filters import PController, TaylorCorrection
 from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
-from ode_filters.measurement.measurement_models import ODEInformation
+from ode_filters.measurement.measurement_models import (
+    ODEInformation,
+    SecondOrderODEInformation,
+)
 from ode_filters.priors.gmp_priors import (
     IWP,
+    PrecondIWP,
     PrecondMaternPrior,
     taylor_mode_initialization,
 )
@@ -517,3 +521,38 @@ class TestPreconditionedDiagonalMatchesNonPreconditioned:
         )
         # Final filtered mean agrees up to fp64.
         assert np.allclose(r_p.m[-1], r_n.m[-1], atol=1e-10)
+
+
+@pytest.mark.parametrize("prior_cls", [IWP, PrecondIWP])
+def test_diagonal_ekf0_uses_the_measurement_selector_for_second_order_odes(
+    prior_cls,
+):
+    """For x'' = f the EK0 Jacobian of the ODE rows is E2, not the prior's E1.
+
+    ``"diagonal_ekf0"`` used to build its denominator from ``prior.E1``, which
+    inflated sigma^2 by orders of magnitude for second-order ODEs. Oracle: with
+    an EK0 correction the reported ``mz`` is the ODE residual at the prediction,
+    so ``sigma^2_n = mz_n^2 / diag(E2 Q(h) E2.T)``. Preconditioning leaves this
+    unchanged, so the plain-space ``Q`` is the oracle for both priors.
+    """
+    prior = prior_cls(q=3, d=1)
+    measure = SecondOrderODEInformation(
+        lambda x, v, *, t: -x, prior.E0, prior.E1, prior.E2
+    )
+    mu_0 = np.array([1.0, 0.0, -1.0, 0.0])
+    tspan, N = (0.0, 3.0), 60
+    res = gaussian_filter(
+        mu_0,
+        np.zeros((4, 4)),
+        prior,
+        measure,
+        tspan,
+        N,
+        correction=TaylorCorrection(order=0),
+        calibration="diagonal_ekf0",
+    )
+    h = (tspan[1] - tspan[0]) / N
+    E2Q_sqr = prior.E2 @ IWP(q=3, d=1).Q_sqr(h).T
+    denom = np.sum(E2Q_sqr**2, axis=1)  # diag(E2 Q E2.T)
+    expected = res.mz[:, :1] ** 2 / denom
+    assert np.allclose(res.sigma_sqr, expected, rtol=1e-6, atol=1e-300)

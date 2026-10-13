@@ -30,6 +30,24 @@ def _cholesky_upper(M: Array) -> Array:
     return np.linalg.cholesky(M).T
 
 
+def _safe_sqrt(x: ArrayLike) -> Array:
+    """Elementwise ``sqrt`` whose reverse-mode derivative is finite at zero.
+
+    The derivative of ``sqrt`` is infinite at ``0``. Wherever a diffusion
+    estimate is *identically* zero (a residual that vanishes at an equilibrium,
+    or a system started at rest) the backward pass would then evaluate
+    ``0 * inf = NaN`` and poison every gradient, although the forward value is
+    an exact ``0``. The double ``where`` keeps the ``sqrt`` off zero on both the
+    forward and the reverse pass, so such entries get the zero gradient they
+    should have; positive entries are unchanged, and negative entries still give
+    ``NaN`` as ``np.sqrt`` does.
+    """
+    x = np.asarray(x)
+    positive = x > 0.0
+    root = np.sqrt(np.where(positive, x, 1.0))
+    return np.where(positive, root, np.where(x == 0.0, 0.0, np.nan))
+
+
 class BasePrior(ABC):
     def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         if not isinstance(q, int):
@@ -141,14 +159,14 @@ class BasePrior(ABC):
         """
         sigma_sqr = np.asarray(sigma_sqr)
         if sigma_sqr.ndim == 0:
-            return np.sqrt(sigma_sqr) * Q_sqr
+            return _safe_sqrt(sigma_sqr) * Q_sqr
         if sigma_sqr.shape != (self._dim,):
             raise ValueError(
                 f"sigma_sqr must be scalar or length-{self._dim} vector; "
                 f"got shape {sigma_sqr.shape}."
             )
         tiled = np.tile(sigma_sqr, self.q + 1)
-        return Q_sqr * np.sqrt(tiled)[None, :]
+        return Q_sqr * _safe_sqrt(tiled)[None, :]
 
     def apply_state_sigma_to_cov_sqr(self, P_sqr: Array, sigma_sqr: ArrayLike) -> Array:
         """Apply ``sigma_sqr`` to the state block of a full-state covariance sqrt.
@@ -157,7 +175,7 @@ class BasePrior(ABC):
         covariance by ``sqrt(sigma_sqr)``). Default scales everything; joint priors
         override to scale only the state block.
         """
-        return np.sqrt(sigma_sqr) * P_sqr
+        return _safe_sqrt(sigma_sqr) * P_sqr
 
 
 def taylor_mode_initialization(
@@ -559,6 +577,29 @@ def _matern_companion_form(length_scale: float, q: int) -> tuple[Array, Array, A
 _MATERN_QUAD_NODES = 64
 
 
+def _gauss_legendre(n_quad: int, q: int) -> tuple[Array, Array]:
+    """Gauss-Legendre nodes and weights on ``[-1, 1]`` for the square-root MFD.
+
+    Raises:
+        ValueError: If ``n_quad <= q``. The QR in
+            :func:`_sqr_noise_via_quadrature` stacks one block of rows per node
+            (one row per dispersion column), so fewer than ``q + 1`` nodes yields
+            a factor with fewer rows than the ``q + 1`` derivative blocks of the
+            state instead of a square one -- which is not a mildly less accurate
+            answer but a structurally wrong shape, and it would otherwise surface
+            only much later as a confusing shape error from inside a solve.
+    """
+    if n_quad <= q:
+        raise ValueError(
+            f"n_quad must exceed q to give a square noise factor, got "
+            f"n_quad={n_quad!r} with q={q!r}. The Gauss-Legendre rule contributes "
+            "one block of rows per node to the QR, so n_quad >= q + 1 is a shape "
+            "requirement, not an accuracy preference."
+        )
+    gl_nodes, gl_weights = onp.polynomial.legendre.leggauss(n_quad)
+    return np.asarray(gl_nodes), np.asarray(gl_weights)
+
+
 def _sqr_noise_via_quadrature(
     F: Array, G: Array, gl_nodes: Array, gl_weights: Array, h: ArrayLike
 ) -> Array:
@@ -599,20 +640,10 @@ def _make_matern_sqr_noise(
     ``gl_weights`` the Gauss-Legendre nodes/weights on ``[-1, 1]``.
 
     Raises:
-        ValueError: If ``n_quad <= q``. The QR stacks one row per node, so fewer
-            than ``q + 1`` nodes yields a ``[n_quad, q + 1]`` factor instead of a
-            square one -- which is not a mildly less accurate answer but a
-            structurally wrong shape, and it would otherwise surface only much
-            later as a confusing shape error from inside a solve.
+        ValueError: If ``n_quad <= q`` (see :func:`_gauss_legendre`).
     """
+    gl_nodes, gl_weights = _gauss_legendre(n_quad, q)
     D = q + 1
-    if n_quad <= q:
-        raise ValueError(
-            f"n_quad must exceed q to give a square [{D}, {D}] noise factor, got "
-            f"n_quad={n_quad!r} with q={q!r}. The Gauss-Legendre rule contributes "
-            "one row per node to the QR, so n_quad >= q + 1 is a shape "
-            "requirement, not an accuracy preference."
-        )
     lam = np.sqrt((2.0 * q + 1.0) / length_scale)
 
     M = np.zeros((D, D))
@@ -630,8 +661,7 @@ def _make_matern_sqr_noise(
 
     D_lam = np.diag(lam ** np.arange(D, dtype=float))
 
-    gl_nodes, gl_weights = onp.polynomial.legendre.leggauss(n_quad)
-    return F_bar, g_bar, D_lam, np.asarray(gl_nodes), np.asarray(gl_weights)
+    return F_bar, g_bar, D_lam, gl_nodes, gl_weights
 
 
 def _matern_scalar_Q_sqr(
@@ -653,6 +683,23 @@ def _matern_scalar_Q_sqr(
     F_bar, g_bar, D_lam, gl_nodes, gl_weights = consts
     R_bar = _sqr_noise_via_quadrature(F_bar, g_bar, gl_nodes, gl_weights, h)
     return R_bar @ D_lam
+
+
+def _matern_scalar_A(
+    consts: tuple[Array, Array, Array, Array, Array], h: ArrayLike
+) -> Array:
+    """Scalar Matern transition ``A(h) = expm(F h)`` (the ``[q+1, q+1]`` block).
+
+    Evaluated as ``D_lam expm(lam M h) D_lam^-1`` in the length-scale-normalized
+    coordinates of :func:`_make_matern_sqr_noise`: the companion drift is
+    ``F = D_lam (lam M) D_lam^-1``, so the exponential is taken of a matrix whose
+    entries are ``O(lam h)`` instead of ``O(lam^(q+1) h)``. This stays finite at
+    short length scales, where the ``expm`` of the ``[[F, S], [0, -F.T]]``
+    Hamiltonian block (``S ~ lam^(2q+1)``) overflows to NaN.
+    """
+    F_bar, _, D_lam, _, _ = consts
+    D_inv = np.diag(1.0 / np.diag(D_lam))
+    return D_lam @ expm(F_bar * h) @ D_inv
 
 
 class MaternPrior(BasePrior):
@@ -733,8 +780,7 @@ class MaternPrior(BasePrior):
         :meth:`Q_sqr` already uses.
 
         Both used to come out of one ``expm`` of the ``[[F, S], [0, -F.T]]``
-        Hamiltonian block (matrix fraction decomposition; ``PrecondMaternPrior``
-        still does this in its preconditioned coordinates).  That
+        Hamiltonian block (matrix fraction decomposition).  That
         block carries ``S ~ lam^(2q+1)``, and the scaling-and-squaring exponential
         of it returns NaN once the length scale is short relative to the step --
         measured: ``q = 2``, ``length_scale = 2.6e-3`` (``lam ~ 44``), ``h = 1e-2``,
@@ -757,9 +803,7 @@ class MaternPrior(BasePrior):
 
     def _A_scalar(self, h: ArrayLike) -> Array:
         """``expm(F h)`` for the scalar companion drift, via the normalized form."""
-        F_bar, _, D_lam, _, _ = self._sqr_noise
-        D_inv = np.diag(1.0 / np.diag(D_lam))
-        return D_lam @ expm(F_bar * h) @ D_inv
+        return _matern_scalar_A(self._sqr_noise, h)
 
     def A(self, h: ArrayLike) -> Array:
         """Return the state transition matrix for step size h.
@@ -856,37 +900,25 @@ class PrecondMaternPrior(BasePrior):
         self._xi_sqr = _cholesky_upper(self.xi)
         self._sqr_noise = _make_matern_sqr_noise(length_scale, q, n_quad)
 
-    def _expm_block_matrix(self, h: ArrayLike) -> Array:
-        """Compute exp(H*h) for the Hamiltonian block matrix.
-
-        Args:
-            h: Step size.
-
-        Returns:
-            Matrix exponential of the block Hamiltonian (shape [2n, 2n]).
-        """
-        H = np.block(
-            [
-                [self._F, self.S],
-                [np.zeros_like(self._F), -self._F.T],
-            ]
-        )
-        return expm(H * h)
-
     def _raw_A_and_Q(self, h: ArrayLike) -> tuple[Array, Array]:
-        """Compute raw (non-preconditioned) A(h) and Q(h) via MFD.
+        """Compute raw (non-preconditioned) scalar ``A(h)`` and ``Q(h)``.
+
+        Same stable construction as :meth:`MaternPrior.A_and_Q`: ``A`` from the
+        length-scale-normalized exponential (:func:`_matern_scalar_A`) and
+        ``Q = R.T @ R`` from the square-root MFD factor. The ``expm`` of the
+        ``[[F, S], [0, -F.T]]`` Hamiltonian block that used to be taken here
+        overflows to NaN at short length scales (e.g. ``q = 2``,
+        ``length_scale = 2.6e-3``, ``h = 1e-2``).
 
         Args:
             h: Step size.
 
         Returns:
-            Tuple of (A_h, Q_h) scalar matrices (shape [n, n] each).
+            Tuple of (A_h, Q_h) scalar matrices (shape [q+1, q+1] each).
         """
-        expm_H = self._expm_block_matrix(h)
-        A_h = expm_H[: self.n, : self.n]
-        Q_h = expm_H[: self.n, self.n :] @ A_h.T
-        Q_h = 0.5 * (Q_h + Q_h.T)
-        return A_h, Q_h
+        A_h = _matern_scalar_A(self._sqr_noise, h)
+        R = _matern_scalar_Q_sqr(self._sqr_noise, h)
+        return A_h, R.T @ R
 
     def _precond_discretise(self, h: ArrayLike) -> tuple[Array, Array]:
         """Compute preconditioned A_bar(h) and Q_bar(h).
@@ -1042,9 +1074,7 @@ class IOUPPrior(BasePrior):
         F = F.at[q * d :, q * d :].set(self._R)
         self._F = F
         self._G = np.zeros((dim, d)).at[q * d :, :].set(self._xi_sqr.T)
-        gl_nodes, gl_weights = onp.polynomial.legendre.leggauss(n_quad)
-        self._gl_nodes = np.asarray(gl_nodes)
-        self._gl_weights = np.asarray(gl_weights)
+        self._gl_nodes, self._gl_weights = _gauss_legendre(n_quad, q)
 
     @staticmethod
     def _build_rate(rate: ArrayLike, d: int) -> Array:
@@ -1123,6 +1153,16 @@ class JointPrior(BasePrior):
             raise TypeError(f"prior_x must be BasePrior instance, got {type(prior_x)}")
         if not isinstance(prior_u, BasePrior):
             raise TypeError(f"prior_u must be BasePrior instance, got {type(prior_u)}")
+        # A preconditioned sub-prior's A/Q_sqr live in preconditioned (bar)
+        # coordinates; JointPrior carries no T(h), so the filter would treat them
+        # as plain-space matrices and silently return garbage.
+        for name, sub in (("prior_x", prior_x), ("prior_u", prior_u)):
+            if isinstance(sub, (PrecondIWP, PrecondMaternPrior)):
+                raise TypeError(
+                    f"{name} is preconditioned ({type(sub).__name__}); JointPrior "
+                    "needs plain priors. Use PrecondJointPrior to combine "
+                    "preconditioned priors."
+                )
 
         self._prior_x = prior_x
         self._prior_u = prior_u
@@ -1255,14 +1295,14 @@ class JointPrior(BasePrior):
         """
         sigma_sqr = np.asarray(sigma_sqr)
         if sigma_sqr.ndim == 0:
-            return Q_sqr.at[: self._D_x, : self._D_x].multiply(np.sqrt(sigma_sqr))
+            return Q_sqr.at[: self._D_x, : self._D_x].multiply(_safe_sqrt(sigma_sqr))
         if sigma_sqr.shape != (self._prior_x._dim,):
             raise ValueError(
                 f"sigma_sqr must be scalar or length-{self._prior_x._dim} vector; "
                 f"got shape {sigma_sqr.shape}."
             )
         tiled = np.tile(sigma_sqr, self._prior_x.q + 1)
-        return Q_sqr.at[:, : self._D_x].multiply(np.sqrt(tiled)[None, :])
+        return Q_sqr.at[:, : self._D_x].multiply(_safe_sqrt(tiled)[None, :])
 
     def apply_state_sigma_to_cov_sqr(self, P_sqr: Array, sigma_sqr: ArrayLike) -> Array:
         """Scale only the state block of a full-state covariance sqrt.
@@ -1273,7 +1313,7 @@ class JointPrior(BasePrior):
         block alone.
         """
         D_x = (self._prior_x.q + 1) * self._prior_x._dim
-        return P_sqr.at[:, :D_x].multiply(np.sqrt(sigma_sqr))
+        return P_sqr.at[:, :D_x].multiply(_safe_sqrt(sigma_sqr))
 
 
 class PrecondJointPrior:
@@ -1471,18 +1511,18 @@ class PrecondJointPrior:
         """
         sigma_sqr = np.asarray(sigma_sqr)
         if sigma_sqr.ndim == 0:
-            return Q_sqr.at[: self._D_x, : self._D_x].multiply(np.sqrt(sigma_sqr))
+            return Q_sqr.at[: self._D_x, : self._D_x].multiply(_safe_sqrt(sigma_sqr))
         if sigma_sqr.shape != (self._prior_x._dim,):
             raise ValueError(
                 f"sigma_sqr must be scalar or length-{self._prior_x._dim} vector; "
                 f"got shape {sigma_sqr.shape}."
             )
         tiled = np.tile(sigma_sqr, self._prior_x.q + 1)
-        return Q_sqr.at[:, : self._D_x].multiply(np.sqrt(tiled)[None, :])
+        return Q_sqr.at[:, : self._D_x].multiply(_safe_sqrt(tiled)[None, :])
 
     def apply_state_sigma_to_cov_sqr(self, P_sqr: Array, sigma_sqr: ArrayLike) -> Array:
         """Scale only the state block of a full-state covariance sqrt.
 
         See :meth:`JointPrior.apply_state_sigma_to_cov_sqr` for the rationale.
         """
-        return P_sqr.at[:, : self._D_x].multiply(np.sqrt(sigma_sqr))
+        return P_sqr.at[:, : self._D_x].multiply(_safe_sqrt(sigma_sqr))
