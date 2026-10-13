@@ -98,7 +98,7 @@ is the right tool. Reach for a probabilistic solver when you need the *uncertain
 | "Derivative must equal `f`" (the information operator) | `ODEInformation(vf, prior.E0, prior.E1)` |
 | How to linearize `f` (EK0 / EK1) | `TaylorCorrection(order=0 | 1)` |
 | Forward filtering pass | `gaussian_filter(...)` (or `gaussian_filter_adaptive(...)`) |
-| Backward smoothing pass | `rts_smoother(prior, result)` |
+| Backward smoothing pass | `rts_smoother(result)` |
 | Size the error bars | `calibration=` / `ode_filters.calibration` |
 
 The symbols (`q`, `d`, `E0`/`E1`, `Xi`, `sigma^2`, the square-root convention) are

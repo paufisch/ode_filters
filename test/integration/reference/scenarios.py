@@ -22,6 +22,7 @@ from jax import Array
 
 from ode_filters import (
     IWP,
+    AffineSurrogate,
     InferenceProblem,
     IOUPPrior,
     IteratedTaylorCorrection,
@@ -29,18 +30,17 @@ from ode_filters import (
     MaternPrior,
     ODEInformation,
     PrecondIWP,
-    PrecondJointPrior,
     QuadratureCorrection,
     TaylorCorrection,
+    affine_filter,
     gaussian_filter,
     gaussian_filter_adaptive,
-    ipls_smoother,
+    iterated_smoother,
     marginal_loglik,
     prepare_observations,
     rts_smoother,
     taylor_mode_initialization,
 )
-from ode_filters.filters import affine_filter_scan
 from ode_filters.information import (
     Conservation,
     Measurement,
@@ -69,23 +69,14 @@ def _logistic_observations(prior):
     )
 
 
-def _filter_outputs(res, prior, *, smooth: bool = True) -> Outputs:
-    """Coordinate-invariant outputs of a ``gaussian_filter`` result.
+def _grid(tspan) -> Array:
+    return np.linspace(*tspan, N + 1)
 
-    For a preconditioned prior the per-step fields are in preconditioned
-    coordinates ``x = T x_bar``; they are mapped back to the original ones here,
-    so the recorded values describe the model, not its internal coordinates.
-    """
-    T = res.T
+
+def _filter_outputs(res, *, smooth: bool = True) -> Outputs:
+    """Coordinate-invariant outputs of a ``gaussian_filter`` result."""
     m_pred, P_pred = res.m_pred, cov(res.P_pred_sqr)
     G, d, P_back = res.G_back, res.d_back, cov(res.P_back_sqr)
-    if T is not None:
-        T_inv = np.linalg.inv(T)
-        m_pred = m_pred @ T.T
-        P_pred = T @ P_pred @ T.T
-        G = T @ G @ T_inv
-        d = d @ T.T
-        P_back = T @ P_back @ T.T
     out = {
         "m": res.m,
         "P": cov(res.P_sqr),
@@ -104,7 +95,7 @@ def _filter_outputs(res, prior, *, smooth: bool = True) -> Outputs:
         out["mz_obs"] = res.mz_obs
         out["Pz_obs"] = cov(res.Pz_obs_sqr)
     if smooth:
-        m_s, P_s_sqr = rts_smoother(prior, res)
+        m_s, P_s_sqr = rts_smoother(res)
         out["m_smooth"] = m_s
         out["P_smooth"] = cov(P_s_sqr)
     return out
@@ -127,12 +118,11 @@ def _logistic(calibration: str, correction: str) -> Callable[[], Outputs]:
             P_0_sqr,
             prior,
             measure,
-            LOGISTIC.tspan,
-            N,
+            _grid(LOGISTIC.tspan),
             calibration=calibration,
             correction=CORRECTIONS[correction],
         )
-        return _filter_outputs(res, prior)
+        return _filter_outputs(res)
 
     return run
 
@@ -146,12 +136,11 @@ def _logistic_obs(calibration: str) -> Callable[[], Outputs]:
             P_0_sqr,
             prior,
             measure,
-            LOGISTIC.tspan,
-            N,
+            _grid(LOGISTIC.tspan),
             calibration=calibration,
             obs_model=_logistic_observations(prior),
         )
-        return _filter_outputs(res, prior)
+        return _filter_outputs(res)
 
     return run
 
@@ -166,11 +155,10 @@ def _linear_2d_precond(calibration: str) -> Callable[[], Outputs]:
             P_0_sqr,
             prior,
             measure,
-            LINEAR_2D.tspan,
-            N,
+            _grid(LINEAR_2D.tspan),
             calibration=calibration,
         )
-        return _filter_outputs(res, prior)
+        return _filter_outputs(res)
 
     return run
 
@@ -178,15 +166,15 @@ def _linear_2d_precond(calibration: str) -> Callable[[], Outputs]:
 def _matern_dynamic() -> Outputs:
     prior = MaternPrior(q=2, d=1, length_scale=1.5)
     m_0, P_0_sqr, measure = _logistic_setup(prior)
-    res = gaussian_filter(m_0, P_0_sqr, prior, measure, LOGISTIC.tspan, N)
-    return _filter_outputs(res, prior)
+    res = gaussian_filter(m_0, P_0_sqr, prior, measure, _grid(LOGISTIC.tspan))
+    return _filter_outputs(res)
 
 
 def _ioup_dynamic() -> Outputs:
     prior = IOUPPrior(q=2, d=1, rate=-0.5)
     m_0, P_0_sqr, measure = _logistic_setup(prior)
-    res = gaussian_filter(m_0, P_0_sqr, prior, measure, LOGISTIC.tspan, N)
-    return _filter_outputs(res, prior)
+    res = gaussian_filter(m_0, P_0_sqr, prior, measure, _grid(LOGISTIC.tspan))
+    return _filter_outputs(res)
 
 
 def _hidden_setup(prior):
@@ -217,21 +205,20 @@ def _joint_hidden_obs(calibration: str) -> Callable[[], Outputs]:
             P_0_sqr,
             prior,
             measure,
-            (0.0, 2.0),
-            N,
+            _grid((0.0, 2.0)),
             calibration=calibration,
             obs_model=obs,
         )
-        return _filter_outputs(res, prior)
+        return _filter_outputs(res)
 
     return run
 
 
 def _precond_joint_dynamic() -> Outputs:
-    prior = PrecondJointPrior(PrecondIWP(q=2, d=1), PrecondIWP(q=1, d=1))
+    prior = JointPrior(PrecondIWP(q=2, d=1), PrecondIWP(q=1, d=1))
     m_0, P_0_sqr, measure = _hidden_setup(prior)
-    res = gaussian_filter(m_0, P_0_sqr, prior, measure, (0.0, 2.0), N)
-    return _filter_outputs(res, prior)
+    res = gaussian_filter(m_0, P_0_sqr, prior, measure, _grid((0.0, 2.0)))
+    return _filter_outputs(res)
 
 
 def _second_order(calibration: str) -> Callable[[], Outputs]:
@@ -245,9 +232,9 @@ def _second_order(calibration: str) -> Callable[[], Outputs]:
         )
         measure = SecondOrderODEInformation(vf, prior.E0, prior.E1, prior.E2)
         res = gaussian_filter(
-            m_0, P_0_sqr, prior, measure, (0.0, 3.0), N, calibration=calibration
+            m_0, P_0_sqr, prior, measure, _grid((0.0, 3.0)), calibration=calibration
         )
-        return _filter_outputs(res, prior)
+        return _filter_outputs(res)
 
     return run
 
@@ -261,8 +248,8 @@ def _sir_conservation() -> Outputs:
         prior.E1,
         constraints=[Conservation(np.ones((1, 3)), np.array([1.0]))],
     )
-    res = gaussian_filter(m_0, P_0_sqr, prior, measure, SIR.tspan, N)
-    return _filter_outputs(res, prior)
+    res = gaussian_filter(m_0, P_0_sqr, prior, measure, _grid(SIR.tspan))
+    return _filter_outputs(res)
 
 
 def _adaptive(with_obs: bool) -> Callable[[], Outputs]:
@@ -289,10 +276,15 @@ def _adaptive(with_obs: bool) -> Callable[[], Outputs]:
             rtol=1e-4,
             smoother=not with_obs,
         )
+        # Recorded when the adaptive path still summed the data evidence into
+        # log_likelihood; it now reports it separately.
+        log_likelihood = res.log_likelihood
+        if with_obs:
+            log_likelihood = log_likelihood + res.log_likelihood_obs
         out = {
             "m": res.m,
             "P": cov(res.P_sqr),
-            "log_likelihood": res.log_likelihood,
+            "log_likelihood": log_likelihood,
             "success": res.success,
             "mz": res.mz,
             "Pz": cov(res.Pz_sqr),
@@ -301,7 +293,7 @@ def _adaptive(with_obs: bool) -> Callable[[], Outputs]:
             out["mz_obs"] = res.mz_obs
             out["Pz_obs"] = cov(res.Pz_obs_sqr)
         else:
-            m_s, P_s_sqr = rts_smoother(prior, res)
+            m_s, P_s_sqr = rts_smoother(res)
             out["m_smooth"] = m_s
             out["P_smooth"] = cov(P_s_sqr)
         return out
@@ -312,13 +304,13 @@ def _adaptive(with_obs: bool) -> Callable[[], Outputs]:
 def _ipls() -> Outputs:
     prior = IWP(q=2, d=1)
     m_0, P_0_sqr, measure = _logistic_setup(prior)
-    res = ipls_smoother(
+    res = iterated_smoother(
         m_0,
         P_0_sqr,
         prior,
         measure,
-        LOGISTIC.tspan,
-        N,
+        _grid(LOGISTIC.tspan),
+        linearization="slr",
         n_iters=2,
         n_nodes=3,
         obs_model=_logistic_observations(prior),
@@ -326,10 +318,10 @@ def _ipls() -> Outputs:
     return {
         "m": res.m,
         "P": cov(res.P_sqr),
-        "m_filt": res.m_filt,
-        "P_filt": cov(res.P_filt_sqr),
-        "log_likelihood": res.log_likelihood,
-        "log_likelihood_obs": res.log_likelihood_obs,
+        "m_filt": res.filter.m,
+        "P_filt": cov(res.filter.P_sqr),
+        "log_likelihood": res.filter.log_likelihood,
+        "log_likelihood_obs": res.filter.log_likelihood_obs,
     }
 
 
@@ -338,29 +330,21 @@ def _affine_filter() -> Outputs:
     prior = IWP(q=2, d=1)
     m_0, P_0_sqr, measure = _logistic_setup(prior)
     ts, h = np.linspace(*LOGISTIC.tspan, N + 1, retstep=True)
-    A, b, Q_sqr = prior.A(h), prior.b(h), prior.Q_sqr(h)
+    A = prior.A(h)
     m_lin = np.stack([np.linalg.matrix_power(A, n) @ m_0 for n in range(1, N + 1)])
     H_seq, c_seq = jax.vmap(lambda m, t: measure.linearize(m, t=t))(m_lin, ts[1:])
-    R_seq_sqr = np.zeros((N, 1, 1))
-    m, P_sqr, G, d, P_back_sqr, ll, ll_obs = affine_filter_scan(
-        m_0,
-        P_0_sqr,
-        A,
-        b,
-        Q_sqr,
-        H_seq,
-        c_seq,
-        R_seq_sqr,
-        obs_model=_logistic_observations(prior),
+    surrogate = AffineSurrogate(H_seq, c_seq, np.zeros((N, 1, 1)))
+    res = affine_filter(
+        m_0, P_0_sqr, prior, surrogate, ts, obs_model=_logistic_observations(prior)
     )
     return {
-        "m": m,
-        "P": cov(P_sqr),
-        "G_back": G,
-        "d_back": d,
-        "P_back": cov(P_back_sqr),
-        "log_likelihood": ll,
-        "log_likelihood_obs": ll_obs,
+        "m": res.m,
+        "P": cov(res.P_sqr),
+        "G_back": res.G_back,
+        "d_back": res.d_back,
+        "P_back": cov(res.P_back_sqr),
+        "log_likelihood": res.log_likelihood,
+        "log_likelihood_obs": res.log_likelihood_obs,
     }
 
 
@@ -381,7 +365,7 @@ def _marginal_loglik() -> Outputs:
         m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
         return m_0, P_0_sqr, ODEInformation(vf, prior.E0, prior.E1)
 
-    problem = InferenceProblem(build=build, prior=prior, tspan=(0.0, 2.0), N=N)
+    problem = InferenceProblem(build=build, prior=prior, ts=ts)
     theta = np.array(1.1)
     ll_ode, ll_obs = marginal_loglik(theta, obs, model=problem, channel="both")
     return {

@@ -216,21 +216,6 @@ class TestMeasurementDataclass:
 
         m = Measurement(A=A, z=z, z_t=z_t)
         assert m.dim == 1
-        assert m.find_index(0.5) == 0
-        assert m.find_index(1.0) == 1
-        assert m.find_index(0.0) is None
-
-    def test_measurement_residual(self):
-        """Test measurement residual computation."""
-        A = np.array([[1.0]])
-        z = np.array([[0.5]])
-        z_t = np.array([0.5])
-
-        m = Measurement(A=A, z=z, z_t=z_t)
-        x = np.array([0.8])
-        residual = m.residual(x, t=0.5)
-        assert residual is not None
-        assert np.allclose(residual, np.array([0.3]))
 
     def test_measurement_noise_scalar(self):
         """Test measurement noise from scalar."""

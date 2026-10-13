@@ -66,34 +66,36 @@ def vf(x, *, t):
     return -x
 
 x0 = np.array([1.0])
-tspan = (0.0, 5.0)  # a tuple: hashable for use as a jax.jit static argument
+ts = np.linspace(0.0, 5.0, 51)  # the time grid (uniform or not)
 
 # Set up the prior and the ODE-information measurement model
 prior = IWP(q=2, d=1, Xi=0.5 * np.eye(1))
-mu_0, Sigma_0_sqr = taylor_mode_initialization(vf, x0, q=2)
+m_0, P_0_sqr = taylor_mode_initialization(vf, x0, q=2)
 measure = ODEInformation(vf, prior.E0, prior.E1)
 
-# Filter on a fixed grid, then smooth
-result = gaussian_filter(mu_0, Sigma_0_sqr, prior, measure, tspan, N=50)
-m_smooth, P_smooth_sqr = rts_smoother(prior, result)
+# Filter on the grid, then smooth
+result = gaussian_filter(m_0, P_0_sqr, prior, measure, ts)
+m_smooth, P_smooth_sqr = rts_smoother(result)
 
 # result.m / result.P_sqr -> filtered means / square-root covariances at the grid
 # result.log_likelihood   -> calibrated marginal log-likelihood
 ```
 
-For adaptive step sizes, use `gaussian_filter_adaptive(mu_0, Sigma_0_sqr, prior,
-measure, save_at=...)` — it is `jit` / `vmap` / `grad`-safe; pass `smoother=True`
+For adaptive step sizes, use `gaussian_filter_adaptive(m_0, P_0_sqr, prior,
+measure, save_at)` — it is `jit` / `vmap` / `grad`-safe; pass `smoother=True`
 to also get a fixed-point smoothing pass that `rts_smoother` consumes.
 
 ## Package Structure
 
 ```
 ode_filters/
-├── calibration/      # Diffusion (sigma^2) estimation and rescaling
-├── filters/          # Solvers, smoothers, linearizations, step-size control
-├── inference/        # Square-root Gaussian algebra and parameter inference
-├── measurement/      # ODE information and observation models
-└── priors/           # Gauss-Markov process priors
+├── priors/           # Gauss-Markov priors (IWP, Matern, IOUP, joint)
+├── information/      # ODE information, conservation laws, data observations
+├── linearization/    # Taylor and statistical linearization, frozen surrogates
+├── calibration/      # Diffusion (sigma^2) calibration policies and rescaling
+├── filters/          # Filters, smoothers, the iterated smoother, step control
+├── inference/        # Marginal likelihoods and parameter fitting
+└── gaussian/         # Square-root Gaussian types and algebra
 ```
 
 ## Documentation

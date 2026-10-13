@@ -1,123 +1,62 @@
-"""Tests for PrecondIWP class."""
+"""Tests for PrecondIWP: the IWP, computed in preconditioned coordinates."""
 
 import jax.numpy as np
 import pytest
 
-from ode_filters.priors import PrecondIWP
+from ode_filters.priors import IWP, PrecondIWP
 from ode_filters.priors.iwp import _make_iwp_precond_state_matrices
 
-
-class TestPrecondIWPMethods:
-    """Tests for PrecondIWP matrix methods."""
-
-    @pytest.fixture
-    def precond_iwp(self):
-        """Create a standard PrecondIWP for testing."""
-        return PrecondIWP(q=2, d=2)
-
-    def test_A_returns_correct_shape(self, precond_iwp):
-        """Test that A() returns correct shape."""
-        A = precond_iwp.A()
-        expected_shape = (6, 6)  # (q+1)*d = 3*2 = 6
-        assert A.shape == expected_shape
-
-    def test_b_returns_correct_shape(self, precond_iwp):
-        """Test that b() returns correct shape."""
-        b = precond_iwp.b()
-        expected_shape = (6,)  # (q+1)*d = 3*2 = 6
-        assert b.shape == expected_shape
-
-    def test_b_returns_zeros(self, precond_iwp):
-        """Test that b() returns zero vector."""
-        b = precond_iwp.b()
-        assert np.allclose(b, np.zeros(6))
-
-    def test_Q_returns_correct_shape(self, precond_iwp):
-        """Test that Q() returns correct shape."""
-        Q = precond_iwp.Q()
-        expected_shape = (6, 6)
-        assert Q.shape == expected_shape
-
-    def test_T_returns_correct_shape(self, precond_iwp):
-        """Test that T(h) returns correct shape."""
-        T = precond_iwp.T(0.5)
-        expected_shape = (6, 6)
-        assert T.shape == expected_shape
-
-    def test_T_is_diagonal(self, precond_iwp):
-        """Test that T(h) is a diagonal matrix."""
-        T = precond_iwp.T(0.5)
-        # Check off-diagonal elements are zero
-        off_diag = T - np.diag(np.diag(T))
-        assert np.allclose(off_diag, np.zeros_like(off_diag))
-
-    def test_T_at_h_zero_is_zero(self):
-        """Test that T(0) is zero matrix (since sqrt(0) = 0)."""
-        precond = PrecondIWP(q=2, d=1)
-        T = precond.T(0.0)
-        assert np.allclose(T, np.zeros_like(T))
+H = 0.3
 
 
-class TestPrecondIWPProperties:
-    """Tests for PrecondIWP mathematical properties."""
-
-    def test_A_is_constant(self):
-        """Test that A() is independent of step size."""
-        precond = PrecondIWP(q=2, d=1)
-        A1 = precond.A()
-        A2 = precond.A()
-        assert np.allclose(A1, A2)
-
-    def test_Q_is_constant(self):
-        """Test that Q() is independent of step size."""
-        precond = PrecondIWP(q=2, d=1)
-        Q1 = precond.Q()
-        Q2 = precond.Q()
-        assert np.allclose(Q1, Q2)
-
-    def test_Q_is_symmetric(self):
-        """Test that Q() is symmetric."""
-        precond = PrecondIWP(q=2, d=1)
-        Q = precond.Q()
-        assert np.allclose(Q, Q.T)
-
-    def test_Q_is_positive_definite(self):
-        """Test that Q() is positive definite."""
-        precond = PrecondIWP(q=2, d=1)
-        Q = precond.Q()
-        eigenvalues = np.linalg.eigvalsh(Q)
-        assert np.all(eigenvalues > 0), "Q should be positive definite"
-
-    def test_E0_E1_properties(self):
-        """Test that E0 and E1 are accessible."""
-        precond = PrecondIWP(q=2, d=2)
-        assert precond.E0.shape == (2, 6)
-        assert precond.E1.shape == (2, 6)
+@pytest.mark.parametrize("q,d", [(1, 1), (2, 2), (4, 1)])
+def test_process_is_the_iwp(q, d):
+    """A(h), Q(h) and Q_sqr(h) are the IWP's: preconditioning is internal."""
+    xi = np.diag(np.arange(1.0, d + 1.0))
+    precond, iwp = PrecondIWP(q=q, d=d, Xi=xi), IWP(q=q, d=d, Xi=xi)
+    assert np.allclose(precond.A(H), iwp.A(H))
+    assert np.allclose(precond.Q(H), iwp.Q(H))
+    assert np.allclose(precond.Q_sqr(H), iwp.Q_sqr(H))
 
 
-class TestPrecondIWPWithCustomXi:
-    """Tests for PrecondIWP with custom Xi matrix."""
+def test_transition_is_step_size_independent_up_to_T():
+    precond = PrecondIWP(q=3, d=2)
+    small, large = precond.transition(0.01), precond.transition(0.7)
+    assert np.allclose(small.A, large.A)
+    assert np.allclose(small.Q_sqr, large.Q_sqr)
+    assert not np.allclose(small.T_diag, large.T_diag)
 
-    def test_Q_incorporates_xi(self):
-        """Test that Q() incorporates the Xi scaling matrix."""
-        xi = np.array([[2.0, 0.0], [0.0, 3.0]])
-        precond = PrecondIWP(q=1, d=2, Xi=xi)
-        Q = precond.Q()
 
-        # Q should be kron(Q_bar, xi)
-        _, Q_bar, _ = _make_iwp_precond_state_matrices(1)
-        expected_Q = np.kron(Q_bar, xi)
+@pytest.mark.parametrize("q,d", [(1, 1), (2, 2), (3, 3)])
+def test_transition_reconstructs_the_original_coordinates(q, d):
+    precond = PrecondIWP(q=q, d=d, Xi=0.5 * np.eye(d))
+    tr = precond.transition(H)
+    t = tr.T_diag
+    assert t is not None
+    assert np.allclose(np.diag(precond.T(H)), t)
+    assert np.allclose(t[:, None] * tr.A / t[None, :], precond.A(H))
+    Q_sqr = tr.Q_sqr * t[None, :]
+    assert np.allclose(Q_sqr.T @ Q_sqr, precond.Q(H))
 
-        assert np.allclose(Q, expected_Q)
 
-    def test_A_uses_identity_regardless_of_xi(self):
-        """Test that A() uses identity matrix regardless of Xi."""
-        xi = np.array([[2.0, 0.0], [0.0, 3.0]])
-        precond = PrecondIWP(q=1, d=2, Xi=xi)
-        A = precond.A()
+def test_transition_matrices_are_the_closed_form_constants():
+    A_bar, Q_bar, _ = _make_iwp_precond_state_matrices(2)
+    xi = np.array([[2.0, 0.0], [0.0, 3.0]])
+    tr = PrecondIWP(q=2, d=2, Xi=xi).transition(H)
+    assert np.allclose(tr.A, np.kron(A_bar, np.eye(2)))
+    assert np.allclose(tr.Q_sqr.T @ tr.Q_sqr, np.kron(Q_bar, xi))
+    assert np.allclose(tr.b, 0.0)
 
-        # A should be kron(A_bar, I_d)
-        A_bar, _, _ = _make_iwp_precond_state_matrices(1)
-        expected_A = np.kron(A_bar, np.eye(2))
 
-        assert np.allclose(A, expected_A)
+def test_T_is_diagonal_and_vanishes_at_zero():
+    precond = PrecondIWP(q=2, d=2)
+    T = precond.T(0.5)
+    assert T.shape == (6, 6)
+    assert np.allclose(T - np.diag(np.diag(T)), 0.0)
+    assert np.allclose(precond.T(0.0), 0.0)
+
+
+def test_high_order_stays_finite():
+    tr = PrecondIWP(q=20, d=1).transition(1e-3)
+    assert bool(np.all(np.isfinite(tr.Q_sqr)))
+    assert bool(np.all(np.isfinite(tr.T_diag)))

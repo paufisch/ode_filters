@@ -1,122 +1,115 @@
 """Pluggable linearization/correction strategies for the Gaussian ODE filter.
 
-A ``Correction`` owns the predicted-mean -> updated-posterior transition of a
-filter step. The measurement model declares *what* to observe (the residual ``g``,
-its Jacobian, and the observation noise); the Correction decides *how* to linearize
-and update. Separating these two axes lets any measurement model (ODE information,
-conservation laws, hidden/joint models) compose with any linearization scheme.
+A ``Correction`` owns the update of a filter step. The measurement model declares
+*what* to observe (the residual ``g``, its Jacobian, and the observation noise);
+the Correction decides *how* to linearize and update. Separating these two axes
+lets any measurement model (ODE information, conservation laws, hidden/joint
+models) compose with any linearization scheme.
+
+A step uses a correction twice. ``linearize`` gives the affine model at the
+predicted mean, before the predicted covariance exists: the diffusion
+calibration estimates ``sigma^2`` from it. ``correct`` then updates the
+predicted Gaussian; the Taylor schemes reuse that same model, so each step
+linearizes once.
 
 Shipped schemes:
 
 - ``TaylorCorrection(order=1)`` -- EK1, the first-order extended Kalman
-  linearization (full vector-field Jacobian); reproduces the historical behavior.
+  linearization (full vector-field Jacobian).
 - ``TaylorCorrection(order=0)`` -- EK0, the zeroth-order linearization (vector field
   treated as locally constant, so the ODE-defect rows of the Jacobian reduce to the
-  selection matrix ``E_constraint``).
+  selection matrix of the ODE's left-hand side). It never differentiates the
+  vector field.
 - ``IteratedTaylorCorrection`` -- IEKF, the iterated EKF: a single forward pass in
   which *each step's update* relinearizes at the updated mean to a fixed point
-  (Gauss-Newton on the per-step MAP). This reduces local linearization error on
-  nonlinear problems. (The whole-trajectory iterated *smoother*, IEKS, is a separate
-  outer-loop construct and is not a Correction.)
+  (Gauss-Newton on the per-step MAP). (The whole-trajectory iterated *smoother*,
+  IEKS, is ``iterated_smoother``.)
 - ``QuadratureCorrection`` -- statistical linearization (SLF / sigma-point family):
   the affine surrogate is fitted over the predictive *spread* rather than tangent
   to a point, with the required Gaussian expectations evaluated by quadrature.
   With ``max_iters > 1`` it becomes the iterated posterior-linearization filter
-  (IPLF), which relinearizes with respect to the updated *density* -- the axis-2
-  counterpart of ``IteratedTaylorCorrection``'s axis-3 iteration.
-
-The Taylor schemes reuse the existing square-root algebra;
-``QuadratureCorrection`` adds only the quadrature of
-``ode_filters.linearization.statistical`` on top of the same update.
+  (IPLF), which relinearizes with respect to the updated *density*.
 """
 
 from __future__ import annotations
 
 import abc
-from typing import NamedTuple
 
 import equinox as eqx
 import jax
 from jax import Array
 from jax.typing import ArrayLike
 
-from ..gaussian.algebra import sqr_inversion, sqr_marginalization
-from ..information import BaseODEInformation
+from ..gaussian import AffineModel, Gaussian, update
+from ..information.protocol import MeasurementModel
 from .statistical import QuadratureRule, quadrature_nodes, slr_linearize
 
 
-class CorrectionResult(NamedTuple):
-    """Output of a single ``Correction.correct`` call.
+def taylor_linearize(
+    measure: MeasurementModel, state: Array, *, t: ArrayLike, order: int = 1
+) -> AffineModel:
+    """Taylor linearization ``H x + c ~= g(x)`` of ``measure`` at ``state``.
 
-    Attributes:
-        m: Updated posterior mean (shape ``[state_dim]``).
-        P_sqr: Updated posterior covariance in square-root form
-            (``P = P_sqr.T @ P_sqr``).
-        mz: Innovation (predicted-observation) mean (shape ``[obs_dim]``).
-        Pz_sqr: Innovation covariance in square-root form -- consumed by the
-            Gaussian log-marginal-likelihood.
+    Args:
+        measure: Measurement model.
+        state: Linearization point, shape ``[D]``.
+        t: Time.
+        order: ``1`` for the full Jacobian (EK1); ``0`` drops the vector-field
+            Jacobian from the ODE rows (EK0), which needs a model with a
+            ``linearize_ek0`` method (the ODE-information models).
+
+    Returns:
+        The affine model, with the measurement noise.
     """
-
-    m: Array
-    P_sqr: Array
-    mz: Array
-    Pz_sqr: Array
-
-
-def _linearize(
-    measure: BaseODEInformation, state: Array, *, t: ArrayLike, order: int
-) -> tuple[Array, Array]:
-    """Effective affine measurement model ``(H, c)`` with ``H x + c ~= g(x)``.
-
-    ``order=0`` drops the vector-field Jacobian on the ODE-defect rows (EK0);
-    ``order=1`` keeps it (EK1).
-    """
-    H, c = measure.linearize(state, t=t)
     if order == 0:
-        g = c + H @ state  # reconstruct the residual g(state)
-        d = measure.ode_dim
-        H = H.at[:d].set(measure.E_constraint)
-        c = g - H @ state
-    return H, c
-
-
-def _affine_correct(
-    H: Array, c: Array, R_sqr: Array, m_pred: Array, P_pred_sqr: Array
-) -> tuple[Array, Array, Array, Array]:
-    """One affine square-root update; returns ``(m, P_sqr, mz, Pz_sqr)``."""
-    mz, Pz_sqr = sqr_marginalization(H, c, R_sqr, m_pred, P_pred_sqr)
-    _, m_new, P_new_sqr = sqr_inversion(H, m_pred, P_pred_sqr, mz, Pz_sqr, R_sqr)
-    return m_new, P_new_sqr, mz, Pz_sqr
-
-
-def _noise(measure: BaseODEInformation, t: ArrayLike) -> Array:
-    return measure.get_noise(t=t)
+        if not hasattr(measure, "linearize_ek0"):
+            raise TypeError(
+                f"An EK0 linearization needs an ODE-information model; "
+                f"{type(measure).__name__} has no linearize_ek0."
+            )
+        H, c = measure.linearize_ek0(state, t=t)  # type: ignore[attr-defined]
+    else:
+        H, c = measure.linearize(state, t=t)
+    return AffineModel(H, c, measure.get_noise(t=t))
 
 
 class Correction(eqx.Module):
-    """Base class for linearization/correction strategies.
+    """Base class of the linearization/correction strategies.
 
     A Correction is an ``equinox.Module`` (static configuration), so it can be
-    captured by ``jax.jit`` / ``jax.lax.scan`` without retracing. Subclasses own the
-    full predicted -> posterior update and return a ``CorrectionResult``.
+    captured by ``jax.jit`` / ``jax.lax.scan`` without retracing.
     """
+
+    def linearize(
+        self, measure: MeasurementModel, m: Array, *, t: ArrayLike
+    ) -> AffineModel:
+        """The affine model at the predicted mean ``m`` (EK1 by default).
+
+        The diffusion calibration estimates ``sigma^2`` from it before the
+        predicted covariance is known, and ``correct`` receives it.
+        """
+        return taylor_linearize(measure, m, t=t, order=1)
 
     @abc.abstractmethod
     def correct(
         self,
-        measure: BaseODEInformation,
-        m_pred: Array,
-        P_pred_sqr: Array,
+        measure: MeasurementModel,
+        x: Gaussian,
+        model: AffineModel,
         *,
-        t: ArrayLike = 0.0,
-    ) -> CorrectionResult:
-        """Update a predicted Gaussian with the measurement model at time ``t``.
+        t: ArrayLike,
+    ) -> tuple[Gaussian, Gaussian]:
+        """Update the predicted Gaussian ``x`` with the measurement model.
 
         Args:
-            measure: ODE-information measurement model.
-            m_pred: Predicted (prior) state mean.
-            P_pred_sqr: Predicted state covariance, square-root form.
-            t: Current time.
+            measure: Measurement model.
+            x: Predicted Gaussian.
+            model: ``self.linearize(measure, x.m, t=t)``.
+            t: Time.
+
+        Returns:
+            ``(posterior, innovation)``; the innovation's density at zero is
+            the step's evidence.
         """
         raise NotImplementedError  # pragma: no cover - abstract method
 
@@ -126,8 +119,8 @@ class TaylorCorrection(Correction):
 
     Attributes:
         order: ``1`` for the first-order (EK1) linearization with the full
-            vector-field Jacobian (default; bit-identical to the historical filter
-            step). ``0`` for the zeroth-order (EK0) linearization.
+            vector-field Jacobian (default). ``0`` for the zeroth-order (EK0)
+            linearization, which never evaluates the vector-field Jacobian.
     """
 
     order: int = eqx.field(static=True, default=1)
@@ -139,11 +132,11 @@ class TaylorCorrection(Correction):
                 f"got {self.order!r}."
             )
 
-    def correct(self, measure, m_pred, P_pred_sqr, *, t=0.0) -> CorrectionResult:
-        H, c = _linearize(measure, m_pred, t=t, order=self.order)
-        R_sqr = _noise(measure, t)
-        m, P_sqr, mz, Pz_sqr = _affine_correct(H, c, R_sqr, m_pred, P_pred_sqr)
-        return CorrectionResult(m, P_sqr, mz, Pz_sqr)
+    def linearize(self, measure, m, *, t):
+        return taylor_linearize(measure, m, t=t, order=self.order)
+
+    def correct(self, measure, x, model, *, t):
+        return update(model, x)
 
 
 class IteratedTaylorCorrection(Correction):
@@ -156,7 +149,7 @@ class IteratedTaylorCorrection(Correction):
     differentiable, so it can be used inside gradient-based parameter inference.
 
     Attributes:
-        max_iters: Number of relinearizations per step (>= 1).
+        max_iters: Number of linearizations per step (>= 1).
     """
 
     max_iters: int = eqx.field(static=True, default=3)
@@ -165,22 +158,15 @@ class IteratedTaylorCorrection(Correction):
         if self.max_iters < 1:
             raise ValueError(f"max_iters must be >= 1, got {self.max_iters!r}.")
 
-    def correct(self, measure, m_pred, P_pred_sqr, *, t=0.0) -> CorrectionResult:
-        R_sqr = _noise(measure, t)
+    def correct(self, measure, x, model, *, t):
+        def relinearize(_i, carry):
+            posterior, _ = carry
+            H, c = measure.linearize(posterior.m, t=t)
+            return update(AffineModel(H, c, model.R_sqr), x)
 
-        def update_from(m_lin):
-            H, c = _linearize(measure, m_lin, t=t, order=1)
-            m, P_sqr, mz, Pz_sqr = _affine_correct(H, c, R_sqr, m_pred, P_pred_sqr)
-            return m, P_sqr, mz, Pz_sqr
-
-        # Iteration 0 linearizes at the prediction (this alone == EK1); each
-        # further pass relinearizes at the current updated mean.
-        init = update_from(m_pred)
-        carry = jax.lax.fori_loop(
-            1, self.max_iters, lambda _i, c: update_from(c[0]), init
-        )
-        m, P_sqr, mz, Pz_sqr = carry
-        return CorrectionResult(m, P_sqr, mz, Pz_sqr)
+        # Iteration 0 uses the linearization at the prediction (this alone is
+        # EK1); each further pass relinearizes at the current updated mean.
+        return jax.lax.fori_loop(1, self.max_iters, relinearize, update(model, x))
 
 
 class QuadratureCorrection(Correction):
@@ -189,8 +175,8 @@ class QuadratureCorrection(Correction):
     Replaces the Taylor tangent at the predicted mean with the affine map that
     best fits the residual *over the predictive spread*, computing the required
     Gaussian expectations by quadrature on the projected marginal (see
-    ``ode_filters.linearization.statistical``). Two things change
-    relative to ``TaylorCorrection(order=1)``:
+    ``ode_filters.linearization.statistical``). Two things change relative to
+    ``TaylorCorrection(order=1)``:
 
     - ``H`` becomes the *expected* Jacobian rather than the Jacobian at the mean;
     - the linearization-residual covariance ``Omega`` is added to the measurement
@@ -198,7 +184,9 @@ class QuadratureCorrection(Correction):
       the term a sigma-point filter's ``S`` carries and the EKF's omits.
 
     Both differences vanish for an affine vector field, so this correction is a
-    no-op (up to floating point) on linear problems.
+    no-op (up to floating point) on linear problems. The diffusion calibration
+    still uses the EK1 linearization at the predicted mean, because the
+    statistical one needs the predicted covariance it is calibrating.
 
     Where it matters: the closure error scales with the predictive spread of the
     vector field's arguments. In a pure ODE solve that spread vanishes as
@@ -223,7 +211,7 @@ class QuadratureCorrection(Correction):
             filter (IPLF), which refits the surrogate over the *updated* density.
             Contrast ``IteratedTaylorCorrection``, which iterates the
             linearization *point* at zero spread. The whole-trajectory version is
-            ``ipls_smoother``.
+            ``iterated_smoother(linearization="slr")``.
     """
 
     rule: QuadratureRule = eqx.field(static=True, default="gauss_hermite")
@@ -237,24 +225,20 @@ class QuadratureCorrection(Correction):
         # inside a traced scan body. dim=1 is enough to exercise the dispatch.
         quadrature_nodes(self.rule, 1, self.n_nodes)
 
-    def correct(self, measure, m_pred, P_pred_sqr, *, t=0.0) -> CorrectionResult:
-        def update_from(m_lin, P_lin_sqr):
-            model = slr_linearize(
+    def correct(self, measure, x, model, *, t):
+        def update_over(density: Gaussian):
+            slr = slr_linearize(
                 measure,
-                m_lin,
-                P_lin_sqr,
+                density.m,
+                density.P_sqr,
                 t=t,
                 rule=self.rule,
                 n_nodes=self.n_nodes,
             )
-            return _affine_correct(
-                model.H, model.c, model.R_eff_sqr, m_pred, P_pred_sqr
-            )
+            return update(AffineModel(slr.H, slr.c, slr.R_eff_sqr), x)
 
         # Pass 0 linearizes over the *predictive* density (the one-shot
         # sigma-point update); each further pass refits over the updated one.
-        init = update_from(m_pred, P_pred_sqr)
-        m, P_sqr, mz, Pz_sqr = jax.lax.fori_loop(
-            1, self.max_iters, lambda _i, c: update_from(c[0], c[1]), init
+        return jax.lax.fori_loop(
+            1, self.max_iters, lambda _i, c: update_over(c[0]), update_over(x)
         )
-        return CorrectionResult(m, P_sqr, mz, Pz_sqr)

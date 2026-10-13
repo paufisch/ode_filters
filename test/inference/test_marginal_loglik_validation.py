@@ -17,6 +17,8 @@ def test_marginal_loglik_requires_data():
         measure = ODEInformation(lambda x, *, t: -x, prior.E0, prior.E1)
         return np.array([1.0, 0.0, 0.0]), np.eye(3), measure
 
-    problem = InferenceProblem(build=build, prior=prior, tspan=(0.0, 1.0), N=10)
+    problem = InferenceProblem(
+        build=build, prior=prior, ts=np.linspace(*(0.0, 1.0), 10 + 1)
+    )
     with pytest.raises(ValueError, match="requires observations"):
         marginal_loglik({}, None, model=problem)

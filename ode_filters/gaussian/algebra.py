@@ -1,3 +1,24 @@
+"""Square-root Gaussian algebra: marginalize, invert, update, compose.
+
+Every covariance is held as an upper-triangular factor, ``P = P_sqr.T @ P_sqr``,
+and never formed. All operations rest on one identity: for factors stacked
+vertically,
+
+    [X; Y].T @ [X; Y] = X.T @ X + Y.T @ Y,
+
+so a *sum* of covariances is the Gram matrix of the stacked factors, and a QR
+decomposition ``[X; Y] = Q R`` returns its upper-triangular factor ``R`` (the
+orthogonal ``Q`` cancels in ``R.T @ R``). For the marginal of ``z = A x + b + w``
+with ``x ~ N(m, P)`` and ``w ~ N(0, Q)``,
+
+    Cov(z) = A P A.T + Q = [P_sqr A.T; Q_sqr].T @ [P_sqr A.T; Q_sqr],
+
+which is ``marginalize``. The other operations stack their terms the same way:
+``invert`` the Joseph form of the conditional covariance, ``compose`` the
+covariance of a chain of two conditionals. The result is symmetric and
+positive-semidefinite by construction, whatever the round-off.
+"""
+
 from __future__ import annotations
 
 import jax
@@ -6,6 +27,8 @@ import jax.scipy.linalg
 import numpy as onp
 from jax import Array
 from jax.typing import ArrayLike
+
+from .types import AffineModel, Conditional, Gaussian
 
 # Jitter that lets the Cholesky through noise-free channels: a zero row/column
 # of R (e.g. the noise-free ODE-defect rows) becomes a ~1e-16 diagonal entry.
@@ -27,7 +50,7 @@ def _safe_qr(C: Array) -> Array:
     An exactly-zero ``C`` is not a corner case here: it is what the first backward
     conditional of a filter started from a deterministic initial condition *is*.
     ``taylor_mode_initialization`` returns a zero
-    ``P_0_sqr``, so at the first step ``sqr_inversion`` sees a zero cross-term, a
+    ``P_0_sqr``, so at the first step ``invert`` sees a zero cross-term, a
     zero gain, and hence a zero stacked factor.
 
     Defining the derivative to be **zero** there is not a fudge, it is the correct
@@ -43,7 +66,7 @@ def _safe_qr(C: Array) -> Array:
     rank-deficient one (a structurally singular ``Q``, say) still has an undefined
     QR derivative, which needs a rank-revealing factorization. And this repairs a
     degenerate *output* factor, not a degenerate *innovation* covariance:
-    ``sqr_inversion`` divides by ``Sigma_z_sqr`` in a triangular solve, so a
+    ``invert`` divides by the innovation factor in a triangular solve, so a
     singular innovation stays ``NaN`` -- correctly, since conditioning a
     zero-variance state on a zero-variance observation is ill-posed.
 
@@ -126,159 +149,128 @@ def _check_noise_covariance(R: ArrayLike, name: str) -> None:
         ) from None
 
 
-def sqr_marginalization(
-    A: Array,
-    b: Array,
-    Q_sqr: Array,
-    mu: Array,
-    Sigma_sqr: Array,
-) -> tuple[Array, Array]:
-    """Marginalize out the linear transformation in a Gaussian model using square-root form.
+def _check_square(name: str, M: Array) -> None:
+    if M.ndim != 2 or M.shape[0] != M.shape[1]:
+        raise ValueError(f"{name} must be a square matrix, got shape {M.shape}.")
 
-    Computes the marginal distribution of z = Ax + b given p(x) ~ N(mu, Sigma)
-    and p(z|x) ~ N(Ax + b, Q). The result is p(z) = N(mu_z, Sigma_z) where:
-    - mu_z = A @ mu + b
-    - Sigma_z = A @ Sigma @ A.T + Q
 
-    The square-root form is preserved to maintain numerical stability.
+def marginalize(A: Array, b: Array, Q_sqr: Array, x: Gaussian) -> Gaussian:
+    """Marginal of ``z = A x + b + w`` with ``x ~ N(m, P)`` and ``w ~ N(0, Q)``.
+
+    ``z ~ N(A m + b, A P A.T + Q)``, with the covariance factor from one QR of
+    ``[P_sqr A.T; Q_sqr]`` (see the module docstring).
 
     Args:
-        A: Linear transformation matrix (shape [n_obs, n_state]).
-        b: Observation offset (shape [n_obs]).
-        Q_sqr: Square root of observation noise covariance, shape
-            ``[n_obs, n_obs]`` (for a single observation a scalar or length-1
-            array also works).
-        mu: Prior mean (shape [n_state]).
-        Sigma_sqr: Square root of prior covariance (shape [n_state, n_state]).
+        A: Linear map, shape ``[k, n]``.
+        b: Offset, shape ``[k]``.
+        Q_sqr: Square-root noise covariance, shape ``[k, k]``.
+        x: The Gaussian over ``x``, mean shape ``[n]``.
 
     Returns:
-        Tuple of (mu_z, Sigma_z_sqr) where:
-        - mu_z is the marginal mean of z (shape [n_obs])
-        - Sigma_z_sqr is the square root of marginal covariance of z (shape [n_obs, n_obs])
+        The Gaussian over ``z``.
 
     Raises:
-        ValueError: If input shapes are incompatible or invalid.
+        ValueError: If the shapes do not match.
     """
     Q_sqr = np.atleast_2d(Q_sqr)
-    Sigma_sqr = np.atleast_2d(Sigma_sqr)
-
-    if A.shape[0] != b.shape[0]:
+    P_sqr = np.atleast_2d(x.P_sqr)
+    _check_square("Q_sqr", Q_sqr)
+    _check_square("P_sqr", P_sqr)
+    if A.shape[0] != b.shape[0] or A.shape[0] != Q_sqr.shape[0]:
         raise ValueError(
-            f"Shape mismatch: A has {A.shape[0]} rows but b has shape {b.shape[0]}. "
-            "b must have the same number of elements as A has rows."
+            f"A has {A.shape[0]} rows, but b has shape {b.shape} and Q_sqr has "
+            f"shape {Q_sqr.shape}; all three describe the same output."
         )
-
-    if Q_sqr.shape[0] != Q_sqr.shape[1]:
+    if A.shape[1] != P_sqr.shape[0]:
         raise ValueError(
-            f"Shape mismatch: Q is expected to be of square shape but has shape {Q_sqr.shape}"
+            f"A has {A.shape[1]} columns but the state has dimension "
+            f"{P_sqr.shape[0]} (A: {A.shape}, P_sqr: {P_sqr.shape})."
         )
-
-    if Sigma_sqr.shape[0] != Sigma_sqr.shape[1]:
-        raise ValueError(
-            f"Shape mismatch: Sigma_sqr is expected to be of square shape but has shape {Sigma_sqr.shape}"
-        )
-
-    if A.shape[1] != Sigma_sqr.shape[0]:
-        raise ValueError(
-            f"Shape mismatch: A has {A.shape[1]} columns but Sigma_sqr has "
-            f"{Sigma_sqr.shape[0]} rows (A={A.shape}, Sigma_sqr={Sigma_sqr.shape})."
-        )
-
-    # Compute marginal statistics
-    mu_z = A @ mu + b
-    C = np.concatenate([Sigma_sqr @ A.T, Q_sqr], axis=0)
-    Sigma_z_sqr = _safe_qr(C)
-
-    return mu_z, Sigma_z_sqr
+    m_z = A @ x.m + b
+    P_z_sqr = _safe_qr(np.concatenate([P_sqr @ A.T, Q_sqr], axis=0))
+    return Gaussian(m_z, P_z_sqr)
 
 
-def sqr_inversion(
-    A: Array,
-    mu: Array,
-    Sigma_sqr: Array,
-    mu_z: Array,
-    Sigma_z_sqr: Array,
-    Q_sqr: Array | None = None,
-) -> tuple[Array, Array, Array]:
-    """Numerically stable Bayesian inference using square-root representations.
+def invert(A: Array, Q_sqr: Array, x: Gaussian, z: Gaussian) -> Conditional:
+    """Bayes' rule for ``z = A x + b + w``: the conditional ``p(x | z)``.
 
-    Performs Bayesian update of a Gaussian given a linear observation model, using
-    Cholesky factors and QR decomposition to maintain numerical stability.
-
-    Given p(x) ~ N(mu, Sigma) and p(z|x) ~ N(Ax + b, Q), with the marginal
-    p(z) ~ N(mu_z, Sigma_z) from ``sqr_marginalization``, returns the conditional
-    p(x | z) = N(K z + d, Lambda) in square-root form. The filters observe the
-    residual value ``z = 0``, so there the posterior mean is just ``d``.
+    Given the prior ``x`` and the marginal ``z`` (from ``marginalize`` with the
+    same ``A``, ``b``, ``Q_sqr``), returns ``x | z ~ N(G z + d, Lambda)`` with the
+    gain ``G = P A.T Cov(z)^-1``, ``d = m - G E[z]`` and the Joseph form
+    ``Lambda = (I - G A) P (I - G A).T + G Q G.T``. Observing ``z = 0`` gives the
+    posterior ``N(d, Lambda)``; in the filters' prediction it is the backward
+    conditional ``p(x_n | x_{n+1})``.
 
     Args:
-        A: Observation matrix (shape [n_obs, n_state]).
-        mu: Prior mean (shape [n_state]).
-        Sigma_sqr: Square root of prior covariance (shape [n_state, n_state]).
-        mu_z: Marginal observation mean (shape [n_obs]).
-        Sigma_z_sqr: Square root of marginal observation covariance (shape [n_obs, n_obs]).
-        Q_sqr: Square root of the noise covariance ``Q`` that went into
-            ``Sigma_z_sqr``. ``None`` means noise-free (``Q = 0``); passing
-            ``None`` for a noisy observation gives a wrong (too small) ``Lambda``.
+        A: Linear map, shape ``[k, n]``.
+        Q_sqr: Square-root noise covariance of ``w``, shape ``[k, k]``. A
+            noise-free map needs an explicit zero factor.
+        x: The prior over ``x``.
+        z: The marginal over ``z``.
 
     Returns:
-        Tuple ``(K, d, Lambda_sqr)``: the Kalman gain ``K`` (shape
-        ``[n_state, n_obs]``), the offset ``d`` of the conditional mean
-        ``K z + d`` (shape ``[n_state]``; the posterior mean when ``z = 0`` is
-        observed), and the conditional covariance square root ``Lambda_sqr``
-        (shape ``[n_state, n_state]``).
+        The conditional ``p(x | z)``.
     """
-    if Q_sqr is None:
-        Q_sqr = np.zeros_like(Sigma_z_sqr)
-
     n_state = A.shape[1]
-
-    Sigma_z_sqr = np.atleast_2d(Sigma_z_sqr)
-    # K = Sigma A^T Sigma_z^-1 by two triangular solves with the factor of
-    # Sigma_z; the covariance uses the Joseph form (I - K A) Sigma (.)^T + K Q K^T,
-    # stacked as factors so a single QR returns its upper-triangular root.
-    cross = (A @ Sigma_sqr.T) @ Sigma_sqr
-    Z = jax.scipy.linalg.solve_triangular(Sigma_z_sqr.T, cross, lower=True)
-    K = jax.scipy.linalg.solve_triangular(Sigma_z_sqr, Z, lower=False).T
-    d = mu - K @ mu_z
-    B = np.eye(n_state) - K @ A
-    C = np.concatenate([Sigma_sqr @ B.T, (Q_sqr @ K.T).reshape(-1, n_state)], axis=0)
-    Lambda_sqr = _safe_qr(C)
-
-    return K, d, Lambda_sqr
+    P_sqr = np.atleast_2d(x.P_sqr)
+    P_z_sqr = np.atleast_2d(z.P_sqr)
+    # G = P A^T P_z^-1 by two triangular solves with the factor of P_z.
+    cross = (A @ P_sqr.T) @ P_sqr
+    Z = jax.scipy.linalg.solve_triangular(P_z_sqr.T, cross, lower=True)
+    G = jax.scipy.linalg.solve_triangular(P_z_sqr, Z, lower=False).T
+    d = x.m - G @ z.m
+    B = np.eye(n_state) - G @ A
+    stacked = np.concatenate(
+        [P_sqr @ B.T, (np.atleast_2d(Q_sqr) @ G.T).reshape(-1, n_state)], axis=0
+    )
+    return Conditional(G, d, _safe_qr(stacked))
 
 
-def compose_backward_conditionals(
-    cond_outer: tuple[Array, Array, Array],
-    cond_inner: tuple[Array, Array, Array],
-) -> tuple[Array, Array, Array]:
-    """Compose two affine Gaussian (backward) conditionals into one.
-
-    Given an outer conditional ``p(x | y) = N(G1 y + d1, P1)`` and an inner
-    conditional ``p(y | z) = N(G2 z + d2, P2)``, returns the marginalised
-    conditional ``p(x | z) = N(G z + d, P)`` with::
-
-        G = G1 @ G2,   d = G1 @ d2 + d1,   P = G1 @ P2 @ G1.T + P1,
-
-    in square-root form (``P = P_sqr.T @ P_sqr``). This is the fixed-point
-    smoothing "merge" of two conditionals (Kraemer 2025, "Adaptive Probabilistic
-    ODE Solvers Without Adaptive Memory Requirements", Eq. 18/19): composing the
-    per-step backward conditionals of an interval into a single conditional lets
-    an adaptive smoother store one conditional per *save* interval instead of one
-    per (data-dependent) sub-step.
-
-    The mean offset and noise covariance are exactly the marginal of
-    ``N(d2, P2)`` pushed through the affine map ``x = G1 (.) + d1``, so the noise
-    reuses ``sqr_marginalization`` (its QR keeps the square-root form); only
-    the composed linear operator ``G1 @ G2`` is added.
+def update(model: AffineModel, x: Gaussian) -> tuple[Gaussian, Gaussian]:
+    """Condition ``x`` on observing ``z = 0`` under ``z = H x + c + v``.
 
     Args:
-        cond_outer: ``(G1, d1, P1_sqr)`` parametrising ``p(x | y)``.
-        cond_inner: ``(G2, d2, P2_sqr)`` parametrising ``p(y | z)``.
+        model: The observation model; the data enter through ``c`` (observing
+            ``y`` is ``c = -y``).
+        x: The prior.
 
     Returns:
-        ``(G, d, P_sqr)`` parametrising the composed conditional ``p(x | z)``.
+        ``(posterior, innovation)``: the posterior over ``x`` and the
+        predictive distribution of ``z`` (mean ``H m + c``, the residual at the
+        prior mean), whose density at zero is the step's evidence.
     """
-    G1, d1, P1_sqr = cond_outer
-    G2, d2, P2_sqr = cond_inner
-    d, P_sqr = sqr_marginalization(G1, d1, P1_sqr, d2, P2_sqr)
-    return G1 @ G2, d, P_sqr
+    innovation = marginalize(model.H, model.c, model.R_sqr, x)
+    conditional = invert(model.H, model.R_sqr, x, innovation)
+    return Gaussian(conditional.d, conditional.P_sqr), innovation
+
+
+def compose(outer: Conditional, inner: Conditional) -> Conditional:
+    """Compose ``p(x | y)`` (outer) and ``p(y | z)`` (inner) into ``p(x | z)``.
+
+    ``G = G1 G2``, ``d = G1 d2 + d1``, ``P = G1 P2 G1.T + P1``: the marginal of
+    the inner conditional's noise pushed through the outer one. Used by the
+    adaptive fixed-point smoother to merge the per-step backward conditionals
+    of a save interval into one (Kraemer 2025, "Adaptive Probabilistic ODE
+    Solvers Without Adaptive Memory Requirements", Eq. 18/19).
+
+    Args:
+        outer: ``p(x | y) = N(G1 y + d1, P1)``.
+        inner: ``p(y | z) = N(G2 z + d2, P2)``.
+
+    Returns:
+        ``p(x | z)``.
+    """
+    noise = marginalize(outer.G, outer.d, outer.P_sqr, Gaussian(inner.d, inner.P_sqr))
+    return Conditional(outer.G @ inner.G, noise.m, noise.P_sqr)
+
+
+def log_likelihood(innovation: Gaussian) -> Array:
+    """Log-density at zero of the innovation ``N(m_z, P_z)``: ``log N(0; m_z, P_z)``.
+
+    The evidence an update contributes when it observes ``z = 0``.
+    """
+    P_z_sqr = innovation.P_sqr
+    log_det = 2.0 * np.sum(np.log(np.abs(np.diag(P_z_sqr))))
+    v = jax.scipy.linalg.solve_triangular(P_z_sqr.T, innovation.m, lower=True)
+    k = innovation.m.shape[0]
+    return -0.5 * (k * np.log(2 * np.pi) + log_det + v @ v)

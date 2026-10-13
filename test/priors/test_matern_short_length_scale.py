@@ -83,9 +83,10 @@ def test_precond_matern_is_the_plain_matern_in_preconditioned_coordinates(
     """
     plain = MaternPrior(2, 1, length_scale=length_scale, Xi=np.eye(1))
     precond = PrecondMaternPrior(2, 1, length_scale=length_scale, Xi=np.eye(1))
-    T = np.asarray(precond.T(h))
-    A_bar = np.asarray(precond.A(h))
-    Q_bar = np.asarray(precond.Q(h))
+    tr = precond.transition(h)
+    T = np.diag(np.asarray(tr.T_diag))
+    A_bar = np.asarray(tr.A)
+    Q_bar = np.asarray(tr.Q_sqr.T @ tr.Q_sqr)
     assert np.isfinite(A_bar).all() and np.isfinite(Q_bar).all()
     A, Q = np.asarray(plain.A(h)), np.asarray(plain.Q(h))
     assert np.allclose(
@@ -106,7 +107,7 @@ def test_precond_matern_filter_matches_plain_at_short_length_scale():
     for cls in (MaternPrior, PrecondMaternPrior):
         prior = cls(2, 1, 2.6e-3)
         measure = ODEInformation(vf, prior.E0, prior.E1)
-        res = gaussian_filter(mu_0, P0_sqr, prior, measure, (0.0, 1.0), N=100)
+        res = gaussian_filter(mu_0, P0_sqr, prior, measure, np.linspace(0.0, 1.0, 101))
         means.append(np.asarray(res.m))
     assert np.isfinite(means[1]).all()
     assert np.allclose(means[1], means[0], atol=1e-10)

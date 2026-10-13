@@ -13,6 +13,8 @@ Proves the three properties that make it safe to ship as an alternative to EK1:
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import jax
 import jax.numpy as np
 import numpy as onp
@@ -23,8 +25,9 @@ from ode_filters import (
     TaylorCorrection,
     gaussian_filter,
 )
-from ode_filters.filters.ode_filter_step import sqr_filter_step
-from ode_filters.gaussian import sqr_inversion, sqr_marginalization
+from ode_filters.calibration import NoCalibration
+from ode_filters.filters.kernel import OnlineInformation, filter_step
+from ode_filters.gaussian import AffineModel, Gaussian, update
 from ode_filters.information import (
     Measurement,
     ODEInformation,
@@ -53,6 +56,22 @@ def _measure_for(vf, q=3):
     """Just the measurement model, for tests that drive a Correction directly."""
     prior = IWP(q=q, d=1)
     return ODEInformation(vf, prior.E0, prior.E1)
+
+
+class _Result(NamedTuple):
+    m: np.ndarray
+    P_sqr: np.ndarray
+    mz: np.ndarray
+    Pz_sqr: np.ndarray
+
+
+def _correct(correction, measure, m_pred, P_pred_sqr, *, t):
+    """Linearize at the prediction and update, as a filter step does."""
+    model = correction.linearize(measure, m_pred, t=t)
+    posterior, innovation = correction.correct(
+        measure, Gaussian(m_pred, P_pred_sqr), model, t=t
+    )
+    return _Result(posterior.m, posterior.P_sqr, innovation.m, innovation.P_sqr)
 
 
 def _prior_and_measure(vf, q=3):
@@ -100,14 +119,24 @@ def test_affine_field_reproduces_ek1():
     """Nothing changes on a linear problem: Omega is zero and H is the Jacobian."""
     prior, measure, mu_0, P0_sqr = _setup(vf=linear_vf)
     ek1 = gaussian_filter(
-        mu_0, P0_sqr, prior, measure, TSPAN, N_STEPS, correction=TaylorCorrection(1)
+        mu_0,
+        P0_sqr,
+        prior,
+        measure,
+        np.linspace(*TSPAN, N_STEPS + 1),
+        correction=TaylorCorrection(1),
     )
     for corr in (
         QuadratureCorrection(n_nodes=4),
         QuadratureCorrection(rule="cubature"),
     ):
         slr = gaussian_filter(
-            mu_0, P0_sqr, prior, measure, TSPAN, N_STEPS, correction=corr
+            mu_0,
+            P0_sqr,
+            prior,
+            measure,
+            np.linspace(*TSPAN, N_STEPS + 1),
+            correction=corr,
         )
         assert onp.allclose(slr.m, ek1.m, atol=1e-12)
         assert onp.allclose(slr.Pz_sqr, ek1.Pz_sqr, atol=1e-12)
@@ -126,8 +155,8 @@ def test_nonlinear_field_inflates_the_innovation_covariance():
     m_pred = np.array([0.9, -0.3, 0.2, 0.05])
     P_pred_sqr = 0.35 * np.eye(4)
 
-    ek1 = TaylorCorrection(order=1).correct(measure, m_pred, P_pred_sqr, t=0.2)
-    slr = QuadratureCorrection(n_nodes=4).correct(measure, m_pred, P_pred_sqr, t=0.2)
+    ek1 = _correct(TaylorCorrection(order=1), measure, m_pred, P_pred_sqr, t=0.2)
+    slr = _correct(QuadratureCorrection(n_nodes=4), measure, m_pred, P_pred_sqr, t=0.2)
 
     S_ek1 = ek1.Pz_sqr.T @ ek1.Pz_sqr
     S_slr = slr.Pz_sqr.T @ slr.Pz_sqr
@@ -137,20 +166,18 @@ def test_nonlinear_field_inflates_the_innovation_covariance():
 
 
 def test_correct_equals_the_affine_update_from_the_surrogate():
-    """The correction is exactly ``sqr_marginalization`` + ``sqr_inversion`` on the SLR model."""
+    """The correction is exactly the affine update with the SLR model."""
     measure = _measure_for(cubic)
     m_pred = np.array([0.6, -0.1, 0.3, 0.02])
     P_pred_sqr = 0.2 * np.eye(4)
 
     model = slr_linearize(measure, m_pred, P_pred_sqr, t=0.4, n_nodes=4)
-    mz, Pz_sqr = sqr_marginalization(
-        model.H, model.c, model.R_eff_sqr, m_pred, P_pred_sqr
+    posterior, innovation = update(
+        AffineModel(model.H, model.c, model.R_eff_sqr), Gaussian(m_pred, P_pred_sqr)
     )
-    _, m_ref, P_ref_sqr = sqr_inversion(
-        model.H, m_pred, P_pred_sqr, mz, Pz_sqr, model.R_eff_sqr
-    )
+    m_ref, P_ref_sqr, mz = posterior.m, posterior.P_sqr, innovation.m
 
-    res = QuadratureCorrection(n_nodes=4).correct(measure, m_pred, P_pred_sqr, t=0.4)
+    res = _correct(QuadratureCorrection(n_nodes=4), measure, m_pred, P_pred_sqr, t=0.4)
     assert onp.allclose(res.m, m_ref, atol=1e-14)
     assert onp.allclose(res.P_sqr.T @ res.P_sqr, P_ref_sqr.T @ P_ref_sqr, atol=1e-14)
     assert onp.allclose(res.mz, mz, atol=1e-14)
@@ -162,8 +189,8 @@ def test_zero_spread_prediction_collapses_onto_ek1():
     m_pred = np.array([0.6, -0.1, 0.3, 0.02])
     P_pred_sqr = np.zeros((4, 4))
 
-    ek1 = TaylorCorrection(order=1).correct(measure, m_pred, P_pred_sqr, t=0.4)
-    slr = QuadratureCorrection(n_nodes=4).correct(measure, m_pred, P_pred_sqr, t=0.4)
+    ek1 = _correct(TaylorCorrection(order=1), measure, m_pred, P_pred_sqr, t=0.4)
+    slr = _correct(QuadratureCorrection(n_nodes=4), measure, m_pred, P_pred_sqr, t=0.4)
     assert onp.allclose(slr.m, ek1.m, atol=1e-14)
     assert onp.allclose(slr.mz, ek1.mz, atol=1e-14)
 
@@ -178,10 +205,10 @@ def test_iplf_single_iteration_is_the_one_shot_filter():
     m_pred = np.array([0.9, -0.3, 0.2, 0.05])
     P_pred_sqr = 0.35 * np.eye(4)
 
-    one = QuadratureCorrection(n_nodes=4, max_iters=1).correct(
-        measure, m_pred, P_pred_sqr, t=0.2
+    one = _correct(
+        QuadratureCorrection(n_nodes=4, max_iters=1), measure, m_pred, P_pred_sqr, t=0.2
     )
-    ref = QuadratureCorrection(n_nodes=4).correct(measure, m_pred, P_pred_sqr, t=0.2)
+    ref = _correct(QuadratureCorrection(n_nodes=4), measure, m_pred, P_pred_sqr, t=0.2)
     assert onp.allclose(one.m, ref.m, atol=1e-14)
 
 
@@ -191,20 +218,20 @@ def test_iplf_refits_over_the_updated_density():
     m_pred = np.array([0.9, -0.3, 0.2, 0.05])
     P_pred_sqr = 0.35 * np.eye(4)
 
-    one = QuadratureCorrection(n_nodes=4, max_iters=1).correct(
-        measure, m_pred, P_pred_sqr, t=0.2
+    one = _correct(
+        QuadratureCorrection(n_nodes=4, max_iters=1), measure, m_pred, P_pred_sqr, t=0.2
     )
-    many = QuadratureCorrection(n_nodes=4, max_iters=4).correct(
-        measure, m_pred, P_pred_sqr, t=0.2
+    many = _correct(
+        QuadratureCorrection(n_nodes=4, max_iters=4), measure, m_pred, P_pred_sqr, t=0.2
     )
     assert not onp.allclose(many.m, one.m, atol=1e-8)
 
     # The fixed point: one more pass from the converged surrogate reproduces it.
-    res = QuadratureCorrection(n_nodes=4, max_iters=8).correct(
-        measure, m_pred, P_pred_sqr, t=0.2
+    res = _correct(
+        QuadratureCorrection(n_nodes=4, max_iters=8), measure, m_pred, P_pred_sqr, t=0.2
     )
-    res2 = QuadratureCorrection(n_nodes=4, max_iters=9).correct(
-        measure, m_pred, P_pred_sqr, t=0.2
+    res2 = _correct(
+        QuadratureCorrection(n_nodes=4, max_iters=9), measure, m_pred, P_pred_sqr, t=0.2
     )
     assert onp.allclose(res.m, res2.m, atol=1e-8)
 
@@ -213,8 +240,12 @@ def test_iplf_is_a_no_op_on_affine_fields():
     measure = _measure_for(linear_vf)
     m_pred = np.array([0.9, -0.3, 0.2, 0.05])
     P_pred_sqr = 0.35 * np.eye(4)
-    one = QuadratureCorrection(max_iters=1).correct(measure, m_pred, P_pred_sqr, t=0.2)
-    many = QuadratureCorrection(max_iters=5).correct(measure, m_pred, P_pred_sqr, t=0.2)
+    one = _correct(
+        QuadratureCorrection(max_iters=1), measure, m_pred, P_pred_sqr, t=0.2
+    )
+    many = _correct(
+        QuadratureCorrection(max_iters=5), measure, m_pred, P_pred_sqr, t=0.2
+    )
     assert onp.allclose(many.m, one.m, atol=1e-13)
 
 
@@ -235,25 +266,24 @@ def test_solves_a_nonlinear_ode_accurately():
         P0_sqr,
         prior,
         measure,
-        TSPAN,
-        N_STEPS,
+        np.linspace(*TSPAN, N_STEPS + 1),
         correction=QuadratureCorrection(n_nodes=4),
     )
     assert float(np.max(np.abs(res.m[:, 0] - exact(res.t)))) < 1e-6
 
 
-def test_reaches_through_sqr_filter_step():
+def test_reaches_through_the_filter_step():
     prior, measure = _prior_and_measure(cubic)
-    A, b = prior.A(0.1), prior.b(0.1)
-    Q_sqr = prior.Q_sqr(0.1)
-    m0 = np.array([0.7, -0.2, 0.1, 0.0])
-    P0 = 0.3 * np.eye(4)
-
-    _, _, (mz, _), (m_new, _) = sqr_filter_step(
-        A, b, Q_sqr, m0, P0, measure, t=0.2, correction=QuadratureCorrection(n_nodes=4)
+    out = filter_step(
+        Gaussian(np.array([0.7, -0.2, 0.1, 0.0]), 0.3 * np.eye(4)),
+        prior.transition(0.1),
+        OnlineInformation(measure, QuadratureCorrection(n_nodes=4)),
+        t=0.2,
+        calibration=NoCalibration(),
+        scale_noise=prior.apply_state_sigma_sqr,
     )
-    assert bool(np.all(np.isfinite(m_new)))
-    assert bool(np.all(np.isfinite(mz)))
+    assert bool(np.all(np.isfinite(out.filtered.m)))
+    assert bool(np.all(np.isfinite(out.innovation.m)))
 
 
 def test_works_with_the_observation_path():
@@ -270,8 +300,7 @@ def test_works_with_the_observation_path():
         P0_sqr,
         prior,
         measure,
-        TSPAN,
-        N_STEPS,
+        np.linspace(*TSPAN, N_STEPS + 1),
         correction=QuadratureCorrection(n_nodes=4),
         obs_model=obs_model,
     )
@@ -292,8 +321,7 @@ def test_works_on_the_preconditioned_path():
         P0_sqr,
         plain_prior,
         ODEInformation(logistic, plain_prior.E0, plain_prior.E1),
-        TSPAN,
-        N_STEPS,
+        np.linspace(*TSPAN, N_STEPS + 1),
         correction=QuadratureCorrection(n_nodes=4),
     )
     precond = gaussian_filter(
@@ -301,8 +329,7 @@ def test_works_on_the_preconditioned_path():
         P0_sqr,
         prior,
         measure,
-        TSPAN,
-        N_STEPS,
+        np.linspace(*TSPAN, N_STEPS + 1),
         correction=QuadratureCorrection(n_nodes=4),
     )
     assert onp.allclose(precond.m, plain.m, atol=1e-8)
@@ -317,8 +344,7 @@ def test_jit_and_grad_safe():
             P0_sqr,
             prior,
             measure,
-            TSPAN,
-            N_STEPS,
+            np.linspace(*TSPAN, N_STEPS + 1),
             correction=QuadratureCorrection(n_nodes=4),
         ).m[-1, 0]
 
@@ -343,6 +369,11 @@ def test_cubature_scales_to_a_multidimensional_ode():
         QuadratureCorrection(n_nodes=3),
     ):
         res = gaussian_filter(
-            mu_0, P0_sqr, prior, measure, (0.0, 1.0), 30, correction=corr
+            mu_0,
+            P0_sqr,
+            prior,
+            measure,
+            np.linspace(*(0.0, 1.0), 30 + 1),
+            correction=corr,
         )
         assert bool(np.all(np.isfinite(res.m)))

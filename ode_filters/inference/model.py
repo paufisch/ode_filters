@@ -26,10 +26,16 @@ from typing import Any
 
 import equinox as eqx
 import jax.numpy as np
+import numpy as onp
 from jax import Array
 
+from ..calibration.policies import Calibration, CalibrationMode
 from ..information import ObsModel, ODEInformation
 from .likelihood import InferenceProblem, marginal_loglik
+
+
+def _as_static_grid(ts: Any) -> tuple[float, ...]:
+    return tuple(float(t) for t in onp.asarray(ts))
 
 
 class ODEFilter(eqx.Module):
@@ -38,23 +44,22 @@ class ODEFilter(eqx.Module):
     Attributes:
         vf: Vector field ``vf(x, params, *, t) -> dx/dt`` (``params`` is the
             differentiable parameter pytree, ``ode_params``).
-        init_fn: Callable ``params -> (mu_0, Sigma_0_sqr)`` producing the initial
+        init_fn: Callable ``params -> (m_0, P_0_sqr)`` producing the initial
             Gaussian (square-root covariance). May ignore ``params`` for a fixed
             initial condition.
         prior: Gauss-Markov prior (e.g. ``IWP``).
-        tspan: Time interval ``(t0, t1)``.
-        N: Number of fixed-grid steps.
+        ts: Time grid, shape ``[K]``; stored as a tuple, so it is static
+            configuration rather than a trainable leaf.
         ode_params: The differentiable parameters (the only trainable leaf).
-        calibration: Diffusion calibration mode (default ``"none"``).
+        calibration: Diffusion calibration policy or shorthand (default ``"none"``).
     """
 
     vf: Callable = eqx.field(static=True)
     init_fn: Callable = eqx.field(static=True)
     prior: Any = eqx.field(static=True)
-    tspan: tuple[float, float] = eqx.field(static=True)
-    N: int = eqx.field(static=True)
+    ts: tuple[float, ...] = eqx.field(static=True, converter=_as_static_grid)
     ode_params: Array
-    calibration: str = eqx.field(static=True, default="none")
+    calibration: Calibration | CalibrationMode = eqx.field(static=True, default="none")
     correction: Any = eqx.field(static=True, default=None)
 
     def loglik(self, data: ObsModel) -> Array:
@@ -65,14 +70,13 @@ class ODEFilter(eqx.Module):
                 return self.vf(x, params, t=t)
 
             measure = ODEInformation(vf, self.prior.E0, self.prior.E1)
-            mu_0, Sigma_0_sqr = self.init_fn(params)
-            return mu_0, Sigma_0_sqr, measure
+            m_0, P_0_sqr = self.init_fn(params)
+            return m_0, P_0_sqr, measure
 
         problem = InferenceProblem(
             build=build,
             prior=self.prior,
-            tspan=self.tspan,
-            N=self.N,
+            ts=np.asarray(self.ts),
             calibration=self.calibration,
             correction=self.correction,
         )

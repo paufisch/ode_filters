@@ -12,7 +12,7 @@ from jax import Array
 from jax.typing import ArrayLike
 
 from ..gaussian.algebra import _cholesky_upper
-from .base import BasePrior, MatrixFunction
+from .base import BasePrior, MatrixFunction, Transition
 
 
 def _make_iwp_state_matrices(q: int) -> tuple[MatrixFunction, MatrixFunction]:
@@ -215,14 +215,15 @@ class IWP(BasePrior):
         return np.kron(Q_scalar_sqr, self._xi_sqr)
 
 
-class PrecondIWP(BasePrior):
-    """Integrated Wiener process prior in step-size-preconditioned coordinates.
+class PrecondIWP(IWP):
+    """``IWP`` computed in step-size-preconditioned coordinates.
 
-    The same process as ``IWP``, expressed in the coordinates
-    ``x_bar = T(h)^-1 x`` in which ``A`` and ``Q`` no longer depend on the step
-    size; all of the ``h`` dependence moves into the diagonal ``T(h)``. This keeps
-    the recursion well conditioned at high ``q`` or small ``h``. Supported by the
-    fixed-grid ``gaussian_filter`` only.
+    The same process as ``IWP`` -- ``A(h)``, ``Q(h)`` and ``Q_sqr(h)`` are
+    ``IWP``'s -- but the filters compute each step in the coordinates
+    ``x_bar = T(h)^-1 x``, in which the transition and the process noise no
+    longer depend on the step size; all of the ``h`` dependence sits in the
+    diagonal ``T(h)`` (Kraemer & Hennig 2020). Results are reported in the
+    original coordinates.
 
     Args:
         q: Number of modelled derivatives (the order of the method).
@@ -233,61 +234,24 @@ class PrecondIWP(BasePrior):
 
     def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         super().__init__(q, d, Xi)
-        self._A_bar, self._Q_bar, self._T = _make_iwp_precond_state_matrices(q)
-        # Q is stepsize-independent in preconditioned space, so its square root is a
-        # single constant computed once via the closed-form factor (no numerical
-        # Cholesky of the ill-conditioned Q_bar): kron(Q_bar_sqr, chol(xi).T).
-        _Q_bar_sqr = _iwp_precond_q_bar_sqr(q)
-        _check_iwp_q_bar_factor(_Q_bar_sqr, q)
-        self._Q_sqr_const = np.kron(_Q_bar_sqr, _cholesky_upper(self.xi))
-
-    def A(self, h: ArrayLike | None = None) -> Array:
-        """Return the constant preconditioning transition matrix.
-
-        Args:
-            h: Step size (unused, accepted for interface compatibility).
-
-        Returns:
-            Constant transition matrix (shape ``[(q+1)*d, (q+1)*d]``).
-        """
-        return np.kron(self._A_bar, self._id)
-
-    def b(self, h: ArrayLike | None = None) -> Array:
-        """Return the zero drift vector.
-
-        Args:
-            h: Step size (unused, accepted for interface compatibility).
-
-        Returns:
-            Zero drift vector (shape ``[(q+1)*d]``).
-        """
-        return self._b
-
-    def Q(self, h: ArrayLike | None = None) -> Array:
-        """Return the constant preconditioning diffusion matrix.
-
-        Args:
-            h: Step size (unused, accepted for interface compatibility).
-
-        Returns:
-            Constant diffusion matrix (shape ``[(q+1)*d, (q+1)*d]``).
-        """
-        return np.kron(self._Q_bar, self.xi)
-
-    def Q_sqr(self, h: ArrayLike | None = None) -> Array:
-        """Return the constant upper-triangular square root of ``Q``.
-
-        Stepsize-independent in preconditioned space (see ``__init__``).
-        """
-        return self._Q_sqr_const
+        A_bar, _, _ = _make_iwp_precond_state_matrices(q)
+        self._A_bar = np.kron(A_bar, self._id)
+        # Q is step-size independent in preconditioned coordinates, so its square
+        # root is one constant: kron(Q_bar_sqr, chol(Xi)).
+        self._Q_bar_sqr = np.kron(self._Q_bar_sqr_scalar, self._xi_sqr)
 
     def T(self, h: ArrayLike) -> Array:
-        """Return the stepsize-dependent preconditioning transformation.
+        """The diagonal preconditioner ``T(h)`` (``x = T x_bar``).
 
         Args:
             h: Step size.
 
         Returns:
-            Preconditioning transformation matrix (shape ``[(q+1)*d, (q+1)*d]``).
+            Preconditioning matrix, shape ``[(q+1)*d, (q+1)*d]``.
         """
-        return np.kron(self._T(self._validate_h(h)), self._id)
+        return np.kron(self._T_scalar(self._validate_h(h)), self._id)
+
+    def transition(self, h: ArrayLike) -> Transition:
+        """Step-size independent ``A`` and ``Q_sqr`` with the preconditioner ``T(h)``."""
+        T_diag = np.repeat(np.diag(self._T_scalar(self._validate_h(h))), self._dim)
+        return Transition(self._A_bar, self._b, self._Q_bar_sqr, T_diag)

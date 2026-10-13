@@ -31,13 +31,18 @@ def _solve_standard(vf, x0, *, tspan, N, q=3, Xi_scale=0.5):
     measure = ODEInformation(vf, prior.E0, prior.E1)
 
     result = gaussian_filter(
-        mu_0, Sigma_0_sqr, prior, measure, tspan, N, calibration="none"
+        mu_0,
+        Sigma_0_sqr,
+        prior,
+        measure,
+        np.linspace(*tspan, N + 1),
+        calibration="none",
     )
 
     m_seq = np.array(result.m)
     P_seq_sqr_arr = np.array(result.P_sqr)
 
-    m_smooth, P_smooth_sqr = rts_smoother(prior, result)
+    m_smooth, P_smooth_sqr = rts_smoother(result)
 
     E0 = prior.E0
     ts = np.linspace(tspan[0], tspan[1], N + 1)
@@ -63,13 +68,18 @@ def _solve_preconditioned(vf, x0, *, tspan, N, q=3, Xi_scale=0.5):
     measure = ODEInformation(vf, prior.E0, prior.E1)
 
     result = gaussian_filter(
-        mu_0, Sigma_0_sqr, prior, measure, tspan, N, calibration="none"
+        mu_0,
+        Sigma_0_sqr,
+        prior,
+        measure,
+        np.linspace(*tspan, N + 1),
+        calibration="none",
     )
 
     m_seq = np.array(result.m)
     P_seq_sqr_arr = np.array(result.P_sqr)
 
-    m_smooth, P_smooth_sqr = rts_smoother(prior, result)
+    m_smooth, P_smooth_sqr = rts_smoother(result)
 
     E0 = prior.E0
     ts = np.linspace(tspan[0], tspan[1], N + 1)

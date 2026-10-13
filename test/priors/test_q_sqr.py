@@ -16,7 +16,6 @@ from ode_filters.priors import (
     JointPrior,
     MaternPrior,
     PrecondIWP,
-    PrecondJointPrior,
     PrecondMaternPrior,
 )
 
@@ -56,8 +55,8 @@ def _priors():
             0.2,
         ),
         (
-            "PrecondJointPrior",
-            PrecondJointPrior(PrecondIWP(q=2, d=2), PrecondIWP(q=1, d=1)),
+            "JointPrior PrecondIWP+PrecondIWP",
+            JointPrior(PrecondIWP(q=2, d=2), PrecondIWP(q=1, d=1)),
             0.2,
         ),
     ]
@@ -112,11 +111,10 @@ def test_iwp_q_sqr_well_conditioned_vs_dense_cholesky():
     assert rel_err < 1e-10, f"closed-form reconstruction rel_err={rel_err:g}"
 
 
-def test_precond_iwp_q_sqr_is_constant():
-    """PrecondIWP.Q_sqr is stepsize-independent (matches its constant Q)."""
+def test_precond_iwp_transition_noise_is_constant():
+    """PrecondIWP's preconditioned noise factor is step-size independent."""
     prior = PrecondIWP(q=3, d=2)
-    assert np.allclose(prior.Q_sqr(0.1), prior.Q_sqr(2.0))
-    assert np.allclose(prior.Q_sqr().T @ prior.Q_sqr(), prior.Q())
+    assert np.allclose(prior.transition(0.1).Q_sqr, prior.transition(2.0).Q_sqr)
 
 
 @pytest.mark.parametrize("prior_cls", [MaternPrior, PrecondMaternPrior])

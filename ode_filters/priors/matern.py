@@ -11,7 +11,7 @@ from jax.typing import ArrayLike
 
 from ..gaussian.algebra import _cholesky_upper
 from ._lti import _MATERN_QUAD_NODES, _gauss_legendre, _sqr_noise_via_quadrature
-from .base import BasePrior
+from .base import BasePrior, Transition
 from .iwp import _make_iwp_precond_state_matrices
 
 
@@ -307,26 +307,23 @@ class MaternPrior(BasePrior):
         return np.kron(R, self._xi_sqr)
 
 
-class PrecondMaternPrior(BasePrior):
-    """Preconditioned Matern Gaussian process prior model.
+class PrecondMaternPrior(MaternPrior):
+    """``MaternPrior`` computed in step-size-preconditioned coordinates.
 
-    Uses the same diagonal preconditioner D(h) as PrecondIWP, but the
-    preconditioned transition A_bar(h) and diffusion Q_bar(h) are
-    stepsize-dependent (they converge to the IWP constants as h -> 0).
-
-    Note:
-        The IWP diagonal preconditioner here only removes the step-size scaling;
-        it does *not* address the length-scale/order conditioning of the dense
-        ``expm``-derived ``Q``. The square-root factor ``Q_sqr`` therefore uses
-        the same stable square-root matrix-fraction decomposition as
-        ``MaternPrior`` (see ``_matern_scalar_Q_sqr``), staying finite up to the
-        float64 order ceiling (``q ~ 18``) rather than NaN-ing around ``q >= 6``.
+    The same process as ``MaternPrior`` -- ``A(h)``, ``Q(h)`` and ``Q_sqr(h)``
+    are ``MaternPrior``'s -- but the filters compute each step in the
+    coordinates ``x_bar = T(h)^-1 x`` with the diagonal preconditioner of
+    ``PrecondIWP``. Unlike for the IWP, the preconditioned transition and noise
+    still depend on ``h`` (they tend to the IWP constants as ``h -> 0``). The
+    preconditioner removes the step-size scaling only; the length-scale and
+    order conditioning is handled by the square-root matrix-fraction
+    decomposition both priors share (see ``_matern_scalar_Q_sqr``).
 
     Args:
         q: Smoothness order (nu = q + 1/2).
         d: State dimension.
         length_scale: Length scale of the Matern process.
-        Xi: Optional scaling matrix (shape [d, d]).
+        Xi: Optional component-correlation matrix (shape [d, d]).
         n_quad: Number of Gauss-Legendre nodes for the square-root
             matrix-fraction decomposition used by ``Q_sqr`` (must exceed
             ``q``; the default is robust to the float64 order ceiling).
@@ -341,121 +338,33 @@ class PrecondMaternPrior(BasePrior):
         *,
         n_quad: int = _MATERN_QUAD_NODES,
     ):
-        super().__init__(q, d, Xi)
-        self._F, self._L, self._q_coeff = _matern_companion_form(length_scale, q)
-        self.S = self._q_coeff * self._L @ self._L.T
-        self.n = self._F.shape[0]
-        _, _, self._T = _make_iwp_precond_state_matrices(q)
-        self._xi_sqr = _cholesky_upper(self.xi)
-        self._sqr_noise = _make_matern_sqr_noise(length_scale, q, n_quad)
-
-    def _raw_A_and_Q(self, h: ArrayLike) -> tuple[Array, Array]:
-        """Compute raw (non-preconditioned) scalar ``A(h)`` and ``Q(h)``.
-
-        Same stable construction as ``MaternPrior.A_and_Q``: ``A`` from the
-        length-scale-normalized exponential (``_matern_scalar_A``) and
-        ``Q = R.T @ R`` from the square-root MFD factor. The ``expm`` of the
-        ``[[F, S], [0, -F.T]]`` Hamiltonian block that used to be taken here
-        overflows to NaN at short length scales (e.g. ``q = 2``,
-        ``length_scale = 2.6e-3``, ``h = 1e-2``).
-
-        Args:
-            h: Step size.
-
-        Returns:
-            Tuple of (A_h, Q_h) scalar matrices (shape [q+1, q+1] each).
-        """
-        A_h = _matern_scalar_A(self._sqr_noise, h)
-        R = _matern_scalar_Q_sqr(self._sqr_noise, h)
-        return A_h, R.T @ R
-
-    def _precond_discretise(self, h: ArrayLike) -> tuple[Array, Array]:
-        """Compute preconditioned A_bar(h) and Q_bar(h).
-
-        Applies the IWP diagonal preconditioner: A_bar = T^{-1} A T,
-        Q_bar = T^{-1} Q T^{-T}.
-
-        Args:
-            h: Step size.
-
-        Returns:
-            Tuple of (A_bar, Q_bar) scalar matrices (shape [n, n] each).
-        """
-        h = self._validate_h(h)
-        A_h, Q_h = self._raw_A_and_Q(h)
-        T_h = self._T(h)
-        T_inv = np.diag(1.0 / np.diag(T_h))
-
-        A_bar = T_inv @ A_h @ T_h
-        Q_bar = T_inv @ Q_h @ T_inv.T
-        return A_bar, Q_bar
-
-    def A(self, h: ArrayLike | None = None) -> Array:
-        """Return the preconditioned transition matrix for step size h.
-
-        Args:
-            h: Step size (required; Matern preconditioning is stepsize-dependent).
-
-        Returns:
-            Preconditioned transition matrix (shape ``[(q+1)*d, (q+1)*d]``).
-        """
-        if h is None:
-            raise ValueError("PrecondMaternPrior.A requires a step size h.")
-        A_bar, _ = self._precond_discretise(h)
-        return np.kron(A_bar, self._id)
-
-    def Q(self, h: ArrayLike | None = None) -> Array:
-        """Return the preconditioned diffusion matrix for step size h.
-
-        Args:
-            h: Step size (required; Matern preconditioning is stepsize-dependent).
-
-        Returns:
-            Preconditioned diffusion matrix (shape ``[(q+1)*d, (q+1)*d]``).
-        """
-        if h is None:
-            raise ValueError("PrecondMaternPrior.Q requires a step size h.")
-        _, Q_bar = self._precond_discretise(h)
-        return np.kron(Q_bar, self.xi)
-
-    def Q_sqr(self, h: ArrayLike | None = None) -> Array:
-        """Upper-triangular square root of the preconditioned ``Q(h)``.
-
-        Built from the stable scalar Matern noise factor (square-root MFD, see
-        ``_matern_scalar_Q_sqr``) rather than a Cholesky of the dense
-        ``expm``-derived ``Q``: ``Q(h)_sqr = kron(R(h) @ T_inv, chol(Xi))`` where
-        ``R.T @ R`` is the raw scalar ``Q(h)`` and ``T_inv`` applies the IWP
-        diagonal preconditioner (scaling the columns of the upper-triangular ``R``
-        preserves upper-triangularity). Requires ``h`` (Matern preconditioning is
-        step-size-dependent).
-        """
-        if h is None:
-            raise ValueError("PrecondMaternPrior.Q_sqr requires a step size h.")
-        h = self._validate_h(h)
-        R_raw = _matern_scalar_Q_sqr(self._sqr_noise, h)
-        T_inv = np.diag(1.0 / np.diag(self._T(h)))
-        return np.kron(R_raw @ T_inv, self._xi_sqr)
-
-    def b(self, h: ArrayLike | None = None) -> Array:
-        """Return the zero drift vector.
-
-        Args:
-            h: Step size (unused, accepted for interface compatibility).
-
-        Returns:
-            Zero drift vector (shape ``[(q+1)*d]``).
-        """
-        return self._b
+        super().__init__(q, d, length_scale, Xi, n_quad=n_quad)
+        _, _, self._T_scalar = _make_iwp_precond_state_matrices(q)
 
     def T(self, h: ArrayLike) -> Array:
-        """Return the stepsize-dependent preconditioning transformation.
-
-        Uses the same preconditioner as PrecondIWP.
+        """The diagonal preconditioner ``T(h)`` of ``PrecondIWP`` (``x = T x_bar``).
 
         Args:
             h: Step size.
 
         Returns:
-            Preconditioning transformation matrix (shape ``[(q+1)*d, (q+1)*d]``).
+            Preconditioning matrix, shape ``[(q+1)*d, (q+1)*d]``.
         """
-        return np.kron(self._T(self._validate_h(h)), self._id)
+        return np.kron(self._T_scalar(self._validate_h(h)), self._id)
+
+    def transition(self, h: ArrayLike) -> Transition:
+        """``T^-1 A T`` and ``Q_sqr T^-T`` with the preconditioner ``T(h)``.
+
+        Scaling the columns of the upper-triangular square-root factor by the
+        diagonal ``T^-1`` keeps it upper triangular.
+        """
+        h = self._validate_h(h)
+        t = np.diag(self._T_scalar(h))
+        A_bar = self._A_scalar(h) * t[None, :] / t[:, None]
+        R_bar = _matern_scalar_Q_sqr(self._sqr_noise, h) / t[None, :]
+        return Transition(
+            np.kron(A_bar, self._id),
+            self._b,
+            np.kron(R_bar, self._xi_sqr),
+            np.repeat(t, self._dim),
+        )

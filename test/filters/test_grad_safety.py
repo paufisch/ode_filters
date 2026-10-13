@@ -7,9 +7,7 @@ unguarded: the suite checked *values* but almost never *gradients* across the
 
 These tests pin grad == central-finite-difference (in float64, via conftest) so a
 future refactor that breaks reverse-AD (e.g. a plain lax.while_loop, a Python
-branch on a traced value, or an IEKF convergence while-loop) fails loudly. They
-also pin the one *intentionally* non-differentiable entry point -- the Python
-while-driver ``sqr_adaptive_loop`` -- as not traceable.
+branch on a traced value, or an IEKF convergence while-loop) fails loudly.
 """
 
 from __future__ import annotations
@@ -32,8 +30,7 @@ from ode_filters import (
     rts_smoother,
     taylor_mode_initialization,
 )
-from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
-from ode_filters.filters.ode_filter_loop import _calibrate_diffusion
+from ode_filters.calibration import DiagonalCalibration
 from ode_filters.information import Measurement
 
 TSPAN = (0.0, 2.0)
@@ -87,8 +84,7 @@ def test_grad_fixed_filter(prior_cls, corr_name):
             S0_sqr,
             prior,
             measure,
-            TSPAN,
-            N,
+            np.linspace(*TSPAN, N + 1),
             correction=CORRECTIONS[corr_name],
             calibration="none",
         )
@@ -109,8 +105,7 @@ def test_grad_fixed_filter_dynamic_calibration(corr_name):
             S0_sqr,
             prior,
             measure,
-            TSPAN,
-            N,
+            np.linspace(*TSPAN, N + 1),
             correction=CORRECTIONS[corr_name],
             calibration="dynamic",
         )
@@ -131,7 +126,13 @@ def test_grad_fixed_filter_with_obs():
     def f(theta):
         mu_0, S0_sqr, measure = _logistic_inputs(prior, theta)
         res = gaussian_filter(
-            mu_0, S0_sqr, prior, measure, TSPAN, N, calibration="none", obs_model=obs
+            mu_0,
+            S0_sqr,
+            prior,
+            measure,
+            np.linspace(*TSPAN, N + 1),
+            calibration="none",
+            obs_model=obs,
         )
         return res.log_likelihood_obs
 
@@ -151,9 +152,9 @@ def test_grad_rts_smoother(prior_cls):
     def f(theta):
         mu_0, S0_sqr, measure = _logistic_inputs(prior, theta)
         res = gaussian_filter(
-            mu_0, S0_sqr, prior, measure, TSPAN, N, calibration="none"
+            mu_0, S0_sqr, prior, measure, np.linspace(*TSPAN, N + 1), calibration="none"
         )
-        m_s, _ = rts_smoother(prior, res)
+        m_s, _ = rts_smoother(res)
         return np.sum(m_s[:, 0])  # whole smoothed trajectory (theta-sensitive)
 
     _assert_grad_matches_fd(f)
@@ -234,7 +235,7 @@ def test_grad_marginal_loglik():
     def build(theta):
         return _logistic_inputs(prior, theta)
 
-    problem = InferenceProblem(build=build, prior=prior, tspan=TSPAN, N=N)
+    problem = InferenceProblem(build=build, prior=prior, ts=np.linspace(*TSPAN, N + 1))
 
     def f(theta):
         return marginal_loglik(theta, obs, model=problem)
@@ -271,52 +272,27 @@ def test_grad_finite_through_recoverable_guard_firing():
     assert np.isfinite(g)
 
 
-@pytest.mark.parametrize("mode", ["diagonal", "diagonal_ekf0"])
-def test_diagonal_calibration_zero_denominator_floors_without_nan(mode):
+@pytest.mark.parametrize("jacobian", ["ek1", "ek0"])
+def test_diagonal_calibration_zero_denominator_floors_without_nan(jacobian):
     """A zero diagonal-calibration denominator must floor to min_sigma_sqr (not
     NaN/inf), forward and under grad."""
     prior = IWP(q=1, d=1)  # state dim 2
-    H = prior.E1  # [1, 2]
-    E1 = prior.E1
     Q_sqr_zero = np.zeros((2, 2))  # forces denom == 0
-    min_sigma_sqr = 1e-30
+    policy = DiagonalCalibration(jacobian=jacobian, min_sigma_sqr=1e-30)
 
-    def f(mz_ode):
-        sigma_sqr, _ = _calibrate_diffusion(
-            mode, mz_ode, H, E1, Q_sqr_zero, prior, min_sigma_sqr
+    def f(residual):
+        sigma_sqr, _ = policy.calibrate(
+            residual,
+            prior.E1,
+            Q_sqr_zero,
+            scale=prior.apply_state_sigma_sqr,
+            H_ek0=lambda: prior.E1,
         )
         return np.sum(sigma_sqr)
 
-    mz = np.array([1.0])
-    sigma_sum = f(mz)
-    assert np.isfinite(sigma_sum)
-    assert np.allclose(sigma_sum, min_sigma_sqr)  # floored, not NaN/inf
-    assert np.isfinite(jax.grad(f)(mz))  # no NaN cotangent from 0/0
-
-
-# --------------------------------------------------------------------------- #
-# The Python while-driver is intentionally NOT traceable / differentiable.
-# --------------------------------------------------------------------------- #
-
-
-def test_python_while_driver_is_not_traceable():
-    """sqr_adaptive_loop has data-dependent Python control flow + variable
-    output length, so it cannot be jit/grad'd. Pin the limitation (and the fact
-    that sqr_adaptive_solve / gaussian_filter_adaptive is the AD-safe
-    alternative) so a refactor cannot silently change this contract."""
-    prior = IWP(q=2, d=1)
-
-    def vf(x, *, t):
-        return x * (1.0 - x)
-
-    mu_0, S0_sqr = taylor_mode_initialization(vf, np.array([0.5]), q=2)
-    measure = ODEInformation(vf, prior.E0, prior.E1)
-
-    jitted = jax.jit(sqr_adaptive_loop, static_argnums=(2, 3, 4))
-    with pytest.raises(
-        (jax.errors.ConcretizationTypeError, jax.errors.TracerBoolConversionError)
-    ):
-        jitted(mu_0, S0_sqr, prior, measure, TSPAN)
+    residual = np.array([1.0])
+    assert np.allclose(f(residual), 1e-30)  # floored, not NaN/inf
+    assert np.isfinite(jax.grad(f)(residual))  # no NaN cotangent from 0/0
 
 
 # --------------------------------------------------------------------------- #
@@ -334,7 +310,7 @@ def test_grad_adaptive_smoother():
         res = gaussian_filter_adaptive(
             mu_0, S0_sqr, prior, measure, save, smoother=True, atol=1e-7, rtol=1e-7
         )
-        m_s, _ = rts_smoother(prior, res)
+        m_s, _ = rts_smoother(res)
         return np.sum(m_s[:, 0])
 
     _assert_grad_matches_fd(f)
@@ -363,7 +339,12 @@ def test_grad_is_zero_not_nan_at_an_equilibrium(calibration, adaptive):
             )
         else:
             res = gaussian_filter(
-                mu_0, P0_sqr, prior, measure, TSPAN, N, calibration=calibration
+                mu_0,
+                P0_sqr,
+                prior,
+                measure,
+                np.linspace(*TSPAN, N + 1),
+                calibration=calibration,
             )
         return res.m[-1, 0]
 

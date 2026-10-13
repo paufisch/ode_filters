@@ -26,11 +26,8 @@ from ode_filters import (
     gaussian_filter,
     rts_smoother,
 )
-from ode_filters.gaussian.algebra import (
-    _safe_qr,
-    sqr_inversion,
-    sqr_marginalization,
-)
+from ode_filters.gaussian import Gaussian, invert, marginalize
+from ode_filters.gaussian.algebra import _safe_qr
 from ode_filters.priors import taylor_mode_initialization
 
 TSPAN = (0.0, 2.0)
@@ -114,10 +111,10 @@ def test_marginalization_takes_a_zero_factor_without_nan_gradients():
     A = jax.random.normal(jax.random.PRNGKey(1), (n, n))
 
     def total(mu):
-        mu_z, S_sqr = sqr_marginalization(
-            A, np.zeros(n), np.zeros((n, n)), mu, np.zeros((n, n))
+        z = marginalize(
+            A, np.zeros(n), np.zeros((n, n)), Gaussian(mu, np.zeros((n, n)))
         )
-        return np.sum(mu_z) + np.sum(S_sqr.T @ S_sqr)
+        return np.sum(z.m) + np.sum(z.P_sqr.T @ z.P_sqr)
 
     assert bool(np.all(np.isfinite(jax.grad(total)(np.array([0.4, -0.2, 0.7])))))
 
@@ -135,11 +132,11 @@ def test_inversion_takes_a_zero_prior_factor_without_nan_gradients():
     Q_sqr = np.eye(n)  # nonsingular innovation, as in a real prediction
 
     def total(mu):
-        Sigma_sqr = np.zeros((n, n))
-        mu_z, S_sqr = sqr_marginalization(A, np.zeros(n), Q_sqr, mu, Sigma_sqr)
-        K, d, Lam_sqr = sqr_inversion(A, mu, Sigma_sqr, mu_z, S_sqr, Q_sqr)
-        assert onp.allclose(K, 0.0)  # the premise: the gain really is zero
-        return np.sum(d) + np.sum(Lam_sqr.T @ Lam_sqr)
+        x = Gaussian(mu, np.zeros((n, n)))
+        z = marginalize(A, np.zeros(n), Q_sqr, x)
+        cond = invert(A, Q_sqr, x, z)
+        assert onp.allclose(cond.G, 0.0)  # the premise: the gain really is zero
+        return np.sum(cond.d) + np.sum(cond.P_sqr.T @ cond.P_sqr)
 
     assert bool(np.all(np.isfinite(jax.grad(total)(np.array([0.4, -0.2, 0.7])))))
 
@@ -148,8 +145,8 @@ def test_singular_innovation_covariance_is_a_separate_unhandled_degeneracy():
     """Documents the boundary of the fix.
 
     ``_safe_qr`` repairs a degenerate *output* factor. It does not repair a
-    degenerate *innovation* covariance: ``sqr_inversion`` divides by
-    ``Sigma_z_sqr`` in a triangular solve, so a zero innovation covariance is
+    degenerate *innovation* covariance: ``invert`` divides by
+    the innovation factor in a triangular solve, so a zero innovation covariance is
     ill-posed (conditioning a zero-variance state on a zero-variance
     observation) and stays ``NaN``. Recorded so the boundary is a known
     limitation rather than a later surprise.
@@ -159,9 +156,9 @@ def test_singular_innovation_covariance_is_a_separate_unhandled_degeneracy():
     zero = np.zeros((n, n))
 
     def total(mu):
-        mu_z, S_sqr = sqr_marginalization(A, np.zeros(n), zero, mu, zero)
-        _, d, Lam_sqr = sqr_inversion(A, mu, zero, mu_z, S_sqr, zero)
-        return np.sum(d) + np.sum(Lam_sqr.T @ Lam_sqr)
+        x = Gaussian(mu, zero)
+        cond = invert(A, zero, x, marginalize(A, np.zeros(n), zero, x))
+        return np.sum(cond.d) + np.sum(cond.P_sqr.T @ cond.P_sqr)
 
     assert bool(np.all(np.isnan(jax.grad(total)(np.array([0.4, -0.2, 0.7])))))
 
@@ -189,7 +186,12 @@ def test_first_backward_conditional_is_exactly_zero():
     """And that it propagates into a rank-0 backward conditional at step 0."""
     prior, measure, mu_0, P0_sqr = _setup()
     res = gaussian_filter(
-        mu_0, P0_sqr, prior, measure, TSPAN, N_STEPS, calibration="none"
+        mu_0,
+        P0_sqr,
+        prior,
+        measure,
+        np.linspace(*TSPAN, N_STEPS + 1),
+        calibration="none",
     )
     assert res.P_back_sqr is not None
     assert onp.allclose(res.P_back_sqr[0], 0.0)
@@ -202,12 +204,11 @@ def _smoothed(mu, prior, measure, P0_sqr):
         P0_sqr,
         prior,
         measure,
-        TSPAN,
-        N_STEPS,
+        np.linspace(*TSPAN, N_STEPS + 1),
         correction=TaylorCorrection(order=1),
         calibration="none",
     )
-    return rts_smoother(prior, res)
+    return rts_smoother(res)
 
 
 def test_smoothed_covariance_gradient_is_finite_from_a_singular_start():

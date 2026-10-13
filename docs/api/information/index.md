@@ -44,10 +44,9 @@ Additional constraints are added via frozen dataclasses:
 - **`Measurement`**: Time-varying observations `A @ x = z[t]` at specified times.
   These are *not* measure constraints; build an observation model with
   `prepare_observations([Measurement(...)], E0, ts)` and pass it as
-  `obs_model=` to the solver. Note: `prepare_observations` requires all stacked
-  measurements to share the same observation times; a step where only some
-  measurements fire raises `NotImplementedError` (per-dimension masking is not
-  yet supported).
+  `obs_model=` to the solver. Every measurement time must be a node of the grid
+  (add off-grid times to it, e.g. `ts = np.union1d(ts, z_t)`); measurements may
+  have different times, and each step conditions on the rows that have data.
 
 ## Usage Examples
 
@@ -113,8 +112,7 @@ model = SecondOrderODEInformationWithHidden(
 )
 
 # Synthetic position data from the true damping u = 0.3
-tspan, N = (0.0, 10.0), 200
-ts = np.linspace(*tspan, N + 1)
+ts = np.linspace(0.0, 10.0, 201)
 gamma = 0.15
 omega_d = np.sqrt(1.0 - gamma**2)
 obs_times = ts[10::10]
@@ -131,9 +129,7 @@ obs_model = prepare_observations([meas], prior_joint.E0_x, ts)
 mu_0 = np.array([1.0, 0.0, -1.0, 0.0, 0.0])
 P_0_sqr = np.diag(np.array([0.0, 0.0, 0.0, 1.0, 1.0]))
 
-result = gaussian_filter(
-    mu_0, P_0_sqr, prior_joint, model, tspan, N, obs_model=obs_model
-)
+result = gaussian_filter(mu_0, P_0_sqr, prior_joint, model, ts, obs_model=obs_model)
 u_hat = prior_joint.E0_hidden @ result.m[-1]  # estimated damping: ~0.297
 ```
 

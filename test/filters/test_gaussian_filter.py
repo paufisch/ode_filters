@@ -1,19 +1,22 @@
-"""Tests for the consolidated gaussian_filter / gaussian_filter_adaptive / rts_smoother API.
+"""Tests for ``gaussian_filter`` and ``rts_smoother``: grids, corrections, preconditioning.
 
-These verify the new entry points reproduce the existing (tested) loop internals
-they wrap, that dispatch (preconditioned, observations) is correct, and that
-jit/grad still work.
+Values are pinned by the reference outputs and the dense oracle in
+``test/integration``; these tests cover behaviour and configuration.
 """
 
 import jax
 import jax.numpy as np
+import numpy as onp
 import pytest
 
 from ode_filters import (
     IWP,
+    DynamicCalibration,
     IteratedTaylorCorrection,
+    MaternPrior,
     ODEInformation,
     PrecondIWP,
+    PrecondMaternPrior,
     TaylorCorrection,
     gaussian_filter,
     gaussian_filter_adaptive,
@@ -21,236 +24,155 @@ from ode_filters import (
     rts_smoother,
     taylor_mode_initialization,
 )
-from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_solve
-from ode_filters.filters.ode_filter_loop import (
-    rts_sqr_smoother_loop,
-    rts_sqr_smoother_loop_preconditioned,
-    sqr_loop_dynamic_scan,
-    sqr_loop_preconditioned_dynamic_scan,
-)
 from ode_filters.information import Measurement
+from test.helpers import assert_close, cov
 
 TSPAN = (0.0, 2.0)
 N = 40
+TS = np.linspace(*TSPAN, N + 1)
 
 
-def _logistic(prior_cls=IWP):
+def _logistic(prior_cls=IWP, **kwargs):
     def vf(x, *, t):
         return x * (1.0 - x)
 
-    prior = prior_cls(q=2, d=1)
-    mu_0, P0_sqr = taylor_mode_initialization(vf, np.array([0.5]), q=2)
-    measure = ODEInformation(vf, prior.E0, prior.E1)
-    return prior, measure, mu_0, P0_sqr
+    prior = prior_cls(q=2, d=1, **kwargs)
+    m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([0.5]), q=2)
+    return prior, ODEInformation(vf, prior.E0, prior.E1), m_0, P_0_sqr
 
 
-def test_plain_matches_dynamic_scan():
-    prior, measure, mu_0, P0_sqr = _logistic()
-    res = gaussian_filter(mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="dynamic")
-    ref = sqr_loop_dynamic_scan(
-        mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="dynamic"
+def test_calibration_none_solves_the_logistic_equation():
+    prior, measure, m_0, P_0_sqr = _logistic()
+    res = gaussian_filter(m_0, P_0_sqr, prior, measure, TS, calibration="none")
+    assert np.max(np.abs(res.m[:, 0] - 1.0 / (1.0 + np.exp(-TS)))) < 1e-2
+
+
+def test_result_shapes_and_fields():
+    prior, measure, m_0, P_0_sqr = _logistic()
+    res = gaussian_filter(m_0, P_0_sqr, prior, measure, TS)
+    assert res.t.shape == (N + 1,)
+    assert res.m.shape == (N + 1, 3) and res.P_sqr.shape == (N + 1, 3, 3)
+    assert res.m_pred.shape == (N, 3) and res.G_back.shape == (N, 3, 3)
+    assert res.mz.shape == (N, 1) and res.sigma_sqr.shape == (N,)
+    assert res.success is None and res.n_accepted is None and res.steps is None
+    assert_close(res.filtered.m, res.m)
+    assert_close(res.backward.G, res.G_back)
+
+
+@pytest.mark.parametrize("plain,precond", [(IWP, PrecondIWP)], ids=["iwp"])
+@pytest.mark.parametrize(
+    "correction",
+    [TaylorCorrection(order=0), TaylorCorrection(), IteratedTaylorCorrection(3)],
+    ids=["ek0", "ek1", "iekf"],
+)
+def test_preconditioning_does_not_change_the_result(plain, precond, correction):
+    """Preconditioning is a change of variables: same model, same answer."""
+    p0, m0, mu, P = _logistic(plain)
+    p1, m1, _, _ = _logistic(precond)
+    a = gaussian_filter(mu, P, p0, m0, TS, correction=correction)
+    b = gaussian_filter(mu, P, p1, m1, TS, correction=correction)
+    assert_close(b.m, a.m, rtol=1e-9)
+    assert_close(cov(b.P_sqr), cov(a.P_sqr), rtol=1e-8)
+    assert_close(b.log_likelihood, a.log_likelihood, rtol=1e-9)
+    assert_close(cov(b.P_pred_sqr), cov(a.P_pred_sqr), rtol=1e-8)
+    assert_close(b.G_back, a.G_back, rtol=1e-8)
+
+
+def test_preconditioned_matern_matches_matern_with_observations():
+    p0, m0, mu, P = _logistic(MaternPrior, length_scale=1.5)
+    p1, m1, _, _ = _logistic(PrecondMaternPrior, length_scale=1.5)
+    data = Measurement(np.eye(1), np.array([[0.7]]), np.array([TS[20]]), noise=1e-3)
+    obs = prepare_observations([data], p0.E0, TS)
+    a = gaussian_filter(mu, P, p0, m0, TS, obs_model=obs)
+    b = gaussian_filter(mu, P, p1, m1, TS, obs_model=obs)
+    assert_close(b.m, a.m, rtol=1e-9)
+    assert_close(b.log_likelihood_obs, a.log_likelihood_obs, rtol=1e-9)
+    assert_close(rts_smoother(b).m, rts_smoother(a).m, rtol=1e-9)
+
+
+def test_ek0_differs_from_ek1():
+    prior, measure, m_0, P_0_sqr = _logistic(PrecondIWP)
+    ek0 = gaussian_filter(
+        m_0, P_0_sqr, prior, measure, TS, correction=TaylorCorrection(0)
     )
-    assert np.allclose(res.m, ref[0])
-    assert np.allclose(res.P_sqr, ref[1])
-    assert np.allclose(res.log_likelihood, ref[-1])
-    assert res.T is None  # plain prior
-    assert res.log_likelihood_obs is None
+    ek1 = gaussian_filter(m_0, P_0_sqr, prior, measure, TS)
+    assert not np.allclose(ek0.m, ek1.m, atol=1e-7)
 
 
-def test_calibration_none_is_static():
-    prior, measure, mu_0, P0_sqr = _logistic()
-    res = gaussian_filter(mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="none")
-    x_true = 1.0 / (1.0 + np.exp(-np.linspace(*TSPAN, N + 1)))
-    assert np.max(np.abs(res.m[:, 0] - x_true)) < 1e-2
+def test_non_uniform_grid_matches_a_uniform_one_where_they_coincide():
+    """A grid refined only in the middle agrees with the coarse grid's endpoint."""
+    prior, measure, m_0, P_0_sqr = _logistic()
+    coarse = np.linspace(*TSPAN, 401)
+    refined = np.asarray(onp.union1d(onp.asarray(coarse), onp.linspace(0.9, 1.1, 30)))
+    a = gaussian_filter(m_0, P_0_sqr, prior, measure, coarse, calibration="none")
+    b = gaussian_filter(m_0, P_0_sqr, prior, measure, refined, calibration="none")
+    assert abs(float(a.m[-1, 0] - b.m[-1, 0])) < 1e-6
+    assert b.m.shape[0] == refined.shape[0]
 
 
-def test_observations_dispatch_and_loglik():
-    prior, measure, mu_0, P0_sqr = _logistic()
-    ts = np.linspace(*TSPAN, N + 1)
-    meas = Measurement(np.eye(1), np.array([[0.7]]), np.array([ts[20]]), noise=1e-3)
-    obs = prepare_observations([meas], prior.E0, ts)
-    res = gaussian_filter(
-        mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="none", obs_model=obs
+def test_traced_grid_takes_the_per_step_path_and_agrees():
+    prior, measure, m_0, P_0_sqr = _logistic()
+    eager = gaussian_filter(m_0, P_0_sqr, prior, measure, TS)
+    traced = jax.jit(lambda ts: gaussian_filter(m_0, P_0_sqr, prior, measure, ts).m)(TS)
+    assert_close(traced, eager.m, rtol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "ts",
+    [np.array(0.0), np.array([0.0]), np.array([0.0, 1.0, 0.5])],
+    ids=["scalar", "single-node", "decreasing"],
+)
+def test_invalid_grids_raise(ts):
+    prior, measure, m_0, P_0_sqr = _logistic()
+    with pytest.raises(ValueError, match="ts must"):
+        gaussian_filter(m_0, P_0_sqr, prior, measure, ts)
+
+
+def test_obs_model_on_another_grid_raises():
+    prior, measure, m_0, P_0_sqr = _logistic()
+    data = Measurement(np.eye(1), np.array([[0.7]]), np.array([TS[2]]))
+    obs = prepare_observations([data], prior.E0, TS[:10])
+    with pytest.raises(ValueError, match="steps"):
+        gaussian_filter(m_0, P_0_sqr, prior, measure, TS, obs_model=obs)
+
+
+def test_calibration_policy_objects_and_strings_agree():
+    prior, measure, m_0, P_0_sqr = _logistic()
+    by_name = gaussian_filter(m_0, P_0_sqr, prior, measure, TS, calibration="dynamic")
+    by_object = gaussian_filter(
+        m_0, P_0_sqr, prior, measure, TS, calibration=DynamicCalibration()
     )
-    ref = sqr_loop_dynamic_scan(
-        mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="none", obs_model=obs
-    )
-    assert np.allclose(res.m, ref[0])
-    assert res.log_likelihood_obs is not None
-    assert np.allclose(res.log_likelihood_obs, ref[-1])
+    assert_close(by_object.m, by_name.m, rtol=0.0)
 
 
-def test_correction_ek0_passes_through():
-    prior, measure, mu_0, P0_sqr = _logistic()
-    res = gaussian_filter(
-        mu_0, P0_sqr, prior, measure, TSPAN, N, correction=TaylorCorrection(order=0)
-    )
-    ref = sqr_loop_dynamic_scan(
-        mu_0, P0_sqr, prior, measure, TSPAN, N, correction=TaylorCorrection(order=0)
-    )
-    assert np.allclose(res.m, ref[0])
+@pytest.mark.parametrize("calibration", ["bogus", 3])
+def test_unknown_calibration_raises(calibration):
+    prior, measure, m_0, P_0_sqr = _logistic()
+    with pytest.raises((ValueError, TypeError), match="calibration must be"):
+        gaussian_filter(m_0, P_0_sqr, prior, measure, TS, calibration=calibration)
 
 
-def test_preconditioned_dispatch_matches_loop():
-    prior, measure, mu_0, P0_sqr = _logistic(PrecondIWP)
-    res = gaussian_filter(mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="dynamic")
-    ref = sqr_loop_preconditioned_dynamic_scan(
-        mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="dynamic"
-    )
-    assert np.allclose(res.m, ref[0])
-    assert np.allclose(res.P_sqr, ref[1])
-    assert res.T is not None  # preconditioned path populated the smoother inputs
+def test_rts_smoother_ends_on_the_filter_and_needs_a_backward_pass():
+    prior, measure, m_0, P_0_sqr = _logistic()
+    res = gaussian_filter(m_0, P_0_sqr, prior, measure, TS)
+    smoothed = rts_smoother(res)
+    assert_close(smoothed.m[-1], res.m[-1])
+    adaptive = gaussian_filter_adaptive(m_0, P_0_sqr, prior, measure, TS[::10])
+    with pytest.raises(ValueError, match="backward conditionals"):
+        rts_smoother(adaptive)
 
 
-def _cov_seq(P_sqr_seq):
-    """Per-step covariance P = P_sqr.T @ P_sqr for a stack of square-root factors."""
-    return np.einsum("kij,kil->kjl", P_sqr_seq, P_sqr_seq)
-
-
-def test_preconditioned_correction_runs_for_ek0_and_iekf():
-    """The Correction abstraction now reaches the preconditioned path."""
-    prior, measure, mu_0, P0_sqr = _logistic(PrecondIWP)
-    for corr in (TaylorCorrection(order=0), IteratedTaylorCorrection(max_iters=3)):
-        res = gaussian_filter(mu_0, P0_sqr, prior, measure, TSPAN, N, correction=corr)
-        assert np.all(np.isfinite(res.m))
-        assert np.all(np.isfinite(res.P_sqr))
-
-
-def test_preconditioned_ek0_matches_plain_ek0():
-    """EK0 via the bar-space wrapper must equal plain-space EK0 (not just run).
-
-    Preconditioning is a similarity transform, so with the same correction and
-    calibration the plain and preconditioned recursions are mathematically
-    identical -- this validates the _BarMeasure EK0 logic, not just that it runs.
-    """
-    ek0 = TaylorCorrection(order=0)
-    pp, mp, mu0p, P0p = _logistic(IWP)
-    res_plain = gaussian_filter(
-        mu0p, P0p, pp, mp, TSPAN, N, calibration="none", correction=ek0
-    )
-    pc, mc, mu0c, P0c = _logistic(PrecondIWP)
-    res_pre = gaussian_filter(
-        mu0c, P0c, pc, mc, TSPAN, N, calibration="none", correction=ek0
-    )
-    assert np.allclose(res_plain.m, res_pre.m, atol=1e-7)
-    assert np.allclose(_cov_seq(res_plain.P_sqr), _cov_seq(res_pre.P_sqr), atol=1e-7)
-
-
-def test_preconditioned_ek0_differs_from_ek1():
-    """EK0 and EK1 must give different results on a nonlinear ODE (precond path)."""
-    prior, measure, mu_0, P0_sqr = _logistic(PrecondIWP)
-    res0 = gaussian_filter(
-        mu_0, P0_sqr, prior, measure, TSPAN, N, correction=TaylorCorrection(order=0)
-    )
-    res1 = gaussian_filter(
-        mu_0, P0_sqr, prior, measure, TSPAN, N, correction=TaylorCorrection(order=1)
-    )
-    assert not np.allclose(res0.m, res1.m, atol=1e-7)
-
-
-def test_adaptive_correction_ek0_and_iekf():
-    """gaussian_filter_adaptive accepts a correction= (EK0/IEKF), no longer EK1-only."""
-    prior, measure, mu_0, P0_sqr = _logistic()
-    save_at = np.linspace(*TSPAN, 5)
-    for corr in (TaylorCorrection(order=0), IteratedTaylorCorrection(max_iters=2)):
-        res = gaussian_filter_adaptive(
-            mu_0, P0_sqr, prior, measure, save_at, correction=corr
-        )
-        assert bool(res.success)
-        assert np.all(np.isfinite(res.m))
-
-
-def test_adaptive_iekf_max_iters_1_equals_ek1():
-    """IEKF with max_iters=1 reduces to EK1 (the adaptive default)."""
-    prior, measure, mu_0, P0_sqr = _logistic()
-    save_at = np.linspace(*TSPAN, 5)
-    ek1 = gaussian_filter_adaptive(mu_0, P0_sqr, prior, measure, save_at)
-    iekf1 = gaussian_filter_adaptive(
-        mu_0,
-        P0_sqr,
-        prior,
-        measure,
-        save_at,
-        correction=IteratedTaylorCorrection(max_iters=1),
-    )
-    assert np.allclose(ek1.m, iekf1.m, atol=1e-10)
-
-
-def test_preconditioned_with_obs_raises():
-    prior, measure, mu_0, P0_sqr = _logistic(PrecondIWP)
-    ts = np.linspace(*TSPAN, N + 1)
-    meas = Measurement(np.eye(1), np.array([[0.7]]), np.array([ts[20]]), noise=1e-3)
-    obs = prepare_observations([meas], prior.E0, ts)
-    with pytest.raises(NotImplementedError, match=r"[Pp]reconditioned"):
-        gaussian_filter(mu_0, P0_sqr, prior, measure, TSPAN, N, obs_model=obs)
-
-
-def test_rts_smoother_plain_matches_manual():
-    prior, measure, mu_0, P0_sqr = _logistic()
-    res = gaussian_filter(mu_0, P0_sqr, prior, measure, TSPAN, N)
-    m_s, P_s = rts_smoother(prior, res)
-    m_ref, P_ref = rts_sqr_smoother_loop(
-        res.m[-1], res.P_sqr[-1], res.G_back, res.d_back, res.P_back_sqr, N
-    )
-    assert np.allclose(m_s, m_ref)
-    assert np.allclose(P_s, P_ref)
-    assert np.allclose(m_s[-1], res.m[-1])  # last smoothed == last filtered
-
-
-def test_rts_smoother_preconditioned_matches_manual():
-    prior, measure, mu_0, P0_sqr = _logistic(PrecondIWP)
-    res = gaussian_filter(mu_0, P0_sqr, prior, measure, TSPAN, N)
-    m_s, P_s = rts_smoother(prior, res)
-    m_ref, P_ref = rts_sqr_smoother_loop_preconditioned(
-        res.m[-1],
-        res.P_sqr[-1],
-        res.m_bar[-1],
-        res.P_bar_sqr[-1],
-        res.G_back,
-        res.d_back,
-        res.P_back_sqr,
-        N,
-        res.T,
-    )
-    assert np.allclose(m_s, m_ref)
-    assert np.allclose(P_s, P_ref)
-
-
-def test_adaptive_matches_solve_and_has_no_backward_pass():
-    prior, measure, mu_0, P0_sqr = _logistic()
-    save_at = np.linspace(*TSPAN, 5)
-    res = gaussian_filter_adaptive(
-        mu_0, P0_sqr, prior, measure, save_at, atol=1e-6, rtol=1e-6
-    )
-    ref = sqr_adaptive_solve(
-        mu_0, P0_sqr, prior, measure, save_at, atol=1e-6, rtol=1e-6
-    )
-    assert np.allclose(res.m, ref.m)
-    assert np.allclose(res.log_likelihood, ref.log_likelihood)
-    assert res.G_back is None  # filtering only
-
-
-def test_rts_smoother_on_adaptive_result_raises():
-    prior, measure, mu_0, P0_sqr = _logistic()
-    res = gaussian_filter_adaptive(mu_0, P0_sqr, prior, measure, np.linspace(*TSPAN, 5))
-    with pytest.raises(ValueError, match="backward pass"):
-        rts_smoother(prior, res)
-
-
-def test_gaussian_filter_jit_and_grad():
+def test_jit_and_grad():
     prior = IWP(q=2, d=1)
 
     def endpoint(theta):
         def vf(x, *, t):
             return theta * x * (1.0 - x)
 
-        mu_0, P0_sqr = taylor_mode_initialization(vf, np.array([0.5]), q=2)
+        m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([0.5]), q=2)
         measure = ODEInformation(vf, prior.E0, prior.E1)
-        res = gaussian_filter(
-            mu_0, P0_sqr, prior, measure, TSPAN, N, calibration="none"
-        )
+        res = gaussian_filter(m_0, P_0_sqr, prior, measure, TS, calibration="none")
         return res.m[-1, 0]
 
-    val = jax.jit(endpoint)(np.array(1.0))
-    g = jax.grad(endpoint)(np.array(1.0))
-    assert np.isfinite(val) and np.isfinite(g)
+    assert np.isfinite(jax.jit(endpoint)(np.array(1.0)))
+    assert np.isfinite(jax.grad(endpoint)(np.array(1.0)))

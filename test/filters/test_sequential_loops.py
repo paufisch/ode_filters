@@ -59,8 +59,7 @@ class TestSeqWithObservations:
             Sigma_0_sqr,
             prior,
             measure,
-            tspan,
-            N,
+            np.linspace(*tspan, N + 1),
             calibration="none",
             obs_model=obs_model,
         )
@@ -89,15 +88,19 @@ class TestSeqWithObservations:
         measure = ODEInformation(_vf_logistic, prior.E0, prior.E1)
 
         result_default = gaussian_filter(
-            mu_0, Sigma_0_sqr, prior, measure, tspan, N, calibration="none"
+            mu_0,
+            Sigma_0_sqr,
+            prior,
+            measure,
+            np.linspace(*tspan, N + 1),
+            calibration="none",
         )
         result_none = gaussian_filter(
             mu_0,
             Sigma_0_sqr,
             prior,
             measure,
-            tspan,
-            N,
+            np.linspace(*tspan, N + 1),
             calibration="none",
             obs_model=None,
         )
@@ -128,15 +131,19 @@ class TestSeqWithObservations:
         obs_model = prepare_observations([observation], prior.E0, ts)
 
         result_no_obs = gaussian_filter(
-            mu_0, Sigma_0_sqr, prior, measure, tspan, N, calibration="none"
+            mu_0,
+            Sigma_0_sqr,
+            prior,
+            measure,
+            np.linspace(*tspan, N + 1),
+            calibration="none",
         )
         result_obs = gaussian_filter(
             mu_0,
             Sigma_0_sqr,
             prior,
             measure,
-            tspan,
-            N,
+            np.linspace(*tspan, N + 1),
             calibration="none",
             obs_model=obs_model,
         )

@@ -53,8 +53,7 @@ def main() -> None:
         vf=vf,
         init_fn=init_fn,
         prior=prior,
-        tspan=TSPAN,
-        N=N,
+        ts=ts,
         ode_params=np.array([0.4]),  # deliberately wrong starting guess
     )
 

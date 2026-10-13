@@ -1,0 +1,188 @@
+"""Online diffusion calibration: how each filter step sets ``sigma^2``.
+
+The prior's process noise is ``sigma^2 Q(h)`` for an unknown diffusion
+``sigma^2``. Before each prediction a calibration policy estimates it from the
+ODE residual at the predicted mean, the per-step quasi-MLE of Bosch, Tronarp &
+Hennig (2021, Eq. 32),
+
+    sigma_hat^2 = r.T (H Q(h) H.T)^-1 r / d,
+
+and decides whether the step propagates with it:
+
+- ``NoCalibration`` -- propagate ``Q(h)`` unscaled (a fixed diffusion, carried
+  by the prior's ``Xi``); the estimate is still reported, for post-hoc rescaling.
+- ``DynamicCalibration`` -- scale the step's process noise by the scalar
+  estimate.
+- ``DiagonalCalibration`` -- one estimate per solution component,
+  ``r_i^2 / (H Q H.T)_ii``. With ``jacobian="ek0"`` the denominator uses the
+  ODE's left-hand-side selector instead of the linearization's Jacobian, which
+  makes it the exact per-component MLE when ``Xi`` is diagonal.
+
+Only the ODE-residual rows (the first ``ode_dim`` rows of the information)
+drive the estimate; conservation rows and data update the posterior but live
+on other scales. For joint priors only the state block of the noise is scaled.
+
+The strings ``"none"``, ``"dynamic"``, ``"diagonal"`` and ``"diagonal_ekf0"``
+are accepted wherever a policy is, as shorthands for the default policies.
+"""
+
+from __future__ import annotations
+
+import abc
+from collections.abc import Callable
+from typing import Literal
+
+import equinox as eqx
+import jax
+import jax.numpy as np
+import numpy as onp
+from jax import Array
+
+from .sigma import quasi_mle_sigma_sqr_from_Q
+
+CalibrationMode = Literal["none", "dynamic", "diagonal", "diagonal_ekf0"]
+ScaleNoise = Callable[[Array, Array], Array]
+
+
+class Calibration(eqx.Module):
+    """Base class of the diffusion-calibration policies."""
+
+    @abc.abstractmethod
+    def calibrate(
+        self,
+        residual: Array,
+        H: Array,
+        Q_sqr: Array,
+        *,
+        scale: ScaleNoise,
+        H_ek0: Callable[[], Array],
+    ) -> tuple[Array, Array]:
+        """Estimate ``sigma^2`` for one step and return the noise to propagate.
+
+        Args:
+            residual: ODE residual at the predicted mean, shape ``[d]``.
+            H: Its Jacobian (the linearization's ODE rows), shape ``[d, D]``.
+            Q_sqr: Square-root process noise of the step, shape ``[D, D]``.
+            scale: ``(Q_sqr, sigma_sqr) -> Q_sqr`` applying a diffusion to the
+                prior's state block (``prior.apply_state_sigma_sqr``).
+            H_ek0: Returns the ODE's left-hand-side selector in the same
+                coordinates as ``H``; only called by policies that need it.
+
+        Returns:
+            ``(sigma_sqr, Q_step_sqr)``: the estimate (scalar, or one per
+            component) and the square-root noise the step propagates with.
+        """
+        raise NotImplementedError  # pragma: no cover - abstract method
+
+    def validate(self, prior) -> None:
+        """Reject a prior this policy cannot calibrate (called once per solve)."""
+
+
+def _scalar_estimate(residual: Array, H: Array, Q_sqr: Array) -> Array:
+    return quasi_mle_sigma_sqr_from_Q(residual, H, Q_sqr)
+
+
+class NoCalibration(Calibration):
+    """Fixed diffusion: propagate the prior's noise unscaled.
+
+    The scalar quasi-MLE is still computed and reported as ``sigma_sqr``, so a
+    run can be rescaled post hoc (see ``posthoc_mle_sigma_sqr``).
+    """
+
+    def calibrate(self, residual, H, Q_sqr, *, scale, H_ek0):
+        return _scalar_estimate(residual, H, Q_sqr), Q_sqr
+
+
+class DynamicCalibration(Calibration):
+    """Scalar per-step diffusion, baked into the step's process noise.
+
+    Attributes:
+        min_sigma_sqr: Lower bound on the estimate. A positive floor keeps a
+            residual that vanishes identically (a system at rest) from
+            collapsing the diffusion to zero.
+    """
+
+    min_sigma_sqr: float = eqx.field(static=True, default=0.0)
+
+    def calibrate(self, residual, H, Q_sqr, *, scale, H_ek0):
+        sigma_sqr = np.maximum(_scalar_estimate(residual, H, Q_sqr), self.min_sigma_sqr)
+        return sigma_sqr, scale(Q_sqr, sigma_sqr)
+
+
+class DiagonalCalibration(Calibration):
+    """One diffusion per solution component.
+
+    ``sigma_i^2 = r_i^2 / (H Q H.T)_ii``. Requires the state block of ``Xi`` to
+    be diagonal; checked when a solve starts.
+
+    Attributes:
+        jacobian: ``"ek1"`` (default) takes ``H`` from the linearization, so a
+            coupled Jacobian mixes the components and the diagonal is a
+            heuristic. ``"ek0"`` takes the ODE's left-hand-side selector
+            (``E1`` for ``x' = f``, ``E2`` for ``x'' = f``), for which
+            ``H Q H.T`` is exactly diagonal when ``Xi`` is: the recommended
+            choice for multi-scale systems.
+        min_sigma_sqr: Lower bound on each component's estimate.
+    """
+
+    jacobian: Literal["ek1", "ek0"] = eqx.field(static=True, default="ek1")
+    min_sigma_sqr: float = eqx.field(static=True, default=0.0)
+
+    def __check_init__(self):
+        if self.jacobian not in ("ek1", "ek0"):
+            raise ValueError(f'jacobian must be "ek1" or "ek0", got {self.jacobian!r}.')
+
+    def calibrate(self, residual, H, Q_sqr, *, scale, H_ek0):
+        H_calib = H_ek0() if self.jacobian == "ek0" else H
+        # diag(H Q H.T)_i = ||(H @ Q_sqr.T)[i]||^2, since Q = Q_sqr.T @ Q_sqr.
+        HQ_sqr = H_calib @ Q_sqr.T
+        denom = np.sum(HQ_sqr * HQ_sqr, axis=1)
+        # A degenerate row (denom == 0) would give NaN; the double ``where``
+        # floors it on both the forward and the reverse pass.
+        positive = denom > 0.0
+        safe_denom = np.where(positive, denom, 1.0)
+        estimate = np.where(positive, residual**2 / safe_denom, self.min_sigma_sqr)
+        sigma_sqr = np.maximum(estimate, self.min_sigma_sqr)
+        return sigma_sqr, scale(Q_sqr, sigma_sqr)
+
+    def validate(self, prior) -> None:
+        # A traced Xi (a differentiated hyperparameter) cannot be checked; the
+        # caller's invariant is trusted there.
+        try:
+            xi = onp.asarray(prior.xi_state)
+        except jax.errors.TracerArrayConversionError:
+            return
+        if not onp.allclose(xi - onp.diag(onp.diag(xi)), 0.0):
+            raise ValueError(
+                "DiagonalCalibration requires the state block of Xi to be diagonal "
+                "(prior.xi_state; for a joint prior, the state prior's Xi)."
+            )
+
+
+_ALIASES: dict[str, Callable[[], Calibration]] = {
+    "none": NoCalibration,
+    "dynamic": DynamicCalibration,
+    "diagonal": DiagonalCalibration,
+    "diagonal_ekf0": lambda: DiagonalCalibration(jacobian="ek0"),
+}
+
+
+def as_calibration(calibration: Calibration | str) -> Calibration:
+    """Resolve a policy or one of the string shorthands to a policy.
+
+    Raises:
+        ValueError: For an unknown string.
+        TypeError: For anything else that is not a ``Calibration``.
+    """
+    if isinstance(calibration, Calibration):
+        return calibration
+    if isinstance(calibration, str):
+        if calibration not in _ALIASES:
+            raise ValueError(
+                f"calibration must be a Calibration or one of {tuple(_ALIASES)}; "
+                f"got {calibration!r}."
+            )
+        return _ALIASES[calibration]()
+    raise TypeError(
+        f"calibration must be a Calibration or a string, got {type(calibration)}."
+    )

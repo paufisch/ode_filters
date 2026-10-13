@@ -1,16 +1,27 @@
-"""Online and post-hoc diffusion (sigma^2) calibration for probabilistic ODE filters.
+"""Diffusion (sigma^2) calibration for probabilistic ODE filters.
 
-Three calibration recipes are provided, all consuming the predicted-observation
-marginal ``(m_z, P_z_sqr)`` already returned by the EKF step:
+Online: the policies ``NoCalibration``, ``DynamicCalibration`` and
+``DiagonalCalibration`` decide how each filter step estimates and applies
+``sigma^2`` (see ``ode_filters.calibration.policies``).
+
+Post hoc, from a finished run's innovations:
 
 - ``quasi_mle_sigma_sqr`` -- per-step quasi-MLE (Bosch et al. 2021).
 - ``posthoc_mle_sigma_sqr`` -- closed-form MLE over a full trajectory.
 - ``aggregate_sigma_sqr`` -- aggregate a per-step trace into a global
   estimate or its running cumulative mean.
-
-Covariance rescaling helpers live in ``ode_filters.calibration.rescale``.
+- ``rescale_sqr`` / ``rescale_sqr_seq`` -- apply an estimate to stored
+  covariances.
 """
 
+from .policies import (
+    Calibration,
+    CalibrationMode,
+    DiagonalCalibration,
+    DynamicCalibration,
+    NoCalibration,
+    as_calibration,
+)
 from .rescale import rescale_sqr, rescale_sqr_seq
 from .sigma import (
     aggregate_sigma_sqr,
@@ -20,7 +31,13 @@ from .sigma import (
 )
 
 __all__ = [
+    "Calibration",
+    "CalibrationMode",
+    "DiagonalCalibration",
+    "DynamicCalibration",
+    "NoCalibration",
     "aggregate_sigma_sqr",
+    "as_calibration",
     "posthoc_mle_sigma_sqr",
     "quasi_mle_sigma_sqr",
     "quasi_mle_sigma_sqr_from_Q",

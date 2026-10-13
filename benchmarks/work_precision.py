@@ -167,8 +167,7 @@ def make_ode_filters_fixed(problem: ODEProblem, N: int, order: int) -> Callable:
             S0,
             prior,
             measure,
-            problem.tspan,
-            N,
+            np.linspace(*problem.tspan, N + 1),
             correction=corr,
             calibration="dynamic",
         )

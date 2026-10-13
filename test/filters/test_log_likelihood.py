@@ -46,7 +46,12 @@ class TestLogLikelihoodMatchesManual:
         measure = ODEInformation(_vf, prior.E0, prior.E1)
 
         result = gaussian_filter(
-            mu_0, Sigma_0_sqr, prior, measure, self.tspan, self.N, calibration="none"
+            mu_0,
+            Sigma_0_sqr,
+            prior,
+            measure,
+            np.linspace(*self.tspan, self.N + 1),
+            calibration="none",
         )
 
         mz_seq = result.mz
@@ -62,7 +67,12 @@ class TestLogLikelihoodMatchesManual:
         measure = ODEInformation(_vf, prior.E0, prior.E1)
 
         result = gaussian_filter(
-            mu_0, Sigma_0_sqr, prior, measure, self.tspan, self.N, calibration="none"
+            mu_0,
+            Sigma_0_sqr,
+            prior,
+            measure,
+            np.linspace(*self.tspan, self.N + 1),
+            calibration="none",
         )
 
         mz_seq = result.mz
@@ -98,8 +108,7 @@ class TestLogLikelihoodDifferentiable:
                 Sigma_0_sqr_,
                 prior,
                 measure,
-                self.tspan,
-                self.N,
+                np.linspace(*self.tspan, self.N + 1),
                 calibration="none",
             )
             return result.log_likelihood
@@ -118,8 +127,7 @@ class TestLogLikelihoodDifferentiable:
                 Sigma_0_sqr_,
                 prior,
                 measure,
-                self.tspan,
-                self.N,
+                np.linspace(*self.tspan, self.N + 1),
                 calibration="none",
             )
             return result.log_likelihood

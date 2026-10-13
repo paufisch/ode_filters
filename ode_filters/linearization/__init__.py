@@ -2,10 +2,10 @@
 
 from .correction import (
     Correction,
-    CorrectionResult,
     IteratedTaylorCorrection,
     QuadratureCorrection,
     TaylorCorrection,
+    taylor_linearize,
 )
 from .statistical import (
     SLRModel,
@@ -15,10 +15,11 @@ from .statistical import (
     quadrature_nodes,
     slr_linearize,
 )
+from .surrogate import AffineSurrogate, slr_surrogate, taylor_surrogate
 
 __all__ = [
+    "AffineSurrogate",
     "Correction",
-    "CorrectionResult",
     "IteratedTaylorCorrection",
     "QuadratureCorrection",
     "SLRModel",
@@ -28,4 +29,7 @@ __all__ = [
     "gauss_hermite_rule",
     "quadrature_nodes",
     "slr_linearize",
+    "slr_surrogate",
+    "taylor_linearize",
+    "taylor_surrogate",
 ]

@@ -1,28 +1,33 @@
-"""Filtering and smoothing routines for ODE models.
+"""Filters and smoothers.
 
-The public solver API is ``gaussian_filter`` / ``gaussian_filter_adaptive`` /
-``rts_smoother`` (returning ``FilterResult``) and the adaptive step-size
-controllers. The linearization strategies live in ``ode_filters.linearization``.
+- ``gaussian_filter``: fixed grid (uniform or not), online linearization.
+- ``gaussian_filter_adaptive``: adaptive steps, solution at given save times.
+- ``affine_filter``: a frozen linearization (``AffineSurrogate``).
+- ``rts_smoother``: smoothing of any of their results.
+- ``iterated_smoother``: the IEKS / IPLS, iterating linearization and smoothing.
+
+All return named results in the original state coordinates. The steps they are
+built from are in ``ode_filters.filters.kernel``.
 """
 
+from .adaptive import gaussian_filter_adaptive
 from .adaptive_controller import PController, PIController, StepSizeController
-from .gaussian_filter import (
-    FilterResult,
-    gaussian_filter,
-    gaussian_filter_adaptive,
-    rts_smoother,
-)
-from .ipls import IPLSResult, affine_filter_scan, ipls_smoother
+from .fixed_grid import affine_filter, gaussian_filter
+from .iterated import IteratedSmootherResult, IterationState, iterated_smoother
+from .result import FilterResult, StepRecord
+from .smoothing import rts_smoother
 
 __all__ = [
     "FilterResult",
-    "IPLSResult",
+    "IteratedSmootherResult",
+    "IterationState",
     "PController",
     "PIController",
+    "StepRecord",
     "StepSizeController",
-    "affine_filter_scan",
+    "affine_filter",
     "gaussian_filter",
     "gaussian_filter_adaptive",
-    "ipls_smoother",
+    "iterated_smoother",
     "rts_smoother",
 ]
