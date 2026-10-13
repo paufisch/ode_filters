@@ -16,26 +16,60 @@ import jax
 jax.config.update("jax_enable_x64", True)
 ```
 
-### `tspan` must be a tuple
-
-`tspan` is a `jax.jit` *static* argument, so it must be hashable:
-
-```python
-tspan = (0.0, 10.0)   # ✅ tuple
-tspan = [0.0, 10.0]   # ❌ list -> unhashable, breaks under jit
-```
-
 ### Covariances are square-root factors
 
 Anything named `*_sqr` is an upper-triangular factor, not a covariance. Reconstruct
 with `P = P_sqr.T @ P_sqr`; for standard deviations use
-`np.sqrt(np.diag(P_sqr.T @ P_sqr))`. See [Notation](notation.md).
+`np.sqrt(np.diag(P_sqr.T @ P_sqr))`. The one exception is the diffusion:
+`sigma_sqr` (and `min_sigma_sqr`) is sigma *squared*, a variance. See
+[Notation](notation.md).
 
-### Build models outside `jit`; pass `prior`/`measure`/`N`/`tspan` as static
+### The solvers are not pre-jitted: wrap them yourself
 
-The prior, measurement model, integer `N`, and `tspan` are static configuration —
-construct them in Python and mark them static (the loops already do this for you via
-`static_argnums`). Only arrays (`mu_0`, `Sigma_0_sqr`, parameters) are traced.
+`gaussian_filter` and friends are plain functions. The simplest way to compile one
+is `equinox.filter_jit`: it traces the arrays and treats everything else (prior,
+measurement model, `tspan`, `N`, `calibration`, `correction`, ...) as static:
+
+```python
+import equinox as eqx
+
+solve = eqx.filter_jit(gaussian_filter)
+result = solve(mu_0, P0_sqr, prior, measure, (0.0, 10.0), 100, calibration="none")
+```
+
+With `jax.jit`, every non-array argument has to be marked static, keyword
+arguments included, and static arguments must be hashable, so `tspan` has to be a
+tuple rather than a list:
+
+```python
+solve = jax.jit(
+    gaussian_filter,
+    static_argnums=(2, 3, 4, 5),  # prior, measure, tspan, N
+    static_argnames=("calibration", "correction"),
+)
+```
+
+### Build models once and don't mutate them under `jit`
+
+Priors and measurement models are static arguments, compared by identity. Two
+consequences:
+
+- **A new model object recompiles**, even if it is equal to the old one. Build
+  the prior and measurement model once and reuse them across calls.
+- **A mutated model is not noticed.** After `measure.R = 0.5`, a jitted solve
+  that has already seen `measure` keeps using the old noise. Build a new model
+  instead (which recompiles), or call the solver without `jit`.
+
+Only arrays (`mu_0`, `P0_sqr`, the data in an `obs_model`, parameters) are traced,
+so differentiate with respect to those.
+
+### Preconditioned priors: fixed grid only, some fields in bar coordinates
+
+`PrecondIWP` / `PrecondMaternPrior` / `PrecondJointPrior` run the recursion in
+rescaled coordinates `x = T @ x_bar`. They work with `gaussian_filter` (without an
+`obs_model`), but `gaussian_filter_adaptive` and `JointPrior` reject them. In their
+results, `m_pred`, `P_pred_sqr` and the backward-pass fields are in bar
+coordinates; see the [filters API](api/filters/index.md).
 
 ### A solve is differentiable on both stepping modes
 

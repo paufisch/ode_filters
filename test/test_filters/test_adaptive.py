@@ -20,10 +20,19 @@ from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
 from ode_filters.filters.ode_filter_loop import (
     rts_sqr_smoother_loop,
     sqr_loop_dynamic_scan,
-    sqr_loop_preconditioned_dynamic_scan,
 )
-from ode_filters.measurement.measurement_models import ODEInformation
-from ode_filters.priors.gmp_priors import IWP, PrecondIWP, taylor_mode_initialization
+from ode_filters.measurement.measurement_models import (
+    Conservation,
+    ODEInformation,
+    ODEInformationWithHidden,
+)
+from ode_filters.priors.gmp_priors import (
+    IWP,
+    JointPrior,
+    PrecondIWP,
+    PrecondJointPrior,
+    taylor_mode_initialization,
+)
 
 # ---------------------------------------------------------------------------
 # Test problems
@@ -573,31 +582,6 @@ class TestDynamicLoopVariantsAgree:
         measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
         return prior, mu_0, S0, measure
 
-    def test_scan_matches_python_loop(self):
-        prior, mu_0, S0, measure = self._setup_iwp()
-        r_loop = gaussian_filter(mu_0, S0, prior, measure, self.tspan, self.N)
-        r_scan = sqr_loop_dynamic_scan(mu_0, S0, prior, measure, self.tspan, self.N)
-        # Final filtered mean / cov agree to fp32-ish precision (jax default).
-        assert np.allclose(r_loop.m[-1], r_scan[0][-1], atol=1e-6)
-        assert np.allclose(r_loop.P_sqr[-1], r_scan[1][-1], atol=1e-6)
-        # Per-step sigma agrees.
-        sigma_loop = np.asarray(r_loop.sigma_sqr)
-        sigma_scan = np.asarray(r_scan[9])
-        assert np.allclose(sigma_loop, sigma_scan, atol=1e-6)
-
-    def test_preconditioned_scan_matches_python_loop(self):
-        prior, mu_0, S0, measure = self._setup_precond_iwp()
-        r_loop = gaussian_filter(mu_0, S0, prior, measure, self.tspan, self.N)
-        r_scan = sqr_loop_preconditioned_dynamic_scan(
-            mu_0, S0, prior, measure, self.tspan, self.N
-        )
-        # m_seq is at index 0 in the scan result.
-        assert np.allclose(r_loop.m[-1], r_scan[0][-1], atol=1e-6)
-        # sigma_sqr_seq is at index 11 in the scan result.
-        sigma_loop = np.asarray(r_loop.sigma_sqr)
-        sigma_scan = np.asarray(r_scan[11])
-        assert np.allclose(sigma_loop, sigma_scan, atol=1e-6)
-
     def test_sigma_invariant_under_preconditioning(self):
         """``sigma_hat^2`` from ``H Q H.T`` equals the bar-space estimator
         from ``H_bar Q_bar H_bar.T`` -- preconditioning is a similarity that
@@ -610,157 +594,85 @@ class TestDynamicLoopVariantsAgree:
         sigma_pre = np.asarray(r_pre.sigma_sqr)
         assert np.allclose(sigma_iwp, sigma_pre, atol=1e-6)
 
-    def test_diagonal_mode_across_variants_agrees(self):
-        """All four loop variants (plain/scan x with/without preconditioning)
-        produce identical trajectories in diagonal mode on a multi-scale
-        problem, since calibration is invariant under preconditioning."""
+    @staticmethod
+    def _multiscale_problem():
         r_rate = 2.0
-        x0 = np.asarray([1e-5, 1e-10])
 
         def vf(x, *, t):
             return np.array([r_rate * x[0] * (1 - x[0]), r_rate * x[1] * (1 - x[1])])
 
-        tspan = (0.0, 15.0)
-        N = 500
-        prior_iwp = IWP(q=3, d=2)
-        prior_pre = PrecondIWP(q=3, d=2)
-        mu0, S0 = taylor_mode_initialization(vf, x0, q=3)
-        meas_iwp = ODEInformation(vf, prior_iwp.E0, prior_iwp.E1)
-        meas_pre = ODEInformation(vf, prior_pre.E0, prior_pre.E1)
+        mu0, S0 = taylor_mode_initialization(vf, np.asarray([1e-5, 1e-10]), q=3)
+        return vf, mu0, S0
 
-        r1 = gaussian_filter(
-            mu0, S0, prior_iwp, meas_iwp, tspan, N, calibration="diagonal"
-        )
-        r2 = sqr_loop_dynamic_scan(
-            mu0, S0, prior_iwp, meas_iwp, tspan, N, calibration="diagonal"
-        )
-        r3 = gaussian_filter(
-            mu0, S0, prior_pre, meas_pre, tspan, N, calibration="diagonal"
-        )
-        r4 = sqr_loop_preconditioned_dynamic_scan(
-            mu0, S0, prior_pre, meas_pre, tspan, N, calibration="diagonal"
-        )
-        # Final filtered means agree to fp64 precision.
-        for r in (r2, r3, r4):
-            m_last = r.m[-1] if hasattr(r, "m") else r[0][-1]
-            assert np.allclose(r1.m[-1], m_last, atol=1e-8)
-
-    def test_diagonal_ekf0_variant_runs_across_loops(self):
-        """diagonal_ekf0 variant works in all four loop functions."""
-        r_rate = 2.0
-        x0 = np.asarray([1e-5, 1e-10])
-
-        def vf(x, *, t):
-            return np.array([r_rate * x[0] * (1 - x[0]), r_rate * x[1] * (1 - x[1])])
-
-        tspan = (0.0, 15.0)
-        N = 500
-        prior_iwp = IWP(q=3, d=2)
-        prior_pre = PrecondIWP(q=3, d=2)
-        mu0, S0 = taylor_mode_initialization(vf, x0, q=3)
-        meas_iwp = ODEInformation(vf, prior_iwp.E0, prior_iwp.E1)
-        meas_pre = ODEInformation(vf, prior_pre.E0, prior_pre.E1)
-        for func, prior, meas in [
-            (gaussian_filter, prior_iwp, meas_iwp),
-            (sqr_loop_dynamic_scan, prior_iwp, meas_iwp),
-            (gaussian_filter, prior_pre, meas_pre),
-            (sqr_loop_preconditioned_dynamic_scan, prior_pre, meas_pre),
-        ]:
-            r = func(mu0, S0, prior, meas, tspan, N, calibration="diagonal_ekf0")
-            # Final x_2 should be near 0.999 (true value) -- the multi-scale
-            # problem resolves under any diagonal variant.
-            m_last = r.m[-1] if hasattr(r, "m") else r[0][-1]
-            x_last = m_last @ prior.E0.T
-            assert abs(float(x_last[1]) - 0.99907) < 1e-3, (
-                f"{func.__name__} failed: x_2 = {float(x_last[1])}"
+    @pytest.mark.parametrize("calibration", ["diagonal", "diagonal_ekf0"])
+    def test_diagonal_modes_agree_under_preconditioning(self, calibration):
+        """Plain and preconditioned priors give the same trajectory in the
+        diagonal modes on a multi-scale problem (calibration is invariant under
+        preconditioning), and both resolve the slow component."""
+        vf, mu0, S0 = self._multiscale_problem()
+        tspan, N = (0.0, 15.0), 500
+        results = []
+        for prior in (IWP(q=3, d=2), PrecondIWP(q=3, d=2)):
+            measure = ODEInformation(vf, prior.E0, prior.E1)
+            results.append(
+                gaussian_filter(
+                    mu0, S0, prior, measure, tspan, N, calibration=calibration
+                )
             )
+        plain, precond = results
+        assert np.allclose(plain.m[-1], precond.m[-1], atol=1e-8)
+        # The true x_2(15) is 0.99907.
+        assert abs(float((plain.m[-1] @ IWP(q=3, d=2).E0.T)[1]) - 0.99907) < 1e-3
 
-    def test_calibration_none_matches_across_variants(self):
-        """With calibration disabled, all four dynamic variants reduce to
-        their non-dynamic counterparts (modulo preconditioning) and so must
-        produce the same final state."""
-        prior, mu_0, S0, measure = self._setup_iwp()
-        r_loop = gaussian_filter(
-            mu_0, S0, prior, measure, self.tspan, self.N, calibration="none"
+    def test_calibration_none_agrees_under_preconditioning(self):
+        prior_iwp, mu_0, S0, measure_iwp = self._setup_iwp()
+        prior_pre, _, _, measure_pre = self._setup_precond_iwp()
+        kwargs = dict(calibration="none")
+        r_iwp = gaussian_filter(
+            mu_0, S0, prior_iwp, measure_iwp, self.tspan, self.N, **kwargs
         )
-        r_scan = sqr_loop_dynamic_scan(
-            mu_0, S0, prior, measure, self.tspan, self.N, calibration="none"
+        r_pre = gaussian_filter(
+            mu_0, S0, prior_pre, measure_pre, self.tspan, self.N, **kwargs
         )
-        assert np.allclose(r_loop.m[-1], r_scan[0][-1], atol=1e-8)
-        assert np.allclose(r_loop.P_sqr[-1], r_scan[1][-1], atol=1e-8)
+        assert np.allclose(r_iwp.m, r_pre.m, atol=1e-8)
+        assert np.allclose(
+            np.einsum("nij,nik->njk", r_iwp.P_sqr, r_iwp.P_sqr),
+            np.einsum("nij,nik->njk", r_pre.P_sqr, r_pre.P_sqr),
+            atol=1e-10,
+        )
 
 
 # ---------------------------------------------------------------------------
-# Scan vs non-scan parity: full (prior x calibration) cross-product
+# Plain vs preconditioned: full (prior x calibration) cross-product
 # ---------------------------------------------------------------------------
 
 
-class TestScanParityFullGrid:
-    """For every supported (prior, calibration) combination, the JIT-scan
-    loop must produce the same trajectory and per-step sigma as the Python
-    non-scan loop. Each of the three bugs fixed in this PR shows up
-    somewhere in this grid:
-
-    - Joint priors crashed at scan setup (`prior.xi` is undefined on
-      `JointPrior` / `PrecondJointPrior`).
-    - The scan body skipped the ``[:d_ode]`` slicing of the residual; for
-      measurements with stacked rows the scan sigma was wrong.
-    - In dynamic mode the scan body multiplied the full Q by sigma instead
-      of routing through ``apply_state_sigma_sqr``; for joint priors this
-      poisoned the input block.
-    """
+class TestPreconditioningInvarianceFullGrid:
+    """For every (prior kind, calibration) combination the preconditioned
+    recursion must reproduce the plain one: preconditioning is a change of
+    coordinates, so trajectory and per-step sigma are invariant. The joint
+    cases also exercise the joint-prior paths (state-block-only diffusion via
+    ``apply_state_sigma_sqr``)."""
 
     tspan = (0.0, 2.0)
     N = 30
 
     @staticmethod
-    def _iwp_setup():
-        from ode_filters.priors.gmp_priors import IWP
-
-        prior = IWP(q=2, d=1)
+    def _single(prior_cls):
+        prior = prior_cls(q=2, d=1)
         mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
         measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
-        return (
-            prior,
-            mu_0,
-            S0,
-            measure,
-            gaussian_filter,
-            sqr_loop_dynamic_scan,
-        )
+        return prior, mu_0, S0, measure
 
     @staticmethod
-    def _precond_iwp_setup():
-        from ode_filters.priors.gmp_priors import PrecondIWP
+    def _joint(prior_cls, joint_cls):
+        joint = joint_cls(prior_cls(q=2, d=2), prior_cls(q=0, d=1, Xi=1e-3 * np.eye(1)))
 
-        prior = PrecondIWP(q=2, d=1)
-        mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
-        measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
-        return (
-            prior,
-            mu_0,
-            S0,
-            measure,
-            gaussian_filter,
-            sqr_loop_preconditioned_dynamic_scan,
-        )
-
-    @staticmethod
-    def _joint_setup():
-        from ode_filters.measurement.measurement_models import (
-            ODEInformationWithHidden,
-        )
-        from ode_filters.priors.gmp_priors import IWP, JointPrior
-
-        prior_x = IWP(q=2, d=2)
-        prior_u = IWP(q=0, d=1, Xi=1e-3 * np.eye(1))
-        joint = JointPrior(prior_x, prior_u)
-
-        def _vf_hidden_linear(x, u, *, t):
+        def vf_hidden_linear(x, u, *, t):
             return -u[0] * x
 
         measure = ODEInformationWithHidden(
-            _vf_hidden_linear,
+            vf_hidden_linear,
             E0=joint.E0_x,
             E1=joint.E1,
             E0_hidden=joint.E0_hidden,
@@ -768,78 +680,31 @@ class TestScanParityFullGrid:
         D = joint.E0.shape[1]
         mu_0 = np.zeros(D).at[0].set(1.0).at[1].set(0.5).at[6].set(0.7)
         S0 = 1e-6 * np.eye(D)
-        return (
-            joint,
-            mu_0,
-            S0,
-            measure,
-            gaussian_filter,
-            sqr_loop_dynamic_scan,
-        )
+        return joint, mu_0, S0, measure
 
-    @staticmethod
-    def _precond_joint_setup():
-        from ode_filters.measurement.measurement_models import (
-            ODEInformationWithHidden,
-        )
-        from ode_filters.priors.gmp_priors import PrecondIWP, PrecondJointPrior
-
-        prior_x = PrecondIWP(q=2, d=2)
-        prior_u = PrecondIWP(q=0, d=1, Xi=1e-3 * np.eye(1))
-        joint = PrecondJointPrior(prior_x, prior_u)
-
-        def _vf_hidden_linear(x, u, *, t):
-            return -u[0] * x
-
-        measure = ODEInformationWithHidden(
-            _vf_hidden_linear,
-            E0=joint.E0_x,
-            E1=joint.E1,
-            E0_hidden=joint.E0_hidden,
-        )
-        D = joint.E0.shape[1]
-        mu_0 = np.zeros(D).at[0].set(1.0).at[1].set(0.5).at[6].set(0.7)
-        S0 = 1e-6 * np.eye(D)
-        return (
-            joint,
-            mu_0,
-            S0,
-            measure,
-            gaussian_filter,
-            sqr_loop_preconditioned_dynamic_scan,
-        )
-
-    @pytest.mark.parametrize(
-        "prior_kind", ["iwp", "precond_iwp", "joint", "precond_joint"]
-    )
+    @pytest.mark.parametrize("kind", ["single", "joint"])
     @pytest.mark.parametrize(
         "calibration", ["dynamic", "diagonal", "diagonal_ekf0", "none"]
     )
-    def test_scan_matches_python_loop(self, prior_kind, calibration):
-        setup = {
-            "iwp": self._iwp_setup,
-            "precond_iwp": self._precond_iwp_setup,
-            "joint": self._joint_setup,
-            "precond_joint": self._precond_joint_setup,
-        }[prior_kind]
-        prior, mu_0, S0, measure, loop_fn, scan_fn = setup()
-        r_loop = loop_fn(
-            mu_0, S0, prior, measure, self.tspan, self.N, calibration=calibration
+    def test_preconditioned_matches_plain(self, kind, calibration):
+        if kind == "single":
+            setups = [self._single(IWP), self._single(PrecondIWP)]
+        else:
+            setups = [
+                self._joint(IWP, JointPrior),
+                self._joint(PrecondIWP, PrecondJointPrior),
+            ]
+        plain, precond = (
+            gaussian_filter(
+                mu_0, S0, prior, measure, self.tspan, self.N, calibration=calibration
+            )
+            for prior, mu_0, S0, measure in setups
         )
-        r_scan = scan_fn(
-            mu_0, S0, prior, measure, self.tspan, self.N, calibration=calibration
+        assert np.allclose(plain.m, precond.m, atol=1e-8), (
+            f"{kind}+{calibration}: means disagree"
         )
-        # Compare final means and per-step sigma. The gaussian_filter side
-        # returns a FilterResult; the scan loops return positional tuples.
-        assert np.allclose(r_loop.m[-1], r_scan[0][-1], atol=1e-8), (
-            f"{prior_kind}+{calibration}: final mean disagrees"
-        )
-        # sigma_sqr_seq position in the scan tuple: 9 in basic, 11 in preconditioned.
-        sigma_idx = 11 if "precond" in prior_kind else 9
-        sigma_loop = np.asarray(r_loop.sigma_sqr)
-        sigma_scan = np.asarray(r_scan[sigma_idx])
-        assert np.allclose(sigma_loop, sigma_scan, atol=1e-8), (
-            f"{prior_kind}+{calibration}: per-step sigma disagrees"
+        assert np.allclose(plain.sigma_sqr, precond.sigma_sqr, atol=1e-8), (
+            f"{kind}+{calibration}: per-step sigma disagrees"
         )
 
 
@@ -913,42 +778,39 @@ class TestScanLoopIsGradTraceable:
             )
 
 
-class TestScanParityWithStackedResidual:
-    """When the measurement has rows beyond the ODE-defect (e.g. a
+class TestStackedResidualCalibration:
+    """When the measurement has rows beyond the ODE defect (e.g. a
     Conservation constraint), only the first ``measure.ode_dim`` rows of the
-    residual should drive sigma. The scan body used to skip this slicing."""
+    residual may drive sigma."""
 
     def test_conservation_row_does_not_affect_sigma(self):
-        from ode_filters.measurement.measurement_models import (
-            Conservation,
-            ODEInformation,
-        )
-
         def vf_sir(x, *, t, beta=0.5, gamma=0.1):
             return np.array(
                 [-beta * x[0] * x[1], beta * x[0] * x[1] - gamma * x[1], gamma * x[1]]
             )
 
-        from ode_filters.priors.gmp_priors import IWP
-
         prior = IWP(q=2, d=3)
-        x0 = np.array([0.99, 0.01, 0.0])
-        mu_0, S0 = taylor_mode_initialization(vf_sir, x0, q=2)
+        mu_0, S0 = taylor_mode_initialization(vf_sir, np.array([0.99, 0.01, 0.0]), q=2)
         measure = ODEInformation(
             vf_sir,
             prior.E0,
             prior.E1,
             constraints=[Conservation(np.array([[1.0, 1.0, 1.0]]), np.array([1.0]))],
         )
-        r_loop = gaussian_filter(
-            mu_0, S0, prior, measure, (0.0, 2.0), 30, calibration="dynamic"
+        tspan, N = (0.0, 2.0), 30
+        result = gaussian_filter(
+            mu_0, S0, prior, measure, tspan, N, calibration="dynamic"
         )
-        r_scan = sqr_loop_dynamic_scan(
-            mu_0, S0, prior, measure, (0.0, 2.0), 30, calibration="dynamic"
-        )
-        sigma_loop = np.asarray(r_loop.sigma_sqr)
-        sigma_scan = np.asarray(r_scan[9])
-        assert np.allclose(sigma_loop, sigma_scan, atol=1e-10)
+        # Oracle: the quasi-MLE from the ODE rows only, linearized at each
+        # step's prediction, with the uncalibrated process noise.
+        Q_sqr = prior.Q_sqr((tspan[1] - tspan[0]) / N)
+        d = measure.ode_dim
+        for n in (0, N // 2, N - 1):
+            t_n = tspan[0] + (n + 1) * (tspan[1] - tspan[0]) / N
+            H, c = measure.linearize(result.m_pred[n], t=t_n)
+            mz_ode = (H @ result.m_pred[n] + c)[:d]
+            expected = quasi_mle_sigma_sqr_from_Q(mz_ode, H[:d], Q_sqr)
+            assert np.allclose(result.sigma_sqr[n], expected, rtol=1e-8)
 
 
 @pytest.mark.parametrize(

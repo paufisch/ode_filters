@@ -1,10 +1,10 @@
 """Ergonomic object API for ODE-parameter inference (Layer 2).
 
-:class:`ODEFilter` bundles the problem structure (vector field, prior, grid) with
-the differentiable parameters as a single ``equinox.Module``, and :func:`fit`
+``ODEFilter`` bundles the problem structure (vector field, prior, grid) with
+the differentiable parameters as a single ``equinox.Module``, and ``fit``
 optimizes it against data -- the GPJax ``fit(model, ...)`` pattern. This is sugar
-over the pure Layer-1 core (:func:`marginal_loglik`): ``ODEFilter.loglik`` builds
-an :class:`InferenceProblem` from the module and calls the core, so there is a
+over the pure Layer-1 core (``marginal_loglik``): ``ODEFilter.loglik`` builds
+an ``InferenceProblem`` from the module and calls the core, so there is a
 single source of truth for the likelihood.
 
 Only ``ode_params`` is a trainable (array) leaf; the vector field, prior, grid and
@@ -13,8 +13,8 @@ static ``init_fn(params)`` callable -- so ``eqx.filter_value_and_grad``
 differentiates exactly the parameters.
 
 For anything beyond a plain first-order ODE (hidden-state / joint priors, custom
-measurement models, fitting the initial condition), use :func:`marginal_loglik`
-with a custom :class:`InferenceProblem` directly. Pass ``correction=`` to fit with
+measurement models, fitting the initial condition), use ``marginal_loglik``
+with a custom ``InferenceProblem`` directly. Pass ``correction=`` to fit with
 a different linearization scheme (e.g. ``TaylorCorrection(order=0)`` for EK0 or
 ``IteratedTaylorCorrection()`` for IEKF); it defaults to EK1.
 """
@@ -41,7 +41,7 @@ class ODEFilter(eqx.Module):
         init_fn: Callable ``params -> (mu_0, Sigma_0_sqr)`` producing the initial
             Gaussian (square-root covariance). May ignore ``params`` for a fixed
             initial condition.
-        prior: Gauss-Markov prior (e.g. :class:`IWP`).
+        prior: Gauss-Markov prior (e.g. ``IWP``).
         tspan: Time interval ``(t0, t1)``.
         N: Number of fixed-grid steps.
         ode_params: The differentiable parameters (the only trainable leaf).
@@ -86,11 +86,11 @@ def fit(
     *,
     steps: int = 200,
 ) -> tuple[ODEFilter, Array]:
-    """Fit an :class:`ODEFilter` by maximizing the data marginal log-likelihood.
+    """Fit an ``ODEFilter`` by maximizing the data marginal log-likelihood.
 
     Args:
-        model: Initial :class:`ODEFilter`.
-        data: Observations as an :class:`ObsModel`.
+        model: Initial ``ODEFilter``.
+        data: Observations as an ``ObsModel``.
         optim: An Optax ``GradientTransformation`` (anything exposing
             ``init`` / ``update``); the library does not import Optax itself.
         steps: Number of optimization steps.

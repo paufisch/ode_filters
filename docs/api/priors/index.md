@@ -27,4 +27,26 @@ is a square-root matrix-fraction decomposition, which likewise never forms the
 dense `Q(h)`. Prefer `Q_sqr(h)` over `Q(h)` downstream: at high `q` the dense
 `Q(h)` loses positive-definiteness while the square-root factor stays accurate.
 
-::: ode_filters.priors
+## Priors
+
+::: ode_filters.priors.gmp_priors.IWP
+
+::: ode_filters.priors.gmp_priors.MaternPrior
+
+::: ode_filters.priors.gmp_priors.IOUPPrior
+
+::: ode_filters.priors.gmp_priors.JointPrior
+
+## Preconditioned priors
+
+Same processes in coordinates rescaled by the step size, `x = T(h) @ x_bar`. Fixed-grid `gaussian_filter` only; the adaptive solver needs the plain priors.
+
+::: ode_filters.priors.gmp_priors.PrecondIWP
+
+::: ode_filters.priors.gmp_priors.PrecondMaternPrior
+
+::: ode_filters.priors.gmp_priors.PrecondJointPrior
+
+## Initialization
+
+::: ode_filters.priors.gmp_priors.taylor_mode_initialization

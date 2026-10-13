@@ -10,7 +10,7 @@ uv run --extra benchmarks python benchmarks/<name>.py
 
 > Calibration / UQ studies (which are *internal* ode_filters comparisons, not
 > cross-library) live with the documentation, not here — see
-> [`docs/examples/adaptive-and-calibration.ipynb`](../docs/examples/adaptive-and-calibration.ipynb)
+> [`docs/examples/calibration-modes.ipynb`](../docs/examples/calibration-modes.ipynb)
 > and the [calibration guide](../docs/calibration.md).
 
 ## Inventory

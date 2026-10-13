@@ -146,7 +146,8 @@ class TestAnalyticalSolutions:
         y_exact = np.exp(-ts)[:, None]
 
         max_err = float(np.max(np.abs(m_smooth - y_exact)))
-        assert max_err < 1e-4, f"Exponential decay max error: {max_err}"
+        # Measured 5.7e-10; the bound leaves ~200x headroom.
+        assert max_err < 1e-7, f"Exponential decay max error: {max_err}"
 
     @pytest.mark.parametrize("solver", SOLVERS)
     def test_logistic(self, solver):
@@ -159,7 +160,8 @@ class TestAnalyticalSolutions:
         y_exact = (1.0 / (1.0 + 9.0 * np.exp(-ts)))[:, None]
 
         max_err = float(np.max(np.abs(m_smooth - y_exact)))
-        assert max_err < 1e-4, f"Logistic max error: {max_err}"
+        # Measured 1.4e-9; the bound leaves ~70x headroom.
+        assert max_err < 1e-7, f"Logistic max error: {max_err}"
 
     @pytest.mark.parametrize("solver", SOLVERS)
     def test_linear_system(self, solver):
@@ -177,7 +179,8 @@ class TestAnalyticalSolutions:
         y_exact = jax.vmap(lambda t: jax.scipy.linalg.expm(A * t) @ x0)(ts)
 
         max_err = float(np.max(np.abs(m_smooth - y_exact)))
-        assert max_err < 1e-3, f"Linear system max error: {max_err}"
+        # Measured 1.8e-9; the bound leaves ~55x headroom.
+        assert max_err < 1e-7, f"Linear system max error: {max_err}"
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +289,7 @@ class TestReferenceSolverComparison:
         )
 
         rel_err = float(np.max(np.abs(m_smooth - y_ref) / (np.abs(y_ref) + 1e-10)))
+        # Measured 2.2e-2 (the coarse grid limits accuracy on this oscillator).
         assert rel_err < 5e-2, f"Lotka-Volterra max relative error: {rel_err}"
 
     @pytest.mark.parametrize("solver", SOLVERS)
@@ -309,7 +313,8 @@ class TestReferenceSolverComparison:
         )
 
         max_abs_err = float(np.max(np.abs(m_smooth - y_ref)))
-        assert max_abs_err < 5e-2, f"SIR max absolute error: {max_abs_err}"
+        # Measured 3.6e-11; the bound leaves ~140x headroom.
+        assert max_abs_err < 5e-9, f"SIR max absolute error: {max_abs_err}"
 
 
 # ---------------------------------------------------------------------------

@@ -53,7 +53,7 @@ diffusion changes abruptly (entering a stiff transition), ``"per_step"``
 is more responsive.
 
 The accepted-step outputs are stored in lists; the result can be passed
-directly to :func:`rts_sqr_smoother_loop`.
+directly to ``rts_sqr_smoother_loop``.
 
 The returned ``log_likelihood`` is the *post-calibration* marginal
 likelihood: each step's contribution uses the calibrated ``Pz_sqr`` (which
@@ -102,7 +102,7 @@ SigmaInError = Literal["per_step", "running_mean"]
 
 
 class AdaptiveLoopResult(NamedTuple):
-    """Output of :func:`sqr_adaptive_loop`.
+    """Output of ``sqr_adaptive_loop``.
 
     All sequences are aligned to *accepted* steps. ``t_seq`` has length
     ``N_accepted + 1`` (initial time plus one entry per accepted step); the
@@ -301,9 +301,9 @@ def sqr_adaptive_loop(
 ) -> AdaptiveLoopResult:
     """Adaptive-step square-root EKF with per-step diffusion calibration.
 
-    .. note::
+    Note:
         **Internal driver -- not part of the public API.** The supported
-        adaptive entry point is :func:`sqr_adaptive_solve` (wrapped by
+        adaptive entry point is ``sqr_adaptive_solve`` (wrapped by
         ``gaussian_filter_adaptive``), which is ``jit`` / ``vmap`` / reverse-
         ``grad``-able and, with ``smoother=True``, also returns a fixed-point
         smoothing pass. This function is a plain Python ``while`` loop with a
@@ -315,15 +315,15 @@ def sqr_adaptive_loop(
     Python ``while`` driver around a jitted per-step body. Every accepted
     step contributes to the returned sequences and the result carries the
     smoothing-relevant outputs, so it can be fed directly to
-    :func:`rts_sqr_smoother_loop`.
+    ``rts_sqr_smoother_loop``.
 
     Args:
         mu_0: Initial state mean.
         Sigma_0_sqr: Initial state covariance (square-root form).
-        prior: Prior model (e.g. :class:`IWP`). The Kronecker structure
+        prior: Prior model (e.g. ``IWP``). The Kronecker structure
             ``Q(h) = kron(_Q(h), xi)`` is used to build the per-step process
             noise. ``prior.q`` sets the default controller order.
-        measure: Measurement model (e.g. :class:`ODEInformation`).
+        measure: Measurement model (e.g. ``ODEInformation``).
         tspan: Time interval ``(t_start, t_end)``. Must be a tuple (hashable
             for jit-compatible inner step).
         atol: Absolute tolerance on the function-value local error.
@@ -332,9 +332,9 @@ def sqr_adaptive_loop(
         h_min: Minimum step. Steps below this raise ``RuntimeError``.
         h_max: Maximum step. Defaults to ``t_end - t_start``.
         controller: Step controller implementing
-            :class:`~ode_filters.filters.adaptive_controller.StepSizeController`.
+            ``StepSizeController``.
             Defaults to ``PIController(order=prior.q)``; pass
-            :class:`~ode_filters.filters.adaptive_controller.PController` for a
+            ``PController`` for a
             memoryless proportional-only controller.
         calibration: How the per-step ``sigma_hat^2`` enters the stored
             posterior. See the module docstring for the four available modes:
@@ -364,8 +364,8 @@ def sqr_adaptive_loop(
             - ``"none"`` -- propagate ``sigma=1``, still report
               ``sigma_hat^2`` for post-hoc rescaling / diagnostics.
 
-            All four modes work with :class:`JointPrior` /
-            :class:`PrecondJointPrior`: the diagonal modes scale only the
+            All four modes work with ``JointPrior`` /
+            ``PrecondJointPrior``: the diagonal modes scale only the
             state block per-component and require ``prior.xi_state`` to
             be diagonal.
 
@@ -398,7 +398,7 @@ def sqr_adaptive_loop(
             valve against infinite loops.
 
     Returns:
-        :class:`AdaptiveLoopResult` with the accepted trajectory.
+        ``AdaptiveLoopResult`` with the accepted trajectory.
 
     Raises:
         RuntimeError: If the controller proposes a step below ``h_min`` or the
@@ -562,7 +562,7 @@ def sqr_adaptive_loop(
 
 
 class AdaptiveSolveResult(NamedTuple):
-    """Output of :func:`sqr_adaptive_solve` (fixed-shape, save-at-grid).
+    """Output of ``sqr_adaptive_solve`` (fixed-shape, save-at-grid).
 
     Attributes:
         t: The save grid (the ``save_at`` times), shape ``[K]``.
@@ -641,7 +641,7 @@ def sqr_adaptive_solve(
 ) -> AdaptiveSolveResult:
     """``jit`` / ``vmap`` / ``grad``-able adaptive EKF1, saved on a fixed grid.
 
-    Unlike :func:`sqr_adaptive_loop` (a Python ``while`` driver that returns
+    Unlike ``sqr_adaptive_loop`` (a Python ``while`` driver that returns
     *every* accepted step and feeds the smoother), this returns the **filtered
     solution at a fixed array of query times** ``save_at`` -- the shape is known at
     trace time, so the whole solve is jittable, vmappable, and reverse-mode
@@ -657,7 +657,7 @@ def sqr_adaptive_solve(
 
     **Smoothing (fixed-point).** With ``smoother=True`` the result additionally
     carries a backward pass (``G_back`` / ``d_back`` / ``P_back_sqr``) and can be
-    fed to :func:`rts_smoother`. Rather than storing every (data-dependent)
+    fed to ``rts_smoother``. Rather than storing every (data-dependent)
     sub-step, each accepted sub-step's predict backward conditional is *composed*
     into a running composite per save interval (Kraemer 2025, "Adaptive
     Probabilistic ODE Solvers Without Adaptive Memory Requirements"): the result
@@ -677,14 +677,14 @@ def sqr_adaptive_solve(
     information and Conservation constraints.
 
     The per-step calibration, local-error estimate and log-likelihood are shared
-    with :func:`sqr_adaptive_loop` (same ``_make_step_body``); the controller
+    with ``sqr_adaptive_loop`` (same ``_make_step_body``); the controller
     uses the per-step error (the ``sigma_in_error="running_mean"`` variant of the
     Python loop is not reproduced here).
 
     Args:
         mu_0: Initial state mean.
         Sigma_0_sqr: Initial state covariance (square-root form).
-        prior: Gauss-Markov prior (e.g. :class:`IWP`); supplies ``A``/``b``/``Q``
+        prior: Gauss-Markov prior (e.g. ``IWP``); supplies ``A``/``b``/``Q``
             and the default controller order ``prior.q``.
         measure: Measurement model (ODE + Conservation only).
         save_at: Strictly increasing 1-D array of save times; ``save_at[0]`` is the
@@ -695,7 +695,7 @@ def sqr_adaptive_solve(
         atol: Absolute tolerance for the normalised local-error estimate.
         rtol: Relative tolerance.
         h_init: Initial step. Defaults to ``(save_at[-1] - save_at[0]) / 100``.
-        calibration: Diffusion calibration mode (see :func:`sqr_adaptive_loop`).
+        calibration: Diffusion calibration mode (see ``sqr_adaptive_loop``).
         controller: Step-size controller; defaults to ``PIController(order=prior.q)``.
             Its ``propose`` is called inside the traced loop, so a custom
             controller must be written with ``jax.numpy``.
@@ -710,7 +710,7 @@ def sqr_adaptive_solve(
             and unaffected.
 
     Returns:
-        An :class:`AdaptiveSolveResult` with the solution sampled at ``save_at``.
+        An ``AdaptiveSolveResult`` with the solution sampled at ``save_at``.
 
     Raises:
         ValueError: If ``calibration`` is unknown, or a diagonal mode is used

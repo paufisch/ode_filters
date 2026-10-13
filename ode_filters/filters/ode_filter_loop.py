@@ -79,7 +79,7 @@ def _validate_calibration(calibration: str, prior: BasePrior) -> None:
     """Check ``calibration`` once, at a solver's entry point.
 
     Raises ``ValueError`` for an unknown mode, and for a diagonal mode whose
-    state-block ``Xi`` is not diagonal (see :func:`_check_state_xi_diagonal`).
+    state-block ``Xi`` is not diagonal (see ``_check_state_xi_diagonal``).
     Every fixed-grid and adaptive entry point calls this, so all solver paths
     accept exactly the same configurations.
     """
@@ -217,7 +217,7 @@ def _ekf0_jacobian(measure: BaseODEInformation, calibration: str) -> Array | Non
 
     This is the measurement's ``E_constraint`` -- the selector of the ODE's
     left-hand-side derivative (``E1`` for ``x' = f``, ``E2`` for ``x'' = f``),
-    the same matrix :class:`TaylorCorrection` uses for its EK0 update. It is not
+    the same matrix ``TaylorCorrection`` uses for its EK0 update. It is not
     the prior's ``E1``: for a second-order ODE that selects the wrong derivative
     and inflates ``sigma_hat^2`` by orders of magnitude. Only read when needed,
     so measures without ``E_constraint`` keep working in the other modes.
@@ -346,13 +346,13 @@ def _sqr_loop_dynamic_obs_scan(
     min_sigma_sqr: float,
     correction: Correction | None = None,
 ) -> DynamicObsScanLoopResult:
-    """Observation-update branch of :func:`sqr_loop_dynamic_scan`.
+    """Observation-update branch of ``sqr_loop_dynamic_scan``.
 
     Per step: (1) estimate ``sigma_hat^2`` from the ODE-defect residual at
     the provisional prediction and bake it into the process noise (same
     calibration semantics as the no-observation path -- observation rows
     never drive sigma); (2) run the combined ODE + masked-observation
-    update of :func:`sqr_filter_step_sequential_scan`.
+    update of ``sqr_filter_step_sequential_scan``.
     """
     ts, h = np.linspace(tspan[0], tspan[1], N + 1, retstep=True)
     A_h = prior.A(h)
@@ -500,13 +500,13 @@ def sqr_loop_dynamic_scan(
         N: Number of filter steps.
         calibration: ``"dynamic"`` (default), ``"diagonal"``,
             ``"diagonal_ekf0"``, or ``"none"``. All modes work with
-            :class:`JointPrior` / :class:`PrecondJointPrior`; diagonal modes
+            ``JointPrior`` / ``PrecondJointPrior``; diagonal modes
             require the state-block ``prior.xi_state`` to be diagonal.
         min_sigma_sqr: Lower bound applied to per-step ``sigma_hat^2`` (or
             each component in diagonal modes) before baking into
             ``Q_step_sqr``. Default ``0.0`` preserves unclamped behavior.
         obs_model: Pre-computed observation data from
-            :func:`prepare_observations`, or ``None`` for ODE-only.
+            ``prepare_observations``, or ``None`` for ODE-only.
             Combines online calibration with external observation updates
             (e.g. joint state-parameter estimation from sensor data).
             Observation rows update the posterior but never drive sigma.
@@ -519,9 +519,9 @@ def sqr_loop_dynamic_scan(
             the observation update is linear).
 
     Returns:
-        With ``obs_model=None``: :class:`DynamicScanLoopResult` -- 10 arrays
+        With ``obs_model=None``: ``DynamicScanLoopResult`` -- 10 arrays
         plus the scalar log-marginal-likelihood. With an *obs_model*:
-        :class:`DynamicObsScanLoopResult` -- 12 arrays (ODE and observation
+        ``DynamicObsScanLoopResult`` -- 12 arrays (ODE and observation
         marginals reported separately) plus ``(log_likelihood_ode,
         log_likelihood_obs)``. ``sigma_sqr_seq`` has shape ``(N, d_ode)``
         in the diagonal modes, ``(N,)`` otherwise.
@@ -682,7 +682,7 @@ def sqr_loop_preconditioned_dynamic_scan(
         N: Number of filter steps.
         calibration: ``"dynamic"`` (default), ``"diagonal"``,
             ``"diagonal_ekf0"``, or ``"none"``. All modes work with
-            :class:`PrecondJointPrior`; diagonal modes require the state-block
+            ``PrecondJointPrior``; diagonal modes require the state-block
             ``prior.xi_state`` to be diagonal.
         min_sigma_sqr: Lower bound applied to per-step ``sigma_hat^2``
             before baking into ``Q_step_sqr_bar``. Default ``0.0``.
@@ -692,7 +692,7 @@ def sqr_loop_preconditioned_dynamic_scan(
             calibration uses its own linearization (selected by ``calibration``).
 
     Returns:
-        :class:`PrecondDynamicScanLoopResult` -- 12 arrays, ``T_h``, and the
+        ``PrecondDynamicScanLoopResult`` -- 12 arrays, ``T_h``, and the
         scalar log-marginal-likelihood. ``sigma_sqr_seq`` shape is
         ``(N, d_ode)`` in diagonal modes, ``(N,)`` otherwise.
     """

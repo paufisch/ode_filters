@@ -73,7 +73,7 @@ the residual size well.
 
 `gaussian_filter_adaptive` runs the per-step quasi-MLE by default and applies it
 to the stored covariances on every accepted step. See
-[Adaptive Step-Size Control](adaptive-steps.md).
+[Adaptive Step-Size Control](adaptive-steps.ipynb).
 
 ```python
 from ode_filters import gaussian_filter_adaptive
@@ -86,7 +86,7 @@ result = gaussian_filter_adaptive(
 
 For the per-step `sigma_sqr_seq` diagnostics on the accepted-step trajectory,
 use the lower-level trajectory driver `sqr_adaptive_loop` from the
-submodule (see [Adaptive Step-Size Control](adaptive-steps.md)):
+submodule (see [Adaptive Step-Size Control](adaptive-steps.ipynb)):
 
 ```python
 from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
@@ -149,7 +149,9 @@ matching what probnum and probdiffeq do. With the default `ODEInformation`
 For the post-hoc workflow on a fixed-step run with non-zero `R`, the caller
 must pass a noise-free `Pz_sqr` to `posthoc_mle_sigma_sqr` -- the
 covariances returned by the filter include `R` and must be recomputed from the
-saved `(result.m_pred, result.P_pred_sqr)` first.
+saved `(result.m_pred, result.P_pred_sqr)` first. With a preconditioned prior those
+two fields are in the preconditioned coordinates; map them back first with
+`result.m_pred @ result.T.T` and `result.P_pred_sqr @ result.T.T`.
 
 ## What calibration cannot fix
 
@@ -164,6 +166,6 @@ smaller means it is too loose).
 
 ## See also
 
-- [Adaptive Step-Size Control](adaptive-steps.md) -- the controller that uses
+- [Adaptive Step-Size Control](adaptive-steps.ipynb) -- the controller that uses
   the per-step quasi-MLE.
 - API reference for `ode_filters.calibration`.

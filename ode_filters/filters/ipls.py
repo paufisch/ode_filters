@@ -1,7 +1,7 @@
 """Iterated posterior-linearization smoother (IPLS).
 
-The one-shot filters -- EK1, and :class:`~ode_filters.filters.correction.\
-QuadratureCorrection` -- fit their affine surrogate over the *predictive*
+The one-shot filters -- EK1, and ``\
+QuadratureCorrection`` -- fit their affine surrogate over the *predictive*
 density, a choice made before the measurement is seen. IPLS instead iterates:
 having smoothed the trajectory once, it refits the surrogate at every step over
 the *smoothed* marginal and re-runs filter and smoother, to a fixed number of
@@ -10,8 +10,8 @@ passes.
 Two axes are being separated here (Garcia-Fernandez, Svensson & Sarkka 2017):
 
 - **which point** the linearization sits at -- iterating that alone is the
-  iterated EKF/EKS (:class:`~ode_filters.filters.correction.\
-IteratedTaylorCorrection`), Gauss-Newton on the MAP objective;
+  iterated EKF/EKS (``\
+IteratedTaylorCorrection``), Gauss-Newton on the MAP objective;
 - **which spread** it is fitted over -- iterating that is IPLS, and it converges
   to a moment-matched Gaussian rather than to the MAP.
 
@@ -28,7 +28,7 @@ Scope: fixed grid, plain (non-preconditioned) priors, fixed process noise. The
 diffusion is *not* recalibrated between passes -- a per-pass ``sigma^2`` would
 chase the linearization it is supposed to be conditioned on -- so the prior must
 carry its own scale, matching ``calibration="none"`` on
-:func:`~ode_filters.filters.gaussian_filter.gaussian_filter`.
+``gaussian_filter``.
 
 References:
     Garcia-Fernandez, Svensson, Morelande & Sarkka (2015), *Posterior
@@ -59,7 +59,7 @@ from .statistical_linearization import QuadratureRule, slr_linearize
 
 
 class IPLSResult(NamedTuple):
-    """Output of :func:`ipls_smoother`.
+    """Output of ``ipls_smoother``.
 
     Attributes:
         t: Time grid, shape ``[N+1]``.
@@ -109,7 +109,7 @@ def affine_filter_scan(
 
     An ``obs_model`` adds the usual masked observation update after the
     (surrogate) ODE update, matching the sequential ordering of
-    :func:`~ode_filters.filters.ode_filter_step.sqr_filter_step_sequential_scan`.
+    ``sqr_filter_step_sequential_scan``.
 
     Args:
         mu_0: Initial mean.
@@ -203,7 +203,7 @@ def ipls_smoother(
     """Iterated posterior-linearization smoother over a fixed grid.
 
     Pass 0 is the one-shot statistical-linearization filter (a
-    :class:`~ode_filters.filters.correction.QuadratureCorrection` run) followed
+    ``QuadratureCorrection`` run) followed
     by RTS smoothing. Each subsequent pass refits the affine surrogate at every
     step over the *smoothed* marginal at that step and re-runs filter and
     smoother. ``n_iters=0`` therefore returns exactly the one-shot
@@ -219,22 +219,22 @@ def ipls_smoother(
         n_iters: Number of relinearization passes after the initial one.
         rule: Quadrature rule for the statistical linearization.
         n_nodes: Nodes per dimension for the Gauss-Hermite rule (see
-            :class:`~ode_filters.filters.correction.QuadratureCorrection`).
+            ``QuadratureCorrection``).
         obs_model: Optional external observations from
-            :func:`~ode_filters.measurement.measurement_models.prepare_observations`.
+            ``prepare_observations``.
 
     Note:
         Every field of the result is reverse-mode differentiable from an exactly
         singular ``P_0_sqr`` -- including the one
-        :func:`~ode_filters.priors.taylor_mode_initialization` returns, which is a
+        ``taylor_mode_initialization`` returns, which is a
         Dirac. Earlier versions required a positive-definite ``P_0_sqr`` (or a
         jitter) because the smoother's covariance recursion returned a NaN
         derivative there, which a zero cotangent then propagated into the *mean*
-        gradient as well; :func:`~ode_filters.inference.sqr_gaussian_inference.\
-_safe_qr` fixes that at the source, so no jitter is needed.
+        gradient as well; ``\
+_safe_qr`` fixes that at the source, so no jitter is needed.
 
     Returns:
-        An :class:`IPLSResult`.
+        An ``IPLSResult``.
 
     Raises:
         ValueError: If ``n_iters < 0``.

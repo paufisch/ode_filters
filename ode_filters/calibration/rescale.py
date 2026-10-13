@@ -74,7 +74,7 @@ def rescale_sqr_seq(
         P_seq_sqr: Stacked square-root covariances, shape ``[N, ...]``.
         sigma_sqr: Either a scalar (applied globally) or a 1-D array of
             length ``N`` (applied per step).
-        prior: Optional prior; see :func:`rescale_sqr`. When given, joint /
+        prior: Optional prior; see ``rescale_sqr``. When given, joint /
             latent-force priors rescale only the state block.
 
     Returns:

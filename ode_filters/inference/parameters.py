@@ -3,7 +3,7 @@
 Many ODE parameters are constrained -- a diffusion scale, an observation noise,
 or a decay rate must be positive. Optimizers and samplers, however, work best in
 *unconstrained* space. These wrappers store a parameter in unconstrained space
-and expose the constrained value via :func:`unwrap`, following the
+and expose the constrained value via ``unwrap``, following the
 ``equinox``/``paramax`` (and GPJax) pattern.
 
 Wrap a parameter with its *constrained* value::
@@ -14,8 +14,8 @@ and recover the constrained value (e.g. inside a likelihood) with::
 
     unwrap(theta)                              # {"rate": 0.5}
 
-:func:`unwrap` is the identity on plain arrays, so wrapping is opt-in and
-non-breaking: :func:`~ode_filters.marginal_loglik` unwraps ``theta`` for you, so
+``unwrap`` is the identity on plain arrays, so wrapping is opt-in and
+non-breaking: ``marginal_loglik`` unwraps ``theta`` for you, so
 ``jax.grad`` / optimizers see the unconstrained leaves while the model sees the
 constrained values.
 """
@@ -41,7 +41,7 @@ class AbstractParameter(eqx.Module):
     """A parameter stored in unconstrained space.
 
     Subclasses hold the raw (unconstrained) value as their array leaf and map it
-    to the constrained value in :meth:`unwrap`. Being an ``equinox.Module`` they
+    to the constrained value in ``unwrap``. Being an ``equinox.Module`` they
     are registered pytrees, so the unconstrained leaf is what ``jax.grad`` and
     Optax see.
     """
@@ -73,7 +73,7 @@ class PositiveReal(AbstractParameter):
 
     Construct it with the *constrained* (positive) value; it stores the
     corresponding unconstrained value and returns the positive value from
-    :meth:`unwrap`.
+    ``unwrap``.
 
     Attributes:
         unconstrained: The stored unconstrained value (``softplus_inv(value)``).
@@ -89,9 +89,9 @@ class PositiveReal(AbstractParameter):
 
 
 def unwrap(tree: Any) -> Any:
-    """Replace every :class:`AbstractParameter` in a pytree with its value.
+    """Replace every ``AbstractParameter`` in a pytree with its value.
 
-    Identity on leaves that are not :class:`AbstractParameter`, so it is safe to
+    Identity on leaves that are not ``AbstractParameter``, so it is safe to
     call on any ``theta`` (plain arrays pass through unchanged).
     """
     return jax.tree_util.tree_map(

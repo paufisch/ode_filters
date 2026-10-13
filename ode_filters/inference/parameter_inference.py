@@ -9,12 +9,12 @@ this.
 Design -- *params-as-argument*: ``theta`` carries the differentiable parameters
 and flows into the vector field / initial state via the problem's ``build``
 callable; the static configuration (prior, grid, calibration) lives in an
-:class:`InferenceProblem`. Only ``theta`` is differentiated -- ``model`` and
+``InferenceProblem``. Only ``theta`` is differentiated -- ``model`` and
 ``data`` are closed over / held static (``model`` holds a Python callable and so
 is not itself a traceable argument).
 
 The likelihood is evaluated on the fixed-grid ``jax.lax.scan`` loop
-(:func:`sqr_loop_dynamic_scan` with an ``obs_model``), which is the only
+(``sqr_loop_dynamic_scan`` with an ``obs_model``), which is the only
 jit/grad/vmap-safe path -- the Python-loop and adaptive drivers are not (ROADMAP
 rule R6). By default the returned scalar is the *observation* marginal
 log-likelihood: the data evidence under the ODE-constrained Gauss-Markov model
@@ -52,13 +52,13 @@ class InferenceProblem(NamedTuple):
             (differentiable) initial Gaussian and measurement model from the
             parameters. This is the single problem-specific bridge; everything
             else is static.
-        prior: Gauss-Markov prior (e.g. :class:`IWP`).
+        prior: Gauss-Markov prior (e.g. ``IWP``).
         tspan: Time interval ``(t0, t1)`` (a tuple, for jit-static hashing).
         N: Number of fixed-grid steps.
         calibration: Diffusion calibration mode. Defaults to ``"none"`` (fixed
             diffusion) -- recommended for parameter inference.
         min_sigma_sqr: Lower bound passed through to the loop.
-        correction: Linearization strategy (a :class:`~ode_filters.Correction`);
+        correction: Linearization strategy (a ``Correction``);
             ``None`` defaults to EK1. Use e.g. ``TaylorCorrection(order=0)`` or
             ``IteratedTaylorCorrection()`` to fit with EK0 / IEKF.
         prior_fn: Optional callable ``theta -> prior``, for fitting the *prior's*
@@ -123,13 +123,13 @@ def marginal_loglik(
     Args:
         theta: Differentiable parameter pytree, consumed by ``model.build`` (and
             by ``model.prior_fn``, if set). May contain
-            :class:`~ode_filters.PositiveReal` / :class:`~ode_filters.Real`
+            ``PositiveReal`` / ``Real``
             wrappers, which are unwrapped automatically.
-        data: Observations as an :class:`ObsModel` (e.g. from
-            :func:`prepare_observations`); the measured values live in
+        data: Observations as an ``ObsModel`` (e.g. from
+            ``prepare_observations``); the measured values live in
             ``data.c_seq``. Required unless ``channel="ode"``, which needs no
             observations and so accepts ``None``.
-        model: Static :class:`InferenceProblem` (closed over, not traced).
+        model: Static ``InferenceProblem`` (closed over, not traced).
         channel: Which evidence channel to return.
 
             - ``"obs"`` (default): the observation marginal log-likelihood --

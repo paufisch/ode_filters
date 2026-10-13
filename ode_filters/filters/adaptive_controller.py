@@ -7,14 +7,14 @@ loop driver, not by the controller.
 
 Two controllers are provided:
 
-- :class:`PController` -- proportional-only on the current error. Sometimes
+- ``PController`` -- proportional-only on the current error. Sometimes
   called the *I-controller* or *elementary controller* in the
   adaptive-ODE-solver literature (Hairer-Wanner-Norsett, Soederlind) because
   ``h`` itself is the integral of the log-step adjustment.
-- :class:`PIController` -- adds a Gustafsson PI term using the previous
+- ``PIController`` -- adds a Gustafsson PI term using the previous
   accepted step's error to damp oscillations around the tolerance.
 
-Both implement the :class:`StepSizeController` protocol. ``propose`` is
+Both implement the ``StepSizeController`` protocol. ``propose`` is
 written with ``jax.numpy`` so the jittable adaptive solver can call it inside
 its traced loop; a custom controller must be traceable in the same way.
 """
@@ -36,7 +36,7 @@ _MIN_ERR = 1e-12
 class StepSizeController(Protocol):
     """Duck-typed interface for step-size controllers.
 
-    The adaptive solvers call :meth:`propose` after every attempted step, from
+    The adaptive solvers call ``propose`` after every attempted step, from
     inside ``jax`` tracing in the jittable solver, so it must be written with
     ``jax.numpy`` (no ``float()`` / Python ``min`` / ``max`` on its inputs).
 
@@ -106,7 +106,7 @@ class PController:
             h: Current step size.
             err: Normalised error of the current step (1.0 = at tolerance).
             err_prev: Ignored; accepted for protocol compatibility with
-                :class:`PIController`.
+                ``PIController``.
         """
         del err_prev  # unused by design
         factor = self.safety * _sanitize_error(err) ** (-self._alpha)
@@ -123,7 +123,7 @@ class PIController:
 
     clipped to ``[min_factor, max_factor] * h``. When ``err_prev`` is unknown
     (e.g. on the first step or right after a reject) the I-term is dropped
-    and the update reduces to the :class:`PController` form
+    and the update reduces to the ``PController`` form
     ``h_new = h * safety * err^(-alpha)``.
 
     Defaults follow Gustafsson (1991): ``alpha = 0.7 / order``, ``beta = 0.4 /
@@ -135,7 +135,7 @@ class PIController:
         safety: Safety factor on the proposed step.
         alpha: Proportional gain; defaults to ``0.7 / order``.
         beta: Integral gain; defaults to ``0.4 / order``. Set ``beta=0`` for a
-            pure proportional controller -- :class:`PController` is the
+            pure proportional controller -- ``PController`` is the
             standalone equivalent with the more natural default ``alpha``.
         min_factor: Lower clip on ``h_new / h``.
         max_factor: Upper clip on ``h_new / h``.

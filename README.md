@@ -30,17 +30,20 @@ Install the latest release from PyPI:
 pip install ode-filters
 ```
 
-Or install from source with development dependencies:
+Or install from source with the development tools (tests, linting, type checking):
 
 ```bash
 git clone https://github.com/paufisch/ode_filters.git
 cd ode_filters
-pip install -e ".[dev]"
+uv sync --group dev
 ```
+
+With pip 25.1 or newer, `pip install -e . --group dev` does the same.
 
 ## Quick Example
 
 ```python
+import jax
 import jax.numpy as np
 from ode_filters import (
     IWP,
@@ -49,6 +52,9 @@ from ode_filters import (
     rts_smoother,
     taylor_mode_initialization,
 )
+
+# Probabilistic ODE solvers are sensitive to round-off: use float64
+jax.config.update("jax_enable_x64", True)
 
 # Define ODE: dx/dt = -x (exponential decay)
 def vf(x, *, t):
@@ -78,10 +84,11 @@ to also get a fixed-point smoothing pass that `rts_smoother` consumes.
 
 ```
 ode_filters/
-├── filters/          # EKF and RTS smoothing loops
-├── inference/        # Square-root Gaussian algebra
-├── measurement/      # ODE and observation models
-└── priors/           # Gaussian Markov process priors
+├── calibration/      # Diffusion (sigma^2) estimation and rescaling
+├── filters/          # Solvers, smoothers, linearizations, step-size control
+├── inference/        # Square-root Gaussian algebra and parameter inference
+├── measurement/      # ODE information and observation models
+└── priors/           # Gauss-Markov process priors
 ```
 
 ## Documentation
@@ -99,7 +106,7 @@ uv run pytest --cov=ode_filters --cov-report=term-missing
 Build documentation locally:
 
 ```bash
-uv run mkdocs serve
+uv run --group docs mkdocs serve
 ```
 
 ## License

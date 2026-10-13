@@ -16,7 +16,7 @@ def _safe_qr(C: Array) -> Array:
 
     An exactly-zero ``C`` is not a corner case here: it is what the first backward
     conditional of a filter started from a deterministic initial condition *is*.
-    :func:`~ode_filters.priors.taylor_mode_initialization` returns a zero
+    ``taylor_mode_initialization`` returns a zero
     ``P_0_sqr``, so at the first step ``sqr_inversion`` sees a zero cross-term, a
     zero gain, and hence a zero stacked factor.
 
@@ -33,7 +33,7 @@ def _safe_qr(C: Array) -> Array:
     rank-deficient one (a structurally singular ``Q``, say) still has an undefined
     QR derivative, which needs a rank-revealing factorization. And this repairs a
     degenerate *output* factor, not a degenerate *innovation* covariance:
-    :func:`sqr_inversion` divides by ``Sigma_z_sqr`` in a triangular solve, so a
+    ``sqr_inversion`` divides by ``Sigma_z_sqr`` in a triangular solve, so a
     singular innovation stays ``NaN`` -- correctly, since conditioning a
     zero-variance state on a zero-variance observation is ill-posed.
 
@@ -72,8 +72,9 @@ def sqr_marginalization(
     Args:
         A: Linear transformation matrix (shape [n_obs, n_state]).
         b: Observation offset (shape [n_obs]).
-        Q_sqr: Square root of observation noise covariance. Shape [n_obs, n_obs] or [n_obs].
-            If 1D array, will be converted to 2D.
+        Q_sqr: Square root of observation noise covariance, shape
+            ``[n_obs, n_obs]`` (for a single observation a scalar or length-1
+            array also works).
         mu: Prior mean (shape [n_state]).
         Sigma_sqr: Square root of prior covariance (shape [n_state, n_state]).
 
@@ -106,7 +107,8 @@ def sqr_marginalization(
 
     if A.shape[1] != Sigma_sqr.shape[0]:
         raise ValueError(
-            f"Shape mismatch: A and Sigma_sqr should have matching first shapes, but have shape A={A.shape}, Sigma_sqr={Sigma_sqr.shape}"
+            f"Shape mismatch: A has {A.shape[1]} columns but Sigma_sqr has "
+            f"{Sigma_sqr.shape[0]} rows (A={A.shape}, Sigma_sqr={Sigma_sqr.shape})."
         )
 
     # Compute marginal statistics
@@ -130,8 +132,10 @@ def sqr_inversion(
     Performs Bayesian update of a Gaussian given a linear observation model, using
     Cholesky factors and QR decomposition to maintain numerical stability.
 
-    Given p(x) ~ N(mu, Sigma) and p(z|x) ~ N(Ax + b, Q), computes the posterior
-    p(x|z) in square-root form.
+    Given p(x) ~ N(mu, Sigma) and p(z|x) ~ N(Ax + b, Q), with the marginal
+    p(z) ~ N(mu_z, Sigma_z) from ``sqr_marginalization``, returns the conditional
+    p(x | z) = N(K z + d, Lambda) in square-root form. The filters observe the
+    residual value ``z = 0``, so there the posterior mean is just ``d``.
 
     Args:
         A: Observation matrix (shape [n_obs, n_state]).
@@ -139,13 +143,16 @@ def sqr_inversion(
         Sigma_sqr: Square root of prior covariance (shape [n_state, n_state]).
         mu_z: Marginal observation mean (shape [n_obs]).
         Sigma_z_sqr: Square root of marginal observation covariance (shape [n_obs, n_obs]).
-        Q_sqr: Square root of measurement noise covariance (optional).
+        Q_sqr: Square root of the noise covariance ``Q`` that went into
+            ``Sigma_z_sqr``. ``None`` means noise-free (``Q = 0``); passing
+            ``None`` for a noisy observation gives a wrong (too small) ``Lambda``.
 
     Returns:
-        Tuple of (G, d, Lambda_sqr) where:
-        - G is the Kalman gain matrix (shape [n_state, n_obs])
-        - d is the posterior offset/mean correction (shape [n_state])
-        - Lambda_sqr is the posterior covariance square root (shape [n_state, n_state])
+        Tuple ``(K, d, Lambda_sqr)``: the Kalman gain ``K`` (shape
+        ``[n_state, n_obs]``), the offset ``d`` of the conditional mean
+        ``K z + d`` (shape ``[n_state]``; the posterior mean when ``z = 0`` is
+        observed), and the conditional covariance square root ``Lambda_sqr``
+        (shape ``[n_state, n_state]``).
     """
     if Q_sqr is None:
         Q_sqr = np.zeros_like(Sigma_z_sqr)
@@ -153,10 +160,9 @@ def sqr_inversion(
     n_state = A.shape[1]
 
     Sigma_z_sqr = np.atleast_2d(Sigma_z_sqr)
-    # old update
-    # Sigma_z = Sigma_z_sqr.T @ Sigma_z_sqr
-    # Sigma = Sigma_sqr.T @ Sigma_sqr
-    # K = np.linalg.solve(Sigma_z, A @ Sigma).T
+    # K = Sigma A^T Sigma_z^-1 by two triangular solves with the factor of
+    # Sigma_z; the covariance uses the Joseph form (I - K A) Sigma (.)^T + K Q K^T,
+    # stacked as factors so a single QR returns its upper-triangular root.
     cross = (A @ Sigma_sqr.T) @ Sigma_sqr
     Z = jax.scipy.linalg.solve_triangular(Sigma_z_sqr.T, cross, lower=True)
     K = jax.scipy.linalg.solve_triangular(Sigma_z_sqr, Z, lower=False).T
@@ -189,7 +195,7 @@ def compose_backward_conditionals(
 
     The mean offset and noise covariance are exactly the marginal of
     ``N(d2, P2)`` pushed through the affine map ``x = G1 (.) + d1``, so the noise
-    reuses :func:`sqr_marginalization` (its QR keeps the square-root form); only
+    reuses ``sqr_marginalization`` (its QR keeps the square-root form); only
     the composed linear operator ``G1 @ G2`` is added.
 
     Args:

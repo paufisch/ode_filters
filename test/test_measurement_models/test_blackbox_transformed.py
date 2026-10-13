@@ -403,8 +403,8 @@ class TestTransformedMeasurementMethods:
             lambda state: state**2,
         )
 
-        with pytest.raises(AttributeError, match="no 'ode_dim'"):
-            _ = model.ode_dim
+        # A black box declares its ODE rows itself (default: all of them).
+        assert model.ode_dim == 2
         with pytest.raises(AttributeError, match="no 'E_args'"):
             _ = model.E_args
         assert getattr(model, "E_args", None) is None
@@ -713,3 +713,36 @@ class TestBlackBoxMeasurementInSolvers:
         got, want = run(black_box), run(reference)
         assert np.allclose(got.m, want.m, atol=1e-12)
         assert np.allclose(got.log_likelihood, want.log_likelihood, atol=1e-10)
+
+
+class TestTransformedMeasurementJacobianMode:
+    """``sigma_jacobian`` used to be ignored unless ``use_autodiff_jacobian=False``
+    was passed as well."""
+
+    @staticmethod
+    def _base():
+        E0, E1, _ = make_projection_matrices(d=1, q=1)
+        return ODEInformation(lambda x, *, t: -x, E0, E1)
+
+    def test_explicit_jacobian_is_used_without_the_flag(self):
+        calls = []
+
+        def sigma_jacobian(state):
+            calls.append(1)
+            return 2.0 * np.eye(state.shape[0])
+
+        model = TransformedMeasurement(
+            self._base(), lambda s: 2.0 * s, sigma_jacobian=sigma_jacobian
+        )
+        assert model._use_autodiff is False
+        model.linearize(np.array([1.0, 0.5]), t=0.0)
+        assert calls
+
+    def test_rejects_autodiff_together_with_an_explicit_jacobian(self):
+        with pytest.raises(ValueError, match="pass only one of them"):
+            TransformedMeasurement(
+                self._base(),
+                lambda s: s,
+                use_autodiff_jacobian=True,
+                sigma_jacobian=lambda s: np.eye(s.shape[0]),
+            )

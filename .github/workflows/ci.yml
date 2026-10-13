@@ -72,3 +72,6 @@ jobs:
           python-version: "3.13"
       - name: Build MkDocs site
         run: uv run --group docs mkdocs build --strict
+      # --strict does not see links inside the rendered notebooks.
+      - name: Check internal links
+        run: uv run python .github/scripts/check_site_links.py site /ode_filters/

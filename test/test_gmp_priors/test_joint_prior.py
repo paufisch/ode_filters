@@ -451,3 +451,22 @@ def test_joint_prior_rejects_a_preconditioned_sub_prior(precond, slot):
     args = (precond, plain) if slot == "prior_x" else (plain, precond)
     with pytest.raises(TypeError, match=f"{slot} is preconditioned.*PrecondJointPrior"):
         JointPrior(*args)
+
+
+@pytest.mark.parametrize(
+    "joint",
+    [
+        JointPrior(
+            IWP(q=2, d=2, Xi=2.0 * np.eye(2)), IWP(q=1, d=1, Xi=3.0 * np.eye(1))
+        ),
+        PrecondJointPrior(
+            PrecondIWP(q=2, d=2, Xi=2.0 * np.eye(2)),
+            PrecondIWP(q=1, d=1, Xi=3.0 * np.eye(1)),
+        ),
+    ],
+    ids=["JointPrior", "PrecondJointPrior"],
+)
+def test_joint_xi_is_block_diagonal(joint):
+    """``xi`` used to raise AttributeError (JointPrior skips BasePrior.__init__)."""
+    assert np.allclose(joint.xi, np.diag(np.array([2.0, 2.0, 3.0])))
+    assert np.allclose(joint.xi_state, 2.0 * np.eye(2))

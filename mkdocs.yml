@@ -33,17 +33,26 @@ plugins:
   - search
   - mkdocs-jupyter:
       execute: true
+      # Fail the (strict) build when a notebook cell raises, instead of
+      # rendering the traceback into the page.
+      allow_errors: false
+      # Cells tagged "hide-input" show only their output (e.g. a figure).
+      remove_tag_config:
+        remove_input_tags:
+          - hide-input
   - mkdocstrings:
       default_handler: python
       handlers:
         python:
           options:
             heading_level: 3
-            show_root_heading: false
-            show_root_toc_entry: false
+            # The API pages list each object explicitly (grouped by topic), so
+            # every object gets its own heading and no package-level summary.
+            show_root_heading: true
+            show_root_full_path: false
             show_symbol_type_heading: true
             show_symbol_type_toc: true
-            summary: true
+            summary: false
             members_order: alphabetical
             filters: ["!^_"]
             separate_signature: true
@@ -52,7 +61,7 @@ plugins:
             docstring_section_style: table
             merge_init_into_class: true
             group_by_category: true
-            show_category_heading: true
+            show_category_heading: false
             show_source: false
             show_if_no_docstring: false
 markdown_extensions:
@@ -67,8 +76,15 @@ markdown_extensions:
       anchor_linenums: true
   - attr_list
   - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - toc:
       permalink: true
+      # Objects (h3) appear in the page TOC; their methods (h4) do not.
+      toc_depth: 3
+extra_css:
+  - stylesheets/extra.css
 extra_javascript:
   - javascripts/mathjax.js
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
@@ -83,15 +99,16 @@ nav:
       - Basic usage: examples/examples.ipynb
       - Second-order systems: examples/second-order-systems.ipynb
       - Advanced features: examples/advanced-features.ipynb
-      - Calibration & adaptive steps: examples/adaptive-and-calibration.ipynb
+      - Calibration modes: examples/calibration-modes.ipynb
   - How-to guides:
       - How to choose: how-to-choose.md
       - Linearization schemes: corrections.md
       - Diffusion calibration: calibration.md
-      - Adaptive step-size control: adaptive-steps.md
+      - Adaptive step-size control: adaptive-steps.ipynb
   - API Reference:
       - Overview: api/index.md
       - Filters: api/filters/index.md
+      - Calibration: api/calibration/index.md
       - Inference: api/inference/index.md
       - Measurement: api/measurement/index.md
       - Priors: api/priors/index.md
