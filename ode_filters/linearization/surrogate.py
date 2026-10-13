@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import NamedTuple
 
 import jax
+import jax.numpy as np
 from jax import Array
 from jax.typing import ArrayLike
 
@@ -45,6 +46,17 @@ class AffineSurrogate(NamedTuple):
         return AffineModel(self.H[i], self.c[i], self.R_sqr[i])
 
 
+def _check_update_times(m_seq: Array, ts: ArrayLike) -> Array:
+    """``ts`` as an array, checked to hold one update time per point of ``m_seq``."""
+    ts = np.asarray(ts)
+    if ts.shape != (m_seq.shape[0],):
+        raise ValueError(
+            f"ts must hold the {m_seq.shape[0]} update times of the linearization "
+            f"points (the grid's ts[1:]), got shape {ts.shape}."
+        )
+    return ts
+
+
 def taylor_surrogate(
     measure: MeasurementModel, m_seq: Array, *, ts: ArrayLike
 ) -> AffineSurrogate:
@@ -60,7 +72,11 @@ def taylor_surrogate(
 
     Returns:
         The ``AffineSurrogate`` with the measurement noise as ``R_sqr``.
+
+    Raises:
+        ValueError: If ``ts`` does not have one time per linearization point.
     """
+    ts = _check_update_times(m_seq, ts)
     models = jax.vmap(lambda m, t: taylor_linearize(measure, m, t=t))(m_seq, ts)
     return AffineSurrogate(models.H, models.c, models.R_sqr)
 
@@ -90,7 +106,11 @@ def slr_surrogate(
 
     Returns:
         The ``AffineSurrogate``.
+
+    Raises:
+        ValueError: If ``ts`` does not have one time per linearization point.
     """
+    ts = _check_update_times(m_seq, ts)
     models = jax.vmap(
         lambda m, P, t: slr_linearize(measure, m, P, t=t, rule=rule, n_nodes=n_nodes)
     )(m_seq, P_seq_sqr, ts)

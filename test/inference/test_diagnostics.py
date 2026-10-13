@@ -49,7 +49,33 @@ def test_whitening_matches_the_dense_formula():
     expected = jax.vmap(lambda m, S: m @ np.linalg.solve(S.T @ S, m))(mz, Pz_sqr)
     assert_close(nis(mz, Pz_sqr), expected, rtol=1e-10)
     v = whitened_residuals(mz, Pz_sqr)
-    assert_close(jax.vmap(lambda S, w: S.T @ w)(Pz_sqr, v), mz, rtol=1e-10)
+    # The factor with a non-negative diagonal maps the residuals back to mz.
+    canonical = jax.vmap(lambda S: np.sign(np.diag(S))[:, None] * S)(Pz_sqr)
+    assert_close(jax.vmap(lambda S, w: S.T @ w)(canonical, v), mz, rtol=1e-10)
+
+
+def test_whitening_does_not_depend_on_the_signs_of_the_factor():
+    """QR leaves the signs of a factor's rows arbitrary; the residuals must not."""
+    keys = jax.random.split(jax.random.PRNGKey(2), 3)
+    mz = jax.random.normal(keys[0], (6, 3))
+    Pz_sqr = jax.vmap(lambda a: np.linalg.cholesky(a @ a.T + np.eye(3)).T)(
+        jax.random.normal(keys[1], (6, 3, 3))
+    )
+    signs = np.where(jax.random.bernoulli(keys[2], 0.5, (6, 3)), -1.0, 1.0)
+    flipped = signs[:, :, None] * Pz_sqr  # the same covariances
+    assert_close(whitened_residuals(mz, flipped), whitened_residuals(mz, Pz_sqr))
+    # With a non-negative diagonal the whitening is the Cholesky one.
+    expected = jax.vmap(lambda m, S: np.linalg.solve(S.T, m))(mz, Pz_sqr)
+    assert_close(whitened_residuals(mz, Pz_sqr), expected, rtol=1e-10)
+
+
+def test_a_slow_drift_is_positively_autocorrelated():
+    """A drifting misfit shows as positive autocorrelation, whatever the signs."""
+    n = np.arange(200)
+    mz = np.sin(2.0 * np.pi * n / 50.0)[:, None]
+    Pz_sqr = np.where(n % 2 == 0, 1.0, -1.0)[:, None, None]  # alternating QR signs
+    rho = residual_autocorrelation(whitened_residuals(mz, Pz_sqr), max_lag=1)
+    assert float(rho[0, 0]) > 0.9
 
 
 def test_a_consistent_model_has_white_unit_innovations():
