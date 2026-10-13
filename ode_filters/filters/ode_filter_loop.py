@@ -10,17 +10,17 @@ from jax import Array
 from jax.typing import ArrayLike
 
 from ..calibration.sigma import quasi_mle_sigma_sqr_from_Q
-from ..measurement.measurement_models import (
+from ..information import (
     BaseODEInformation,
     ObsModel,
 )
-from ..priors.gmp_priors import (
+from ..linearization.correction import Correction, TaylorCorrection
+from ..priors import (
     BasePrior,
     PrecondIWP,
     PrecondJointPrior,
     PrecondMaternPrior,
 )
-from .correction import Correction, TaylorCorrection
 from .ode_filter_step import (
     rts_sqr_smoother_step,
     rts_sqr_smoother_step_preconditioned,

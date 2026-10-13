@@ -28,7 +28,7 @@ from ode_filters import (
     prepare_observations,
     rts_smoother,
 )
-from ode_filters.measurement import Measurement, ODEInformationWithHidden
+from ode_filters.information import Measurement, ODEInformationWithHidden
 from test.helpers import DenseStep, assert_close, cov, dense_kalman
 
 L = np.array([[-0.5, 1.0], [-1.0, -0.5]])

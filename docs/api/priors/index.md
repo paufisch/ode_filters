@@ -29,24 +29,24 @@ dense `Q(h)`. Prefer `Q_sqr(h)` over `Q(h)` downstream: at high `q` the dense
 
 ## Priors
 
-::: ode_filters.priors.gmp_priors.IWP
+::: ode_filters.priors.IWP
 
-::: ode_filters.priors.gmp_priors.MaternPrior
+::: ode_filters.priors.MaternPrior
 
-::: ode_filters.priors.gmp_priors.IOUPPrior
+::: ode_filters.priors.IOUPPrior
 
-::: ode_filters.priors.gmp_priors.JointPrior
+::: ode_filters.priors.JointPrior
 
 ## Preconditioned priors
 
 Same processes in coordinates rescaled by the step size, `x = T(h) @ x_bar`. Fixed-grid `gaussian_filter` only; the adaptive solver needs the plain priors.
 
-::: ode_filters.priors.gmp_priors.PrecondIWP
+::: ode_filters.priors.PrecondIWP
 
-::: ode_filters.priors.gmp_priors.PrecondMaternPrior
+::: ode_filters.priors.PrecondMaternPrior
 
-::: ode_filters.priors.gmp_priors.PrecondJointPrior
+::: ode_filters.priors.PrecondJointPrior
 
 ## Initialization
 
-::: ode_filters.priors.gmp_priors.taylor_mode_initialization
+::: ode_filters.priors.taylor_mode_initialization

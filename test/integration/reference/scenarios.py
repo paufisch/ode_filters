@@ -41,7 +41,7 @@ from ode_filters import (
     taylor_mode_initialization,
 )
 from ode_filters.filters import affine_filter_scan
-from ode_filters.measurement import (
+from ode_filters.information import (
     Conservation,
     Measurement,
     ODEInformationWithHidden,

@@ -13,7 +13,7 @@ calibration modes require the prior's `Xi` to be diagonal. See [Sharp bits](shar
 
 ```python
 from ode_filters.priors import IWP, taylor_mode_initialization
-from ode_filters.measurement import ODEInformation
+from ode_filters.information import ODEInformation
 from ode_filters import gaussian_filter, TaylorCorrection
 
 prior   = IWP(q=2, d=d)                       # smoothness order 2
@@ -94,7 +94,7 @@ Sizes the uncertainty. Full treatment in [Diffusion calibration](calibration.md)
 
 ## Measurement model
 
-What the filter conditions on — see the [measurement API](api/measurement/index.md).
+What the filter conditions on — see the [information API](api/information/index.md).
 
 | Model | Use when |
 | --- | --- |

@@ -27,7 +27,7 @@ kind="mean")` applied to the per-step trace.
 import jax.numpy as np
 from ode_filters import gaussian_filter
 from ode_filters.calibration import posthoc_mle_sigma_sqr, rescale_sqr_seq
-from ode_filters.measurement import ODEInformation
+from ode_filters.information import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
 
 

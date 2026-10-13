@@ -7,9 +7,9 @@ import jax
 from jax import Array
 from jax.typing import ArrayLike
 
-from ..inference.sqr_gaussian_inference import sqr_inversion, sqr_marginalization
-from ..measurement.measurement_models import BaseODEInformation
-from .correction import Correction, TaylorCorrection
+from ..gaussian.algebra import sqr_inversion, sqr_marginalization
+from ..information import BaseODEInformation
+from ..linearization.correction import Correction, TaylorCorrection
 
 StateFunction = Callable[[Array], Array]
 JacobianFunction = Callable[[Array], Array]

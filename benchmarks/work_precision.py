@@ -58,7 +58,7 @@ from ode_filters.filters import (
     gaussian_filter,
     gaussian_filter_adaptive,
 )
-from ode_filters.measurement import ODEInformation
+from ode_filters.information import ODEInformation
 from ode_filters.priors import IWP, taylor_mode_initialization
 
 # Standalone benchmark scripts do not see `conftest.py`, which is what enables

@@ -24,23 +24,17 @@ from .calibration import (
     rescale_sqr_seq,
 )
 from .filters import (
-    Correction,
-    CorrectionResult,
     FilterResult,
     IPLSResult,
-    IteratedTaylorCorrection,
     PController,
     PIController,
-    QuadratureCorrection,
-    SLRModel,
     StepSizeController,
-    TaylorCorrection,
     gaussian_filter,
     gaussian_filter_adaptive,
     ipls_smoother,
     rts_smoother,
-    slr_linearize,
 )
+from .gaussian import sqr_inversion, sqr_marginalization
 from .inference import (
     AbstractParameter,
     InferenceProblem,
@@ -49,15 +43,22 @@ from .inference import (
     Real,
     fit,
     marginal_loglik,
-    sqr_inversion,
-    sqr_marginalization,
     unwrap,
 )
-from .measurement import (
+from .information import (
     ObsModel,
     ODEconservation,
     ODEInformation,
     prepare_observations,
+)
+from .linearization import (
+    Correction,
+    CorrectionResult,
+    IteratedTaylorCorrection,
+    QuadratureCorrection,
+    SLRModel,
+    TaylorCorrection,
+    slr_linearize,
 )
 from .priors import (
     IWP,

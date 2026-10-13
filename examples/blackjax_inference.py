@@ -19,7 +19,7 @@ import jax.numpy as np
 import jax.random as jr
 
 from ode_filters import InferenceProblem, marginal_loglik
-from ode_filters.measurement import Measurement, ODEInformation, prepare_observations
+from ode_filters.information import Measurement, ODEInformation, prepare_observations
 from ode_filters.priors import IWP
 
 jax.config.update("jax_enable_x64", True)

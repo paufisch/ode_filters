@@ -6,8 +6,8 @@ import pytest
 from scipy.integrate import solve_ivp
 
 from ode_filters import gaussian_filter, rts_smoother
-from ode_filters.measurement.measurement_models import ODEInformation
-from ode_filters.priors.gmp_priors import IWP, PrecondIWP, taylor_mode_initialization
+from ode_filters.information import ODEInformation
+from ode_filters.priors import IWP, PrecondIWP, taylor_mode_initialization
 
 # ---------------------------------------------------------------------------
 # Helpers
