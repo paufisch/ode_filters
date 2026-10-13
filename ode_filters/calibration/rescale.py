@@ -4,8 +4,8 @@ After a fixed-step run with ``sigma = 1``, calibrating the trajectory amounts
 to multiplying every covariance by sigma^2. In square-root form this is a
 multiplication of every ``P_sqr`` by ``sqrt(sigma^2)``.
 
-For joint / latent-force priors (``JointPrior`` / ``PrecondJointPrior``) the
-diffusion ``sigma^2`` belongs to the ODE-*state* block only; the hidden/input
+For joint / latent-force priors (``JointPrior``, with plain or preconditioned
+blocks) the diffusion ``sigma^2`` belongs to the ODE-*state* block only; the hidden/input
 block must be left untouched (Schmidt et al. 2021). Pass ``prior=`` to route the
 rescaling through ``prior.apply_state_sigma_to_cov_sqr``, which scales only the
 state block for joint priors (and the whole covariance for non-joint priors, so
@@ -51,7 +51,7 @@ def rescale_sqr(
             latent-force priors scale only the ODE-state block and leave the
             hidden/input block unchanged. For non-joint priors this is identical
             to the default whole-covariance scaling. **Pass this for any
-            ``JointPrior`` / ``PrecondJointPrior`` result** -- omitting it scales
+            ``JointPrior`` result** -- omitting it scales
             the input block too, which is incorrect.
 
     Returns:

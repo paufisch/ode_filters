@@ -1,4 +1,4 @@
-"""Tests for the differentiable parameter-inference core (W4).
+"""The differentiable marginal log-likelihood of the data.
 
 Reference problem: scalar exponential decay ``dx/dt = -lam * x`` with ``x0`` known
 and ``lam`` the unknown parameter, observed noisily in ``x``. The marginal
@@ -11,6 +11,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as np
 import jax.random as jrandom
+import pytest
 
 from ode_filters import InferenceProblem, marginal_loglik
 from ode_filters.information import Measurement, ODEInformation, prepare_observations
@@ -212,3 +213,17 @@ def test_prior_fn_absent_uses_static_prior():
     baseline = marginal_loglik(theta, obs_model, model=problem)
     explicit = marginal_loglik(theta, obs_model, model=problem._replace(prior_fn=None))
     assert baseline == explicit
+
+
+def test_marginal_loglik_requires_data():
+    prior = IWP(q=2, d=1)
+
+    def build(theta):
+        measure = ODEInformation(lambda x, *, t: -x, prior.E0, prior.E1)
+        return np.array([1.0, 0.0, 0.0]), np.eye(3), measure
+
+    problem = InferenceProblem(
+        build=build, prior=prior, ts=np.linspace(*(0.0, 1.0), 10 + 1)
+    )
+    with pytest.raises(ValueError, match="requires observations"):
+        marginal_loglik({}, None, model=problem)

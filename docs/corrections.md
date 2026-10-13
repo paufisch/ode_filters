@@ -1,7 +1,7 @@
 # Linearization Schemes (Corrections)
 
 A probabilistic ODE filter step has two independent concerns: *what* to observe
-(the measurement model -- the ODE residual and conservation laws; external data
+(the measurement model — the ODE residual and conservation laws; external data
 observations are a separate `obs_model` path built with `prepare_observations`)
 and *how* to linearize it for the Gaussian update. `ode_filters` separates these. The
 measurement model owns the residual `g` and its Jacobian; a **`Correction`**
@@ -10,24 +10,24 @@ model composes with any correction.
 
 ## Available corrections
 
-`TaylorCorrection(order=1)` -- the first-order extended Kalman linearization
+`TaylorCorrection(order=1)` — the first-order extended Kalman linearization
 (EK1), using the full vector-field Jacobian. This is the default everywhere and
 reproduces the historical behavior exactly.
 
-`TaylorCorrection(order=0)` -- the zeroth-order linearization (EK0): the vector
+`TaylorCorrection(order=0)` — the zeroth-order linearization (EK0): the vector
 field is treated as locally constant, so the ODE-defect rows of the Jacobian
 reduce to the selection matrix `E_lhs` (`E1` for first-order systems, `E2`
-for second-order; no vector-field Jacobian). EK0 is cheaper --
-no Jacobian -- and is the classic `EK0` / `ts0` solver.
+for second-order; no vector-field Jacobian). EK0 is cheaper —
+no Jacobian — and is the classic `EK0` / `ts0` solver.
 
-`IteratedTaylorCorrection(max_iters=k)` -- the iterated EKF (IEKF): a single
+`IteratedTaylorCorrection(max_iters=k)` — the iterated EKF (IEKF): a single
 forward pass in which *each step's update* relinearizes at the updated mean for
 `k` fixed Gauss-Newton passes (`max_iters=1` reproduces EK1). This reduces local
 linearization error on nonlinear problems. The fixed iteration count keeps it
 reverse-mode differentiable. (The whole-trajectory iterated *smoother*, IEKS, is a
 separate construct and is not yet implemented.)
 
-`QuadratureCorrection(rule=..., n_nodes=..., max_iters=...)` -- statistical
+`QuadratureCorrection(rule=..., n_nodes=..., max_iters=...)` — statistical
 linear regression (the SLF / sigma-point family). Instead of a tangent at the
 predicted mean, it fits the affine surrogate *over the predictive spread*, with
 the Gaussian expectations evaluated by quadrature. Two things change relative to
@@ -91,8 +91,8 @@ c     = E[g] - H m
 Omega = Var[g] - H P H^T = Var[g(X) - H X - c]
 ```
 
-The quadrature therefore runs in `p = E_args.shape[0]` dimensions -- the ODE
-dimension -- not in the `d (q+1)` state dimension. That is what makes the
+The quadrature therefore runs in `p = E_args.shape[0]` dimensions — the ODE
+dimension — not in the `d (q+1)` state dimension. That is what makes the
 spectrally accurate rule affordable (`m^p` is indexed by the ODE's arity), and
 it is why the sigma-point instability at `q >= 3` reported in the literature does
 not apply here: no square root of the ill-conditioned full `P` is ever taken,
@@ -101,11 +101,11 @@ only of the `p x p` projected block.
 **Choosing the rule.** `"gauss_hermite"` (default) is exact for polynomials of
 degree `2 * n_nodes - 1`. A vector field of polynomial degree `k` needs
 `n_nodes >= ceil((k+1)/2)` for `H` and `c`, and `n_nodes >= ceil((2k+1)/2)` for
-`Omega` as well -- so a cubic (Duffing, van der Pol) is *exactly* reproduced at
+`Omega` as well — so a cubic (Duffing, van der Pol) is *exactly* reproduced at
 `n_nodes=4` and a quadratic (Lotka-Volterra, SIRD) at `n_nodes=3`.
 `"cubature"` is the third-degree spherical rule: `2p` nodes, dimension-linear,
 the general fallback for non-polynomial or high-dimensional fields. The classic
-scaled unscented transform is deliberately not offered -- its `beta` term puts a
+scaled unscented transform is deliberately not offered — its `beta` term puts a
 negative weight on the centre point, which breaks the square-root construction
 of `Omega`.
 
@@ -121,7 +121,7 @@ space of `E_args` and checks that the Jacobian is unchanged.
 **When it matters.** The closure error scales with the predictive spread of the
 vector field's arguments. In a pure ODE solve that spread vanishes as `h -> 0`,
 so this collapses back onto EK1 and buys nothing. It becomes load-bearing when
-the spread has a floor -- a latent force, sparse or noisy data, large steps --
+the spread has a floor — a latent force, sparse or noisy data, large steps —
 because then the Jensen gap does not vanish under grid refinement.
 
 ## Frozen linearizations: `affine_filter`
@@ -167,6 +167,7 @@ over the smoothed marginals instead and converges to a moment-matched Gaussian.
 ```python
 from ode_filters import iterated_smoother
 
+# obs_model: data from prepare_observations, or None for the ODE alone
 result = iterated_smoother(
     m_0, P_0_sqr, prior, measure, ts,
     linearization="taylor", n_iters=5, obs_model=obs_model,
@@ -202,7 +203,7 @@ linearization it is conditioned on), so the prior carries its own scale, as with
 returns the `AffineModel` at the predicted mean (it drives the diffusion
 calibration, before the predicted covariance exists; the default is EK1), and
 `correct(measure, x, model, *, t)` returns `(posterior, innovation)` as
-`Gaussian`s. Owning the update lets a correction iterate it -- the seam the IEKF
+`Gaussian`s. Owning the update lets a correction iterate it — the seam the IEKF
 and the statistical linearization use.
 
 ## See also

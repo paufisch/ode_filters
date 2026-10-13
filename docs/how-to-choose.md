@@ -4,10 +4,12 @@
 decisions: for each axis, a default, when to deviate, and a comparison table.
 When in doubt, the defaults are good.
 
-Not every combination is supported: preconditioned priors (`PrecondIWP` /
-`PrecondMaternPrior`) and the adaptive smoother (`smoother=True`) do not yet accept
-external observations (`obs_model`), and the `"diagonal"` / `"diagonal_ekf0"`
-calibration modes require the prior's `Xi` to be diagonal. See [Sharp bits](sharp-bits.md).
+The components combine freely: every prior (plain or preconditioned) works with
+every stepping mode, correction and calibration policy, with or without data.
+The few restrictions: the per-component policies (`"diagonal"`,
+`DiagonalCalibration`) need a diagonal `Xi`; `interpolate` needs a fixed-grid
+result; and the iterated smoother keeps the diffusion fixed. See
+[Sharp bits](sharp-bits.md).
 
 ## TL;DR defaults
 
@@ -64,12 +66,22 @@ preconditioned prior. Initialize with `taylor_mode_initialization(vf, x0, q)`.
 ## Correction (linearization)
 
 How the nonlinear vector field is linearized in the update — a pluggable
-[`Correction`](corrections.md).
+[`Correction`](corrections.md), passed as `correction=`.
 
 | Correction | Cost | Use when |
 | --- | --- | --- |
-| **`TaylorCorrection(order=1)` (EK1)** | Jacobian per step | the default — generally more accurate per step (uses the full vector-field Jacobian) |
+| **`TaylorCorrection(order=1)` (EK1)** | one Jacobian per step | the default — generally more accurate per step (uses the full vector-field Jacobian) |
 | **`TaylorCorrection(order=0)` (EK0)** | no Jacobian | high-dimensional or expensive Jacobians; very robust |
+| **`IteratedTaylorCorrection` (IEKF)** | a few Jacobians per step | single steps are badly linearized (large steps, strongly nonlinear or stiff fields) |
+| **`QuadratureCorrection` (SLR)** | `n_nodes ** len(args)` field evaluations per step | the linearization error should enter the uncertainty, or the field has no useful Jacobian |
+
+A correction acts within one step. To re-linearize over the whole trajectory,
+iterate the smoother:
+
+| Smoother | Converges to | Use when |
+| --- | --- | --- |
+| **`iterated_smoother(linearization="taylor")` (IEKS)** | the MAP trajectory (Gauss-Newton) | a point estimate that uses all the information, e.g. with data or a hidden input |
+| **`iterated_smoother(linearization="slr")` (IPLS)** | a moment-matched Gaussian | as the IEKS, with the linearization error in the uncertainty |
 
 ## Stepping
 
@@ -85,12 +97,31 @@ See [Adaptive step-size control](adaptive-steps.ipynb) for the controller.
 
 Sizes the uncertainty. Full treatment in [Diffusion calibration](calibration.md).
 
-| Mode | Use when |
+| Policy | Shorthand | Use when |
+| --- | --- | --- |
+| **`DynamicCalibration()`** | `"dynamic"` | per-step quasi-MLE — the default for a plain solve |
+| **`NoCalibration()`** | `"none"` | the prior's scale is fixed or fitted, e.g. inside a likelihood |
+| **`DiagonalCalibration()`** | `"diagonal"` | per-component scales (needs a diagonal `Xi`) |
+| **`DiagonalCalibration(jacobian="ek0")`** | `"diagonal_ekf0"` | per-component scales without a Jacobian; pair with EK0 |
+| post-hoc (`posthoc_mle_sigma_sqr`) | — | a single global scale after a `"none"` run |
+
+The policy objects take a floor, e.g. `DynamicCalibration(min_sigma_sqr=1e-12)`.
+
+## Fitting to data
+
+What to reach for when the ODE has unknowns. The
+[Inference from data](examples/parameter-estimation.ipynb) tutorials walk
+through each.
+
+| Goal | Reach for |
 | --- | --- |
-| **`"dynamic"`** | per-step quasi-MLE — the default for a plain solve |
-| **`"none"`** | a fixed `Xi` is wanted, so the likelihood is not confounded by dynamic calibration |
-| **`"diagonal"` / `"diagonal_ekf0"`** | per-component scales; pair `diagonal_ekf0` with an EK0 correction |
-| post-hoc (`posthoc_mle_sigma_sqr`) | a single global scale after a fixed-step run |
+| a point estimate of ODE parameters | `marginal_loglik` and `fit_scipy` (L-BFGS-B), or `fit` with an Optax optimizer |
+| a posterior over the parameters | `marginal_loglik` inside NumPyro or BlackJAX |
+| a hidden input `u(t)` | a `JointPrior` with a `*WithHidden` model; `rts_smoother` / `sample_posterior` |
+| hyperparameters (length scale, `Xi`, an input's magnitude) | the conditional evidence: `channel="fenrir"` or `"dalton"` (see [calibration](calibration.md#selecting-hyperparameters-from-data)) |
+| how much the data say about a hidden input | `information_criteria` |
+| whether the fitted model is consistent with the data | `nis`, `whitened_residuals`, `residual_autocorrelation` |
+| predictions between grid nodes, or of new observations | `interpolate`, `observation_predictive` |
 
 ## Measurement model
 

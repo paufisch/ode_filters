@@ -18,7 +18,14 @@ from ..gaussian import Gaussian, marginalize
 
 
 def whitened_residuals(mz: ArrayLike, Pz_sqr: ArrayLike) -> Array:
-    """Whitened innovations ``Pz_sqr^-T mz`` per step.
+    """Whitened innovations ``L^-1 mz`` per step, with ``L`` the Cholesky factor.
+
+    A square-root factor is unique only up to the signs of its rows, and the QR
+    decompositions that produce ``Pz_sqr`` leave them arbitrary, so
+    ``Pz_sqr^-T mz`` would flip the sign of a component from step to step. The
+    factor is therefore taken with a non-negative diagonal (``L = Pz_sqr.T``
+    with its columns' signs fixed), which makes the residuals comparable across
+    steps -- what ``residual_autocorrelation`` needs.
 
     Args:
         mz: Innovation means, shape ``[N, k]`` (e.g. ``result.mz_obs``).
@@ -29,9 +36,13 @@ def whitened_residuals(mz: ArrayLike, Pz_sqr: ArrayLike) -> Array:
         Rows without data (zero mean, unit variance in ``mz_obs``) are zero.
     """
     mz, Pz_sqr = np.asarray(mz), np.asarray(Pz_sqr)
-    return jax.vmap(lambda m, S: jax.scipy.linalg.solve_triangular(S.T, m, lower=True))(
-        mz, Pz_sqr
-    )
+
+    def whiten(m: Array, S: Array) -> Array:
+        v = jax.scipy.linalg.solve_triangular(S.T, m, lower=True)
+        # Flipping row i of S to make S_ii >= 0 flips v_i.
+        return v * np.where(np.diag(S) < 0.0, -1.0, 1.0)
+
+    return jax.vmap(whiten)(mz, Pz_sqr)
 
 
 def nis(mz: ArrayLike, Pz_sqr: ArrayLike) -> Array:

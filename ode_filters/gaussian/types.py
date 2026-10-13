@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+import jax.numpy as np
 from jax import Array
 
 
@@ -25,6 +26,20 @@ class Gaussian(NamedTuple):
 
     m: Array
     P_sqr: Array
+
+    @property
+    def cov(self) -> Array:
+        """Covariance ``P = P_sqr.T @ P_sqr`` (batched over leading axes)."""
+        return np.swapaxes(self.P_sqr, -1, -2) @ self.P_sqr
+
+    @property
+    def std(self) -> Array:
+        """Marginal standard deviations ``sqrt(diag(P))``, shaped like ``m``.
+
+        Computed from the factor without forming ``P``: ``P_ii`` is the squared
+        norm of column ``i`` of ``P_sqr``.
+        """
+        return np.linalg.norm(self.P_sqr, axis=-2)
 
 
 class Conditional(NamedTuple):

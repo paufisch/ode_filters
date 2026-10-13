@@ -39,7 +39,7 @@ examples = ["matplotlib>=3.10.7"]
 inference = ["blackjax>=1.2.0", "numpyro>=0.16.0", "optax>=0.2.0", "scipy>=1.13"]
 # `pip install ode-filters[benchmarks]` to run the work-precision benchmark in
 # `benchmarks/`, which compares against probdiffeq and the classical Diffrax solver.
-benchmarks = ["diffrax>=0.6", "matplotlib>=3.10.7"]
+benchmarks = ["diffrax>=0.6", "matplotlib>=3.10.7", "probdiffeq>=0.8.0"]
 
 [project.urls]
 Homepage = "https://github.com/paufisch/ode_filters"
@@ -73,8 +73,11 @@ docs = [
     "mkdocs-jupyter>=0.24.1",
     "mkdocs-material>=9.5,<9.6",
     "mkdocstrings[python]>=0.28.3",
+    "numpyro>=0.16.0",  # the Bayesian-sampling tutorial
+    "optax>=0.2.0",  # the parameter-estimation tutorial
     "ruff>=0.6",  # lets mkdocstrings format rendered signatures
-    "tueplots>=0.2.5",  # figure style of the calibration notebook
+    "scipy>=1.13",  # fit_scipy in the inference tutorials
+    "tueplots>=0.2.5",  # figure style of the notebooks
 ]
 
 [tool.pytest.ini_options]
@@ -82,6 +85,17 @@ testpaths = ["test"]
 # --cov-fail-under=100 gates the suite at full line coverage (local + CI; the CI
 # command appends its own --cov-report=xml on top of these defaults).
 addopts = "--cov=ode_filters --cov-report=term-missing --cov-fail-under=100"
+markers = [
+    "slow: long-running tests (MCMC runs of the example scripts); deselect with -m 'not slow'",
+]
+
+[tool.coverage.report]
+# Lines that never run by design; everything else counts towards the 100% gate.
+exclude_also = [
+    "raise NotImplementedError",  # bodies of abstract methods
+    "@(abc\\.)?abstractmethod",
+    "if TYPE_CHECKING:",
+]
 
 [tool.ruff]
 target-version = "py313"
@@ -97,11 +111,30 @@ select = [
     "B",      # flake8-bugbear
     "SIM",    # flake8-simplify
     "RUF",    # Ruff-specific rules
+    "D",      # pydocstyle (Google convention, package only; see per-file-ignores)
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
     "B008",   # function call in default argument (common in JAX)
+    # Constructor arguments are documented in the class docstring (Args: /
+    # Attributes:), which is where mkdocstrings renders them.
+    "D107",
+    # The only magic methods are equinox's __check_init__ validation hooks;
+    # the constraints they enforce are documented on the class.
+    "D105",
 ]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Docstring rules cover the package's public API; tests, scripts and notebooks
+# document themselves through names and comments.
+"test/**" = ["D"]
+"benchmarks/**" = ["D"]
+"examples/**" = ["D"]
+"docs/**" = ["D"]
+".github/**" = ["D"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["ode_filters"]

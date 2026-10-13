@@ -97,7 +97,13 @@ nav:
       - Quickstart: examples/quickstart.ipynb
       - Notation & conventions: notation.md
       - Sharp bits & FAQ: sharp-bits.md
-  - Tutorials:
+      - How it compares: comparison.md
+      - Migrating from 0.7: migration.md
+  - Inference from data:
+      - Parameter estimation: examples/parameter-estimation.ipynb
+      - Recovering a hidden input: examples/hidden-input.ipynb
+      - Bayesian posterior sampling: examples/bayesian-sampling.ipynb
+  - Solving ODEs:
       - Basic usage: examples/examples.ipynb
       - Second-order systems: examples/second-order-systems.ipynb
       - Advanced features: examples/advanced-features.ipynb

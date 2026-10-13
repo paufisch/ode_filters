@@ -111,7 +111,7 @@ class Correction(eqx.Module):
             ``(posterior, innovation)``; the innovation's density at zero is
             the step's evidence.
         """
-        raise NotImplementedError  # pragma: no cover - abstract method
+        raise NotImplementedError
 
 
 class TaylorCorrection(Correction):
@@ -133,9 +133,11 @@ class TaylorCorrection(Correction):
             )
 
     def linearize(self, measure, m, *, t):
+        """Taylor-linearize ``measure`` at ``m`` (order ``self.order``)."""
         return taylor_linearize(measure, m, t=t, order=self.order)
 
     def correct(self, measure, x, model, *, t):
+        """A Kalman update of ``x`` with the linearization at the prediction."""
         return update(model, x)
 
 
@@ -159,6 +161,8 @@ class IteratedTaylorCorrection(Correction):
             raise ValueError(f"max_iters must be >= 1, got {self.max_iters!r}.")
 
     def correct(self, measure, x, model, *, t):
+        """Update ``x``, relinearizing at the updated mean ``max_iters - 1`` times."""
+
         def relinearize(_i, carry):
             posterior, _ = carry
             H, c = measure.linearize(posterior.m, t=t)
@@ -226,6 +230,8 @@ class QuadratureCorrection(Correction):
         quadrature_nodes(self.rule, 1, self.n_nodes)
 
     def correct(self, measure, x, model, *, t):
+        """Update ``x`` with the statistical linearization over the density."""
+
         def update_over(density: Gaussian):
             slr = slr_linearize(
                 measure,

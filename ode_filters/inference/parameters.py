@@ -49,7 +49,7 @@ class AbstractParameter(eqx.Module):
     @abc.abstractmethod
     def unwrap(self) -> Array:
         """Return the constrained value."""
-        raise NotImplementedError  # pragma: no cover - abstract method
+        raise NotImplementedError
 
 
 class Real(AbstractParameter):
@@ -65,6 +65,7 @@ class Real(AbstractParameter):
         self.value = np.asarray(value, dtype=float)
 
     def unwrap(self) -> Array:
+        """Return the value unchanged."""
         return self.value
 
 
@@ -85,6 +86,7 @@ class PositiveReal(AbstractParameter):
         self.unconstrained = _softplus_inv(np.asarray(value, dtype=float))
 
     def unwrap(self) -> Array:
+        """Return ``softplus(unconstrained)``."""
         return jax.nn.softplus(self.unconstrained)
 
 
@@ -119,6 +121,7 @@ class NonNegativeReal(AbstractParameter):
         self.unconstrained = _softplus_inv(np.maximum(value, _NON_NEGATIVE_FLOOR))
 
     def unwrap(self) -> Array:
+        """Return ``softplus(unconstrained)``."""
         return jax.nn.softplus(self.unconstrained)
 
 

@@ -125,3 +125,12 @@ def test_rescale_by_zero_has_a_finite_gradient():
     ):
         assert f(0.0) == 0.0
         assert np.isfinite(jax.grad(f)(0.0))
+
+
+def test_prior_aware_rescale_seq_bad_shape_raises():
+    """A prior-aware sequence rescale with a mismatched sigma vector must raise."""
+    prior = IWP(q=2, d=1)
+    P_seq = np.zeros((3, 3, 3))  # 3 steps
+    # 1D sigma whose length != number of steps falls through to the validation.
+    with pytest.raises(ValueError, match="sigma_sqr must be scalar"):
+        rescale_sqr_seq(P_seq, np.zeros(2), prior=prior)

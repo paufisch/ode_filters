@@ -70,7 +70,7 @@ class Calibration(eqx.Module):
             step applies to the prior's state block
             (``prior.apply_state_sigma_sqr``).
         """
-        raise NotImplementedError  # pragma: no cover - abstract method
+        raise NotImplementedError
 
     def validate(self, prior) -> None:
         """Reject a prior this policy cannot calibrate (called once per solve)."""
@@ -88,6 +88,7 @@ class NoCalibration(Calibration):
     """
 
     def calibrate(self, residual, H, Q_sqr, *, H_ek0):
+        """Return the scalar quasi-MLE and a unit diffusion."""
         estimate = _scalar_estimate(residual, H, Q_sqr)
         return estimate, np.ones_like(estimate)
 
@@ -104,6 +105,7 @@ class DynamicCalibration(Calibration):
     min_sigma_sqr: float = eqx.field(static=True, default=0.0)
 
     def calibrate(self, residual, H, Q_sqr, *, H_ek0):
+        """Return the floored scalar quasi-MLE, also as the diffusion."""
         sigma_sqr = np.maximum(_scalar_estimate(residual, H, Q_sqr), self.min_sigma_sqr)
         return sigma_sqr, sigma_sqr
 
@@ -132,6 +134,7 @@ class DiagonalCalibration(Calibration):
             raise ValueError(f'jacobian must be "ek1" or "ek0", got {self.jacobian!r}.')
 
     def calibrate(self, residual, H, Q_sqr, *, H_ek0):
+        """Return the floored per-component estimate, also as the diffusion."""
         H_calib = H_ek0() if self.jacobian == "ek0" else H
         # diag(H Q H.T)_i = ||(H @ Q_sqr.T)[i]||^2, since Q = Q_sqr.T @ Q_sqr.
         HQ_sqr = H_calib @ Q_sqr.T
@@ -145,6 +148,7 @@ class DiagonalCalibration(Calibration):
         return sigma_sqr, sigma_sqr
 
     def validate(self, prior) -> None:
+        """Reject a prior whose state block of ``Xi`` is not diagonal."""
         # A traced Xi (a differentiated hyperparameter) cannot be checked; the
         # caller's invariant is trusted there.
         try:

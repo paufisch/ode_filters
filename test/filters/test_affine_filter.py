@@ -198,3 +198,12 @@ def test_inconsistent_surrogates_raise(change, match):
     surrogate = taylor_surrogate(measure, np.tile(m_0, (20, 1)), ts=TS[1:])
     with pytest.raises(ValueError, match=match):
         affine_filter(m_0, P_0_sqr, prior, change(surrogate), TS)
+
+
+def test_surrogates_name_the_update_times_when_given_the_whole_grid():
+    prior, measure, m_0, P_0_sqr = _logistic()
+    ek1 = gaussian_filter(m_0, P_0_sqr, prior, measure, TS, calibration="none")
+    with pytest.raises(ValueError, match=r"ts\[1:\]"):
+        taylor_surrogate(measure, ek1.m_pred, ts=TS)
+    with pytest.raises(ValueError, match=r"ts\[1:\]"):
+        slr_surrogate(measure, ek1.m[1:], ek1.P_sqr[1:], ts=TS)

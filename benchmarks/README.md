@@ -1,8 +1,8 @@
 # Benchmarks
 
 Cross-library **performance studies** of `ode_filters` (vs probdiffeq and Diffrax).
-Each script is runnable standalone (the `benchmarks` extra pulls in Diffrax /
-matplotlib; probdiffeq comes from the `dev` group):
+Each script is runnable standalone (the `benchmarks` extra pulls in Diffrax,
+probdiffeq and matplotlib):
 
 ```bash
 uv run --extra benchmarks python benchmarks/<name>.py

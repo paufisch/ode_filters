@@ -49,10 +49,10 @@ def _gauss_legendre(n_quad: int, q: int) -> tuple[Array, Array]:
 def _sqr_noise_via_quadrature(
     F: Array, G: Array, gl_nodes: Array, gl_weights: Array, h: ArrayLike
 ) -> Array:
-    """Upper-triangular square root ``R`` of the LTI process noise
-    ``Q(h) = int_0^h e^{F u} G G.T e^{F.T u} du`` (so ``R.T @ R == Q(h)``).
+    """Upper-triangular square root ``R`` of the LTI process noise.
 
-    Square-root matrix-fraction decomposition (Bosch, Hennig & Tronarp 2023): the
+    ``Q(h) = int_0^h e^{F u} G G.T e^{F.T u} du``, so ``R.T @ R == Q(h)``. A
+    square-root matrix-fraction decomposition (Bosch, Hennig & Tronarp 2023): the
     factor is the ``R`` of a QR of the Gauss-Legendre-propagated dispersion columns
     ``sqrt(w_k) e^{F u_k} G``. ``G`` may be rank one (Matern / scalar IOUP) or rank
     ``d`` (matrix-rate IOUP). The dense, ill-conditioned ``Q(h)`` is never formed or

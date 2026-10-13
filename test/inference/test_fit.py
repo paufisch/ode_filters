@@ -1,4 +1,4 @@
-"""Tests for the ergonomic ODEFilter + fit wrapper (W5).
+"""Fitting through the ``ODEFilter`` + ``fit`` wrapper.
 
 Same reference problem as ``test_marginal_loglik`` (noisy exponential decay,
 unknown rate), now fit through the object API with an Optax optimizer.

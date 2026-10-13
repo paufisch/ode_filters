@@ -1,4 +1,4 @@
-"""Tests for the unconstrained-parameter wrappers (slice 2)."""
+"""The unconstrained-parameter wrappers."""
 
 from __future__ import annotations
 
