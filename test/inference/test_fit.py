@@ -43,8 +43,7 @@ def _model_and_data(lam_init, correction=None):
         vf=vf,
         init_fn=init_fn,
         prior=prior,
-        tspan=TSPAN,
-        N=N,
+        ts=np.linspace(*TSPAN, N + 1),
         ode_params=np.array([lam_init]),
         correction=correction,
     )
@@ -92,5 +91,5 @@ def test_fit_only_trains_ode_params():
     model, data = _model_and_data(0.4)
     fitted, _ = fit(model, data, optax.adam(0.05), steps=10)
     assert fitted.prior is model.prior  # static identity preserved
-    assert fitted.N == model.N
+    assert fitted.ts == model.ts
     assert not np.allclose(fitted.ode_params, model.ode_params)  # params moved

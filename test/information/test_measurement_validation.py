@@ -49,11 +49,6 @@ def test_measurement_z_t_length_mismatch_raises():
         Measurement(A=np.eye(1), z=np.zeros((2, 1)), z_t=np.zeros(3))
 
 
-def test_measurement_jacobian_at_matching_time():
-    m = Measurement(A=np.eye(1), z=np.zeros((2, 1)), z_t=np.array([0.0, 1.0]))
-    assert np.allclose(m.jacobian(0.0), np.eye(1))
-
-
 def test_measurement_rejected_as_measure_constraint():
     E0, E1 = _E0_E1()
     m = Measurement(A=np.eye(1), z=np.zeros((1, 1)), z_t=np.array([0.0]))

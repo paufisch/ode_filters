@@ -34,11 +34,11 @@ def vf(x, *, t):
 
 # 1. a smoothness prior, 2. the ODE as information about the solution
 prior = IWP(q=2, d=1)
-mu_0, P0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
+m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
 measure = ODEInformation(vf, prior.E0, prior.E1)
 
 # 3. filter forward: a Gaussian posterior at every grid point
-result = gaussian_filter(mu_0, P0_sqr, prior, measure, (0.0, 5.0), N=50)
+result = gaussian_filter(m_0, P_0_sqr, prior, measure, np.linspace(0.0, 5.0, 51))
 
 # mean and standard deviation of x (the covariance is P = P_sqr.T @ P_sqr)
 mean = result.m[:, 0]

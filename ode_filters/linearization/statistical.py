@@ -53,8 +53,8 @@ import numpy as onp
 from jax import Array
 from jax.typing import ArrayLike
 
-from ..gaussian.algebra import sqr_marginalization
-from ..information import BaseODEInformation
+from ..gaussian import Gaussian, marginalize
+from ..information.protocol import MeasurementModel
 
 #: Quadrature rules selectable by name.
 QuadratureRule = str
@@ -181,7 +181,7 @@ def quadrature_nodes(
     )
 
 
-def _arg_projection(measure: BaseODEInformation, state_dim: int) -> Array:
+def _arg_projection(measure: MeasurementModel, state_dim: int) -> Array:
     """Selection matrix for the coordinates the residual is nonlinear in.
 
     Falls back to the identity for measurement models that do not declare
@@ -198,7 +198,7 @@ BlackBoxMeasurement``, which is duck-typed rather than a
 
 
 def slr_linearize(
-    measure: BaseODEInformation,
+    measure: MeasurementModel,
     m_lin: Array,
     P_lin_sqr: Array,
     *,
@@ -248,9 +248,9 @@ def slr_linearize(
     # Projected marginal, in square-root form (no noise, no offset). Only its
     # square root is needed: the lifted node is
     # ``m_lin + lift @ (y_i - mu_p)``, so the projected mean cancels.
-    _, S_p_sqr = sqr_marginalization(
-        proj, np.zeros(dim), np.zeros((dim, dim)), m_lin, P_lin_sqr
-    )
+    S_p_sqr = marginalize(
+        proj, np.zeros(dim), np.zeros((dim, dim)), Gaussian(m_lin, P_lin_sqr)
+    ).P_sqr
     # P_p = S_p_sqr.T @ S_p_sqr, so (nodes @ S_p_sqr) has covariance P_p.
     dev_p = nodes @ S_p_sqr  # [K, p], deviations from the projected mean
     states = m_lin[None, :] + dev_p @ lift.T  # [K, state_dim]
@@ -278,7 +278,7 @@ def slr_linearize(
 
 
 def check_arg_projection(
-    measure: BaseODEInformation,
+    measure: MeasurementModel,
     state: ArrayLike,
     *,
     t: ArrayLike = 0.0,

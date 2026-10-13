@@ -7,9 +7,21 @@ filter is correct in the mean even with `sigma = 1`, but the posterior
 uncertainty is scaled to match the residual magnitude only when `sigma^2` is
 calibrated from the observed ODE residuals.
 
-The `ode_filters.calibration` subpackage provides three estimators that all
-consume the predicted-observation marginal `(m_z, P_z_sqr)` already returned
-by every EKF step.
+There are two ways to calibrate. **Online**, each filter step estimates
+`sigma^2` from the ODE residual at its prediction and propagates with it; the
+policy is the solvers' `calibration=` argument:
+
+| Policy | Shorthand | Each step |
+| --- | --- | --- |
+| `NoCalibration()` | `"none"` | propagates the prior's noise unscaled; still reports the estimate |
+| `DynamicCalibration(min_sigma_sqr=0.0)` | `"dynamic"` (default) | scales the step's noise by the scalar quasi-MLE |
+| `DiagonalCalibration(jacobian="ek1", min_sigma_sqr=0.0)` | `"diagonal"` | one estimate per solution component |
+| `DiagonalCalibration(jacobian="ek0")` | `"diagonal_ekf0"` | the same, with the ODE's left-hand-side selector in the denominator |
+
+`min_sigma_sqr` floors the estimate, so a residual that vanishes identically (a
+system at rest) cannot collapse the diffusion to zero. **Post hoc**, the
+estimators below consume the innovations `(result.mz, result.Pz_sqr)` a finished
+run carries, and rescale its covariances.
 
 ## Workflows
 
@@ -36,11 +48,12 @@ def vf(x, *, t):
 
 
 prior = IWP(q=2, d=1)
-mu_0, S0 = taylor_mode_initialization(vf, np.array([0.1]), q=2)
+m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([0.1]), q=2)
 measure = ODEInformation(vf, prior.E0, prior.E1)
+ts = np.linspace(0.0, 5.0, 51)
 
 # Run an uncalibrated fixed-step filter.
-result = gaussian_filter(mu_0, S0, prior, measure, (0.0, 5.0), N=50, calibration="none")
+result = gaussian_filter(m_0, P_0_sqr, prior, measure, ts, calibration="none")
 
 sigma_sqr_hat = posthoc_mle_sigma_sqr(result.mz, result.Pz_sqr)
 
@@ -53,7 +66,7 @@ the residual size well.
 
 !!! warning "Joint / latent-force priors: pass `prior=`"
 
-    For `JointPrior` / `PrecondJointPrior`, the diffusion `sigma^2` belongs to
+    For a `JointPrior`, the diffusion `sigma^2` belongs to
     the ODE-**state** block only -- the hidden/input block must not be rescaled
     (Schmidt et al. 2021). The default `rescale_sqr` / `rescale_sqr_seq` scale
     the *whole* covariance, which is wrong for these priors. Pass the prior so
@@ -66,35 +79,24 @@ the residual size well.
 
     For non-joint priors (`IWP`, `MaternPrior`, ...) passing `prior=` is
     optional and gives the same result as the default whole-covariance scaling.
-    The online calibration path (`calibration="dynamic"`/`"diagonal"`) is
-    already block-aware, so this only matters for the post-hoc workflow above.
+    The online policies are already block-aware, so this only matters for the
+    post-hoc workflow above.
 
 ### Per-step quasi-MLE inside the adaptive solver
 
-`gaussian_filter_adaptive` runs the per-step quasi-MLE by default and applies it
-to the stored covariances on every accepted step. See
-[Adaptive Step-Size Control](adaptive-steps.ipynb).
+`gaussian_filter_adaptive` calibrates every attempted step the same way. With
+`record_steps=` it also keeps each accepted step's estimate (see
+[Adaptive Step-Size Control](adaptive-steps.ipynb)):
 
 ```python
 from ode_filters import gaussian_filter_adaptive
 
 result = gaussian_filter_adaptive(
-    mu_0, S0, prior, measure, save_at=np.linspace(0.0, 5.0, 50),
-    atol=1e-5, rtol=1e-3,
+    m_0, P_0_sqr, prior, measure, np.linspace(0.0, 5.0, 50),
+    atol=1e-5, rtol=1e-3, record_steps=1000,
 )
-```
-
-For the per-step `sigma_sqr_seq` diagnostics on the accepted-step trajectory,
-use the lower-level trajectory driver `sqr_adaptive_loop` from the
-submodule (see [Adaptive Step-Size Control](adaptive-steps.ipynb)):
-
-```python
-from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
-
-traj = sqr_adaptive_loop(
-    mu_0, S0, prior, measure, (0.0, 5.0), atol=1e-5, rtol=1e-3,
-)
-# traj.sigma_sqr_seq holds the per-step estimates.
+n = int(result.steps.count)
+result.steps.sigma_sqr[:n]  # one estimate per accepted step
 ```
 
 Pass `calibration="none"` to record the estimates without scaling the stored
@@ -141,17 +143,15 @@ genuine observations under data assimilation), the full output covariance is
 `H P_pred H.T + R` and feeding that into the quasi-MLE conflates the
 diffusion scale with the measurement noise (it biases `sigma_hat^2` downward).
 
-The adaptive solver handles this transparently: internally it recomputes the
-*noise-free* predicted residual covariance and uses that for calibration,
-matching what probnum and probdiffeq do. With the default `ODEInformation`
-(no measurements, `R = 0`) the distinction is moot.
+The online policies handle this transparently: they estimate from the
+*noise-free* residual covariance `H Q(h) H.T`, matching what probnum and
+probdiffeq do. With the default `ODEInformation` (`R = 0`) the distinction is
+moot.
 
 For the post-hoc workflow on a fixed-step run with non-zero `R`, the caller
 must pass a noise-free `Pz_sqr` to `posthoc_mle_sigma_sqr` -- the
 covariances returned by the filter include `R` and must be recomputed from the
-saved `(result.m_pred, result.P_pred_sqr)` first. With a preconditioned prior those
-two fields are in the preconditioned coordinates; map them back first with
-`result.m_pred @ result.T.T` and `result.P_pred_sqr @ result.T.T`.
+saved `(result.m_pred, result.P_pred_sqr)` first.
 
 ## What calibration cannot fix
 

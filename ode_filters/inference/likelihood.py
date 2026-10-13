@@ -13,17 +13,17 @@ callable; the static configuration (prior, grid, calibration) lives in an
 ``data`` are closed over / held static (``model`` holds a Python callable and so
 is not itself a traceable argument).
 
-The likelihood is evaluated on the fixed-grid ``jax.lax.scan`` loop
-(``sqr_loop_dynamic_scan`` with an ``obs_model``), which is the only
-jit/grad/vmap-safe path -- the Python-loop and adaptive drivers are not (ROADMAP
-rule R6). By default the returned scalar is the *observation* marginal
-log-likelihood: the data evidence under the ODE-constrained Gauss-Markov model
-(the Fenrir objective). Pass ``channel="ode"`` or ``channel="both"`` to get the
-ODE-defect (residual) evidence instead of, or alongside, the data evidence --
-methods that weight the two channels separately (split / hybrid / tiered
-hyperparameter selection) need the pair. Calibration defaults to ``"none"``
-(fixed diffusion) because dynamic calibration absorbs misfit and confounds the
-likelihood over ``theta``.
+The likelihood is evaluated with ``gaussian_filter`` on the problem's time
+grid. By default the returned scalar is the *observation* channel,
+``FilterResult.log_likelihood_obs``: the data evidence of the sequential filter,
+each observation conditioned on the ODE information up to its own time. Pass
+``channel="ode"`` or ``channel="both"`` to get the ODE-information evidence
+instead of, or alongside, it -- methods that weight the two channels separately
+need the pair. The conditional evidence ``log p(Y | Z)``, which conditions the
+data on *all* of the ODE information, is the ``"fenrir"`` or ``"dalton"``
+channel (see ``ode_filters.inference.evidence``). Calibration defaults to
+``"none"`` (fixed diffusion) because dynamic calibration absorbs misfit and
+confounds the likelihood over ``theta``.
 
 ``InferenceProblem.prior_fn`` extends the same core to *prior* hyperparameters
 (diffusion scale, length scale): when set, the prior is built from ``theta``
@@ -33,31 +33,28 @@ inside the traced region rather than held static.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast, overload
+from typing import Any, Literal, NamedTuple, overload
 
 from jax import Array
 
+from ..calibration.policies import Calibration, CalibrationMode
+from ..filters.fixed_grid import gaussian_filter
 from ..information import BaseODEInformation, ObsModel
 from .parameters import unwrap
-
-if TYPE_CHECKING:
-    from ..filters.ode_filter_loop import CalibrationMode
 
 
 class InferenceProblem(NamedTuple):
     """Static specification mapping a parameter pytree to solver inputs.
 
     Attributes:
-        build: Callable ``theta -> (mu_0, Sigma_0_sqr, measure)`` constructing the
+        build: Callable ``theta -> (m_0, P_0_sqr, measure)`` constructing the
             (differentiable) initial Gaussian and measurement model from the
             parameters. This is the single problem-specific bridge; everything
             else is static.
         prior: Gauss-Markov prior (e.g. ``IWP``).
-        tspan: Time interval ``(t0, t1)`` (a tuple, for jit-static hashing).
-        N: Number of fixed-grid steps.
-        calibration: Diffusion calibration mode. Defaults to ``"none"`` (fixed
-            diffusion) -- recommended for parameter inference.
-        min_sigma_sqr: Lower bound passed through to the loop.
+        ts: Time grid, shape ``[K]``; the observations' grid.
+        calibration: Diffusion calibration policy or shorthand. Defaults to
+            ``"none"`` (fixed diffusion) -- recommended for parameter inference.
         correction: Linearization strategy (a ``Correction``);
             ``None`` defaults to EK1. Use e.g. ``TaylorCorrection(order=0)`` or
             ``IteratedTaylorCorrection()`` to fit with EK0 / IEKF.
@@ -71,10 +68,8 @@ class InferenceProblem(NamedTuple):
 
     build: Callable[[Any], tuple[Array, Array, BaseODEInformation]]
     prior: Any
-    tspan: tuple[float, float]
-    N: int
-    calibration: str = "none"
-    min_sigma_sqr: float = 0.0
+    ts: Array
+    calibration: Calibration | CalibrationMode = "none"
     correction: Any = None
     prior_fn: Callable[[Any], Any] | None = None
 
@@ -132,9 +127,8 @@ def marginal_loglik(
         model: Static ``InferenceProblem`` (closed over, not traced).
         channel: Which evidence channel to return.
 
-            - ``"obs"`` (default): the observation marginal log-likelihood --
-              the data evidence under the ODE-constrained model (the Fenrir
-              objective). A scalar.
+            - ``"obs"`` (default): ``FilterResult.log_likelihood_obs``, the data
+              evidence of the sequential filter. A scalar.
             - ``"ode"``: the ODE-defect (residual) marginal log-likelihood. A
               scalar; does not require observations.
             - ``"both"``: the tuple ``(ll_ode, ll_obs)``. The two channels are
@@ -153,10 +147,6 @@ def marginal_loglik(
         ValueError: If ``channel`` is not one of the three modes, or if ``data``
             is ``None`` for a channel that needs observations.
     """
-    # Imported lazily to avoid an import cycle: the filter depends on the
-    # low-level inference primitives in this package.
-    from ..filters.gaussian_filter import gaussian_filter
-
     if channel not in ("obs", "ode", "both"):
         raise ValueError(
             f"channel must be one of 'obs', 'ode', 'both'; got {channel!r}."
@@ -169,20 +159,16 @@ def marginal_loglik(
 
     # Resolve any unconstrained-parameter wrappers (identity on plain arrays).
     theta = unwrap(theta)
-    mu_0, Sigma_0_sqr, measure = model.build(theta)
+    m_0, P_0_sqr, measure = model.build(theta)
     # prior_fn puts the prior's hyperparameters inside the traced region.
     prior = model.prior if model.prior_fn is None else model.prior_fn(theta)
     result = gaussian_filter(
-        mu_0,
-        Sigma_0_sqr,
+        m_0,
+        P_0_sqr,
         prior,
         measure,
-        model.tspan,
-        model.N,
-        # InferenceProblem.calibration is a plain str; the value is validated by
-        # the solver, so narrow it to the literal mode the filter expects.
-        calibration=cast("CalibrationMode", model.calibration),
-        min_sigma_sqr=model.min_sigma_sqr,
+        model.ts,
+        calibration=model.calibration,
         obs_model=data,
         correction=model.correction,
     )

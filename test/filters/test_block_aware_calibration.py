@@ -27,8 +27,7 @@ import jax.numpy as np
 import numpy as onp
 import pytest
 
-from ode_filters import gaussian_filter
-from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
+from ode_filters import gaussian_filter, gaussian_filter_adaptive
 from ode_filters.information import (
     Conservation,
     ODEInformation,
@@ -72,7 +71,12 @@ def _vf_hidden_linear(x, u, *, t):
 def _run_dynamic_fixed(prior, measure, x0, tspan, N):
     mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_sir, x0, prior.q)
     return gaussian_filter(
-        mu_0, Sigma_0_sqr, prior, measure, tspan, N, calibration="dynamic"
+        mu_0,
+        Sigma_0_sqr,
+        prior,
+        measure,
+        np.linspace(*tspan, N + 1),
+        calibration="dynamic",
     )
 
 
@@ -166,18 +170,27 @@ class TestConservationInvariance:
         m_b = _sir_measure(prior, with_conservation=True)
         mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_sir, x0, prior.q)
 
-        res_a = sqr_adaptive_loop(
-            mu_0, Sigma_0_sqr, prior, m_a, tspan, atol=1e-5, rtol=1e-3
-        )
-        res_b = sqr_adaptive_loop(
-            mu_0, Sigma_0_sqr, prior, m_b, tspan, atol=1e-5, rtol=1e-3
+        res_a, res_b = (
+            gaussian_filter_adaptive(
+                mu_0,
+                Sigma_0_sqr,
+                prior,
+                m,
+                np.array(tspan),
+                atol=1e-5,
+                rtol=1e-3,
+                record_steps=5,
+            )
+            for m in (m_a, m_b)
         )
 
         # First-step h identical (controller decision uses identical err with
         # identical mu_0, Sigma_0_sqr).
-        assert float(res_a.h_seq[0]) == pytest.approx(float(res_b.h_seq[0]), rel=1e-12)
-        sigma_a0 = float(onp.asarray(res_a.sigma_sqr_seq, dtype=float)[0])
-        sigma_b0 = float(onp.asarray(res_b.sigma_sqr_seq, dtype=float)[0])
+        assert float(res_a.steps.h[0]) == pytest.approx(
+            float(res_b.steps.h[0]), rel=1e-12
+        )
+        sigma_a0 = float(res_a.steps.sigma_sqr[0, 0])
+        sigma_b0 = float(res_b.steps.sigma_sqr[0, 0])
         assert sigma_a0 == pytest.approx(sigma_b0, rel=1e-12, abs=1e-14)
 
 
@@ -294,7 +307,12 @@ class TestJointPriorStateOnlyScaling:
         # The pre-fix code accessed prior.xi unconditionally; JointPrior has
         # no xi, so this would have failed at line 248 before the fix.
         result = gaussian_filter(
-            mu_0, Sigma_0_sqr, joint, measure, tspan, N, calibration="dynamic"
+            mu_0,
+            Sigma_0_sqr,
+            joint,
+            measure,
+            np.linspace(*tspan, N + 1),
+            calibration="dynamic",
         )
         sigmas = onp.asarray(result.sigma_sqr, dtype=float)
         assert sigmas.shape == (N,)
@@ -319,13 +337,12 @@ class TestJointPriorDiagonalCalibration:
             Sigma_0_sqr,
             joint,
             measure,
-            (0.0, 1.0),
-            N=N,
+            np.linspace(0.0, 1.0, N + 1),
             calibration=mode,
         )
         sigmas = onp.asarray(result.sigma_sqr, dtype=float)
         # Per-component sigma on the state block: shape (N, d_x).
-        d_x = joint._prior_x._dim
+        d_x = joint.prior_x.E0.shape[0]
         assert sigmas.shape == (N, d_x)
         assert onp.all(onp.isfinite(sigmas))
         assert onp.all(np.isfinite(result.m[-1]))
@@ -333,19 +350,20 @@ class TestJointPriorDiagonalCalibration:
     @pytest.mark.parametrize("mode", ["diagonal", "diagonal_ekf0"])
     def test_adaptive_runs_and_shapes_correct(self, mode):
         joint, measure, mu_0, Sigma_0_sqr = _joint_setup()
-        result = sqr_adaptive_loop(
+        result = gaussian_filter_adaptive(
             mu_0,
             Sigma_0_sqr,
             joint,
             measure,
-            (0.0, 1.0),
+            np.array([0.0, 1.0]),
             calibration=mode,
+            record_steps=200,
         )
-        d_x = joint._prior_x._dim
-        for s in result.sigma_sqr_seq:
-            assert onp.asarray(s).shape == (d_x,)
-            assert onp.all(onp.isfinite(onp.asarray(s)))
-        assert onp.all(np.isfinite(result.m_seq[-1]))
+        n = int(result.steps.count)
+        sigmas = result.steps.sigma_sqr[:n]
+        assert sigmas.shape == (n, joint.prior_x.E0.shape[0])
+        assert onp.all(onp.isfinite(onp.asarray(sigmas)))
+        assert onp.all(np.isfinite(result.m[-1]))
 
     def test_diagonal_leaves_input_block_of_Q_step_alone(self):
         """``apply_state_sigma_sqr`` with a vector must not touch the
@@ -368,7 +386,7 @@ class TestJointPriorDiagonalCalibration:
         # State block: diag(sqrt(sigma_tile)) @ Q_x @ diag(sqrt(sigma_tile)),
         # i.e. each component i scaled by sigma_vec[i] uniformly across all
         # q_x + 1 derivative blocks.
-        sigma_tile = onp.tile(onp.asarray(sigma_vec), joint._prior_x.q + 1)
+        sigma_tile = onp.tile(onp.asarray(sigma_vec), joint.prior_x.q + 1)
         D = onp.diag(onp.sqrt(sigma_tile))
         expected_state = D @ onp.asarray(Q_h[:D_x, :D_x]) @ D
         onp.testing.assert_allclose(
@@ -430,7 +448,12 @@ class TestPureODEBitIdentity:
         N = 30
 
         result = gaussian_filter(
-            mu_0, Sigma_0_sqr, prior, measure, tspan, N, calibration="dynamic"
+            mu_0,
+            Sigma_0_sqr,
+            prior,
+            measure,
+            np.linspace(*tspan, N + 1),
+            calibration="dynamic",
         )
         sigmas = onp.asarray(result.sigma_sqr, dtype=float)
         assert sigmas.shape == (N,)

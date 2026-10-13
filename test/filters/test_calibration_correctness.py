@@ -24,13 +24,17 @@ import jax.numpy as np
 import numpy as onp
 import pytest
 
-from ode_filters import PController, TaylorCorrection, gaussian_filter
+from ode_filters import (
+    PController,
+    TaylorCorrection,
+    gaussian_filter,
+    gaussian_filter_adaptive,
+)
 from ode_filters.calibration.rescale import rescale_sqr_seq
 from ode_filters.calibration.sigma import (
     posthoc_mle_sigma_sqr,
     quasi_mle_sigma_sqr,
 )
-from ode_filters.filters.ode_filter_adaptive import sqr_adaptive_loop
 from ode_filters.information import (
     ODEInformation,
     SecondOrderODEInformation,
@@ -45,6 +49,25 @@ from ode_filters.priors import (
 # ---------------------------------------------------------------------------
 # Test problems
 # ---------------------------------------------------------------------------
+
+
+def _adaptive(mu_0, S0, prior, measure, tspan, **kwargs):
+    """An adaptive solve over ``tspan`` recording its accepted steps."""
+    kwargs.pop("h_min", None)  # the solver has no minimum step
+    return gaussian_filter_adaptive(
+        mu_0,
+        S0,
+        prior,
+        measure,
+        np.array(tspan),
+        record_steps=4096,
+        max_steps=100_000,
+        **kwargs,
+    )
+
+
+def _sigmas(r):
+    return onp.asarray(r.steps.sigma_sqr[: int(r.steps.count)])
 
 
 def logistic_vf(x, *, t):
@@ -88,7 +111,7 @@ class TestConvergenceOrderFixedStep:
         Ns = [16, 32, 64, 128]
         errs = []
         for N in Ns:
-            r = gaussian_filter(mu_0, S0, prior, measure, tspan, N)
+            r = gaussian_filter(mu_0, S0, prior, measure, np.linspace(*tspan, N + 1))
             x_pred = float((prior.E0 @ r.m[-1])[0])
             errs.append(abs(x_pred - x_true))
 
@@ -119,10 +142,8 @@ class TestConvergenceOrderFixedStep:
         rtols = [1e-1, 1e-3, 1e-5]
         errs = []
         for rtol in rtols:
-            r = sqr_adaptive_loop(
-                mu_0, S0, prior, measure, tspan, atol=rtol * 1e-2, rtol=rtol
-            )
-            errs.append(abs(float((prior.E0 @ r.m_seq[-1])[0]) - x_true))
+            r = _adaptive(mu_0, S0, prior, measure, tspan, atol=rtol * 1e-2, rtol=rtol)
+            errs.append(abs(float((prior.E0 @ r.m[-1])[0]) - x_true))
         # Two-orders-of-magnitude rtol reduction should reduce error by at
         # least one order of magnitude (PI controller has overheads).
         assert errs[1] < errs[0] * 0.1
@@ -152,7 +173,7 @@ class TestDiagonalModesOffDiagonalJacobian:
     def _reference_endpoint(self):
         """Reference trajectory via a tight-tolerance run."""
         prior, mu_0, S0, measure = self._setup(q=4)
-        r = sqr_adaptive_loop(
+        r = _adaptive(
             mu_0,
             S0,
             prior,
@@ -162,13 +183,13 @@ class TestDiagonalModesOffDiagonalJacobian:
             rtol=1e-8,
             h_min=1e-12,
         )
-        return prior.E0 @ r.m_seq[-1]
+        return prior.E0 @ r.m[-1]
 
     def test_both_diagonal_modes_run_and_agree_with_reference(self):
         ref = self._reference_endpoint()
         prior, mu_0, S0, measure = self._setup()
         for mode in ("diagonal", "diagonal_ekf0"):
-            r = sqr_adaptive_loop(
+            r = _adaptive(
                 mu_0,
                 S0,
                 prior,
@@ -179,7 +200,7 @@ class TestDiagonalModesOffDiagonalJacobian:
                 h_min=1e-10,
                 calibration=mode,
             )
-            x_final = prior.E0 @ r.m_seq[-1]
+            x_final = prior.E0 @ r.m[-1]
             err = float(np.max(np.abs(x_final - ref)))
             assert err < 1e-3, f"mode={mode} max-component error {err:.2e}"
 
@@ -190,7 +211,7 @@ class TestDiagonalModesOffDiagonalJacobian:
         difference: at loose tolerance the per-step sigma estimates are
         not identical."""
         prior, mu_0, S0, measure = self._setup()
-        r1 = sqr_adaptive_loop(
+        r1 = _adaptive(
             mu_0,
             S0,
             prior,
@@ -200,7 +221,7 @@ class TestDiagonalModesOffDiagonalJacobian:
             rtol=1e-2,
             calibration="diagonal",
         )
-        r2 = sqr_adaptive_loop(
+        r2 = _adaptive(
             mu_0,
             S0,
             prior,
@@ -212,8 +233,8 @@ class TestDiagonalModesOffDiagonalJacobian:
         )
         # Run-length / grid almost certainly differs, so just compare the
         # sigma magnitudes via mean ratio per component on each run.
-        s1 = onp.asarray(r1.sigma_sqr_seq).mean(axis=0)
-        s2 = onp.asarray(r2.sigma_sqr_seq).mean(axis=0)
+        s1 = _sigmas(r1).mean(axis=0)
+        s2 = _sigmas(r2).mean(axis=0)
         ratio = float(onp.max(onp.abs(s1 / s2 - 1.0)))
         # Lotka-Volterra has cross-coupling: expect at least a few percent
         # disagreement in the mean per-component sigma.
@@ -263,8 +284,7 @@ class TestBlockDiagonalEquivalence:
             S0_joint,
             joint_prior,
             joint_meas,
-            tspan,
-            N,
+            np.linspace(*tspan, N + 1),
             calibration="diagonal",
         )
 
@@ -283,8 +303,7 @@ class TestBlockDiagonalEquivalence:
                 S0_s,
                 scalar_prior,
                 scalar_meas,
-                tspan,
-                N,
+                np.linspace(*tspan, N + 1),
                 calibration="dynamic",
             )
             x_final_indep.append(float((scalar_prior.E0 @ r_s.m[-1])[0]))
@@ -320,7 +339,9 @@ class TestCalibrationQuality:
         N = 100
 
         # sigma=1 (no calibration) run; collect (mz, Pz_sqr) trace.
-        r = gaussian_filter(mu_0, S0, prior, measure, tspan, N, calibration="none")
+        r = gaussian_filter(
+            mu_0, S0, prior, measure, np.linspace(*tspan, N + 1), calibration="none"
+        )
         mz_seq = np.asarray(r.mz)
         Pz_seq_sqr = np.asarray(r.Pz_sqr)
 
@@ -365,7 +386,7 @@ class TestAdaptiveEqualsFixedStep:
             order=prior.q, safety=1.0, alpha=1.0, min_factor=1.0, max_factor=1.0
         )
 
-        r_adapt = sqr_adaptive_loop(
+        r_adapt = _adaptive(
             mu_0,
             S0,
             prior,
@@ -377,12 +398,12 @@ class TestAdaptiveEqualsFixedStep:
             controller=controller,
             sigma_in_error="per_step",
         )
-        r_fixed = gaussian_filter(mu_0, S0, prior, measure, tspan, N)
+        r_fixed = gaussian_filter(mu_0, S0, prior, measure, np.linspace(*tspan, N + 1))
 
-        assert len(r_adapt.h_seq) == N
-        assert np.allclose(r_adapt.m_seq[-1], r_fixed.m[-1], atol=1e-10)
-        assert np.allclose(r_adapt.P_seq_sqr[-1], r_fixed.P_sqr[-1], atol=1e-10)
-        sigma_adapt = onp.asarray(r_adapt.sigma_sqr_seq)
+        assert int(r_adapt.steps.count) == N
+        assert np.allclose(r_adapt.m[-1], r_fixed.m[-1], atol=1e-10)
+        assert np.allclose(r_adapt.P_sqr[-1], r_fixed.P_sqr[-1], atol=1e-10)
+        sigma_adapt = _sigmas(r_adapt)[:, 0]
         sigma_fixed = onp.asarray(r_fixed.sigma_sqr)
         assert onp.allclose(sigma_adapt, sigma_fixed, atol=1e-10)
 
@@ -409,7 +430,7 @@ class TestLogLikelihoodSemantics:
         (mz, Pz_sqr) sequence and verify it matches the loop's report."""
         prior, mu_0, S0, measure = self._setup()
         tspan, N = (0.0, 5.0), 40
-        r = gaussian_filter(mu_0, S0, prior, measure, tspan, N)
+        r = gaussian_filter(mu_0, S0, prior, measure, np.linspace(*tspan, N + 1))
         mz_seq, Pz_seq_sqr, ll = r.mz, r.Pz_sqr, r.log_likelihood
 
         ll_recomputed = 0.0
@@ -430,12 +451,8 @@ class TestLogLikelihoodSemantics:
 
 
 class TestAdaptiveBoundaryRoundoff:
-    """Regression: ``while t < t_end`` plus float accumulation of
-    ``t = t + h_try`` can leave a sub-fp residual at the endpoint. The
-    previous implementation tried to take a step of size ~ulp at the
-    boundary and crashed with ``h < h_min``. The fix is a span-scaled
-    endpoint tolerance on the loop predicate; the h_min guard still fires
-    for legitimate underflows mid-trajectory."""
+    """Float accumulation of ``t + h`` must not leave a sub-ulp trailing step:
+    the solver lands on each save time within a span-scaled tolerance."""
 
     def _setup(self):
         prior = IWP(q=2, d=1)
@@ -444,47 +461,39 @@ class TestAdaptiveBoundaryRoundoff:
         return prior, mu_0, S0, measure
 
     def test_non_fp_exact_h_terminates_cleanly(self):
-        """h=0.1 is not exactly representable in fp64; ten accumulated 0.1
-        steps don't reach 1.0 exactly. The old code raised h<h_min on the
-        spurious trailing iteration; the new code returns t_seq[-1] == 1.0."""
+        """h = 0.1 is not exactly representable; ten 0.1-steps land on 1.0."""
         prior, mu_0, S0, measure = self._setup()
         controller = PController(
-            order=prior.q,
-            safety=1.0,
-            alpha=1.0,
-            min_factor=1.0,
-            max_factor=1.0,
+            order=prior.q, safety=1.0, alpha=1.0, min_factor=1.0, max_factor=1.0
         )
-        r = sqr_adaptive_loop(
+        r = gaussian_filter_adaptive(
             mu_0,
             S0,
             prior,
             measure,
-            (0.0, 1.0),
-            h_init=10.0,  # clipped to h_max = 0.1
-            h_max=0.1,
+            np.linspace(0.0, 1.0, 11),
+            h_init=0.1,
             atol=1.0,
             rtol=1.0,
             controller=controller,
         )
-        assert len(r.h_seq) == 10
-        assert float(r.t_seq[-1]) == pytest.approx(1.0, abs=1e-13)
+        assert bool(r.success)
+        assert onp.all(onp.asarray(r.n_accepted) == 1)
 
-    def test_legitimate_h_min_underflow_still_raises(self):
-        """A tolerance so tight the controller wants a step below h_min
-        anywhere *inside* the interval must still raise."""
+    def test_an_unreachable_tolerance_fails_without_raising(self):
+        """The jittable solver cannot raise: it reports the failure."""
         prior, mu_0, S0, measure = self._setup()
-        with pytest.raises(RuntimeError, match="below h_min"):
-            sqr_adaptive_loop(
-                mu_0,
-                S0,
-                prior,
-                measure,
-                (0.0, 1.0),
-                atol=1e-30,
-                rtol=1e-30,
-                h_min=0.5,  # higher than any reasonable proposal
-            )
+        r = gaussian_filter_adaptive(
+            mu_0,
+            S0,
+            prior,
+            measure,
+            np.array([0.0, 1.0]),
+            atol=1e-30,
+            rtol=1e-30,
+            max_steps=20,
+        )
+        assert not bool(r.success)
 
 
 # ---------------------------------------------------------------------------
@@ -513,10 +522,20 @@ class TestPreconditionedDiagonalMatchesNonPreconditioned:
         m_n = ODEInformation(logistic_vf, prior_n.E0, prior_n.E1)
 
         r_p = gaussian_filter(
-            mu_0, S0, prior_p, m_p, (0.0, 1.0), 10, calibration="diagonal_ekf0"
+            mu_0,
+            S0,
+            prior_p,
+            m_p,
+            np.linspace(*(0.0, 1.0), 10 + 1),
+            calibration="diagonal_ekf0",
         )
         r_n = gaussian_filter(
-            mu_0, S0, prior_n, m_n, (0.0, 1.0), 10, calibration="diagonal_ekf0"
+            mu_0,
+            S0,
+            prior_n,
+            m_n,
+            np.linspace(*(0.0, 1.0), 10 + 1),
+            calibration="diagonal_ekf0",
         )
         # Final filtered mean agrees up to fp64.
         assert np.allclose(r_p.m[-1], r_n.m[-1], atol=1e-10)
@@ -545,8 +564,7 @@ def test_diagonal_ekf0_uses_the_measurement_selector_for_second_order_odes(
         np.zeros((4, 4)),
         prior,
         measure,
-        tspan,
-        N,
+        np.linspace(*tspan, N + 1),
         correction=TaylorCorrection(order=0),
         calibration="diagonal_ekf0",
     )

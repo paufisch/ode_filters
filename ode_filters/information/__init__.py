@@ -16,12 +16,14 @@ from .ode_information import (
     SecondOrderODEInformation,
     SecondOrderODEInformationWithHidden,
 )
+from .protocol import MeasurementModel
 
 __all__ = [
     "BaseODEInformation",
     "BlackBoxMeasurement",
     "Conservation",
     "Measurement",
+    "MeasurementModel",
     "ODEInformation",
     "ODEInformationWithHidden",
     "ODEconservation",

@@ -46,7 +46,7 @@ def _problem_and_data():
         return mu_0, sigma_0_sqr, measure
 
     problem = InferenceProblem(
-        build=build, prior=prior, tspan=TSPAN, N=N, calibration="none"
+        build=build, prior=prior, ts=np.linspace(*TSPAN, N + 1), calibration="none"
     )
     return problem, obs_model
 

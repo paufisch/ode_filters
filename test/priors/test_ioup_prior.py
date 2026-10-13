@@ -132,7 +132,9 @@ class TestIOUPSolve:
         mu0, P0 = taylor_mode_initialization(vf, x0, q)
         P0_sqr = np.linalg.cholesky(P0 + 1e-12 * np.eye(P0.shape[0])).T
         measure = ODEInformation(vf, prior.E0, prior.E1)
-        out = gaussian_filter(mu0, P0_sqr, prior, measure, (0.0, 2.0), 50)
+        out = gaussian_filter(
+            mu0, P0_sqr, prior, measure, np.linspace(*(0.0, 2.0), 50 + 1)
+        )
         ts = np.linspace(0.0, 2.0, 51)
         err = float(np.max(np.abs(out.m[:, 0] - np.exp(-ts))))
         assert np.all(np.isfinite(out.m))

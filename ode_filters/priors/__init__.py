@@ -1,10 +1,10 @@
 """Gauss-Markov priors over the solution and its derivatives."""
 
-from .base import BasePrior
+from .base import BasePrior, Transition
 from .initialization import taylor_mode_initialization
 from .ioup import IOUPPrior
 from .iwp import IWP, PrecondIWP
-from .joint import JointPrior, PrecondJointPrior
+from .joint import JointPrior
 from .matern import MaternPrior, PrecondMaternPrior
 
 __all__ = [
@@ -14,7 +14,7 @@ __all__ = [
     "JointPrior",
     "MaternPrior",
     "PrecondIWP",
-    "PrecondJointPrior",
     "PrecondMaternPrior",
+    "Transition",
     "taylor_mode_initialization",
 ]

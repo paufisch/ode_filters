@@ -1,21 +1,27 @@
-"""ODE Filters: Kalman filtering and smoothing for differential equations.
+"""ode_filters: probabilistic ODE filters for inference from data, in JAX.
 
-This package provides implementations of Extended Kalman Filters (EKF), Kalman
-smoothers, and related utilities for inference in ordinary differential equation
-(ODE) systems. The public API is organized into the following subpackages:
+Gaussian (Kalman) filtering and smoothing for ordinary differential equations,
+in square-root form throughout. The public API is re-exported here; the
+subpackages are organized by layer:
 
-- ``filters``: Filtering and smoothing routines (fixed-step, adaptive, and
-  preconditioned variants; ``PController`` / ``PIController`` step-size
-  controllers).
-- ``calibration``: Online and post-hoc diffusion (sigma^2) calibration.
-- ``inference``: Square-root Gaussian inference utilities.
-- ``measurement``: Measurement model helpers.
-- ``priors``: Gaussian Markov process prior models.
+- ``priors``: Gauss-Markov priors over the solution and its derivatives.
+- ``information``: what the filters condition on -- the ODE information
+  (plus conservation laws) and data observations.
+- ``linearization``: Taylor and statistical linearization (the corrections),
+  and frozen linearizations along a trajectory.
+- ``calibration``: online diffusion calibration policies and post-hoc rescaling.
+- ``filters``: the filters, the smoother and the iterated smoother.
+- ``inference``: marginal likelihoods and parameter fitting.
+- ``gaussian``: the square-root Gaussian types and algebra.
 """
 
 from importlib.metadata import PackageNotFoundError, version
 
 from .calibration import (
+    Calibration,
+    DiagonalCalibration,
+    DynamicCalibration,
+    NoCalibration,
     aggregate_sigma_sqr,
     posthoc_mle_sigma_sqr,
     quasi_mle_sigma_sqr,
@@ -25,16 +31,19 @@ from .calibration import (
 )
 from .filters import (
     FilterResult,
-    IPLSResult,
+    IteratedSmootherResult,
+    IterationState,
     PController,
     PIController,
+    StepRecord,
     StepSizeController,
+    affine_filter,
     gaussian_filter,
     gaussian_filter_adaptive,
-    ipls_smoother,
+    iterated_smoother,
     rts_smoother,
 )
-from .gaussian import sqr_inversion, sqr_marginalization
+from .gaussian import AffineModel, Conditional, Gaussian
 from .inference import (
     AbstractParameter,
     InferenceProblem,
@@ -46,27 +55,36 @@ from .inference import (
     unwrap,
 )
 from .information import (
+    BlackBoxMeasurement,
+    Conservation,
+    Measurement,
     ObsModel,
     ODEconservation,
     ODEInformation,
+    ODEInformationWithHidden,
+    SecondOrderODEInformation,
+    SecondOrderODEInformationWithHidden,
+    TransformedMeasurement,
     prepare_observations,
 )
 from .linearization import (
+    AffineSurrogate,
     Correction,
-    CorrectionResult,
     IteratedTaylorCorrection,
     QuadratureCorrection,
     SLRModel,
     TaylorCorrection,
     slr_linearize,
+    slr_surrogate,
+    taylor_surrogate,
 )
 from .priors import (
     IWP,
+    BasePrior,
     IOUPPrior,
     JointPrior,
     MaternPrior,
     PrecondIWP,
-    PrecondJointPrior,
     PrecondMaternPrior,
     taylor_mode_initialization,
 )
@@ -79,36 +97,53 @@ except PackageNotFoundError:  # pragma: no cover - source checkout without metad
 __all__ = [
     "IWP",
     "AbstractParameter",
+    "AffineModel",
+    "AffineSurrogate",
+    "BasePrior",
+    "BlackBoxMeasurement",
+    "Calibration",
+    "Conditional",
+    "Conservation",
     "Correction",
-    "CorrectionResult",
+    "DiagonalCalibration",
+    "DynamicCalibration",
     "FilterResult",
+    "Gaussian",
     "IOUPPrior",
-    "IPLSResult",
     "InferenceProblem",
+    "IteratedSmootherResult",
     "IteratedTaylorCorrection",
+    "IterationState",
     "JointPrior",
     "MaternPrior",
+    "Measurement",
+    "NoCalibration",
     "ODEFilter",
     "ODEInformation",
+    "ODEInformationWithHidden",
     "ODEconservation",
     "ObsModel",
     "PController",
     "PIController",
     "PositiveReal",
     "PrecondIWP",
-    "PrecondJointPrior",
     "PrecondMaternPrior",
     "QuadratureCorrection",
     "Real",
     "SLRModel",
+    "SecondOrderODEInformation",
+    "SecondOrderODEInformationWithHidden",
+    "StepRecord",
     "StepSizeController",
     "TaylorCorrection",
+    "TransformedMeasurement",
     "__version__",
+    "affine_filter",
     "aggregate_sigma_sqr",
     "fit",
     "gaussian_filter",
     "gaussian_filter_adaptive",
-    "ipls_smoother",
+    "iterated_smoother",
     "marginal_loglik",
     "posthoc_mle_sigma_sqr",
     "prepare_observations",
@@ -118,8 +153,8 @@ __all__ = [
     "rescale_sqr_seq",
     "rts_smoother",
     "slr_linearize",
-    "sqr_inversion",
-    "sqr_marginalization",
+    "slr_surrogate",
     "taylor_mode_initialization",
+    "taylor_surrogate",
     "unwrap",
 ]

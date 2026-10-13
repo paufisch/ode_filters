@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from typing import NamedTuple
 
 import jax.numpy as np
 from jax import Array
@@ -17,6 +18,30 @@ MatrixFunction = Callable[[ArrayLike], Array]
 VectorField = Callable[..., Array]
 
 
+class Transition(NamedTuple):
+    """One step of a prior, ``x' = A x + b + w`` with ``w ~ N(0, Q_sqr.T @ Q_sqr)``.
+
+    These are the matrices a filter step computes with. For a plain prior they
+    act on the state itself (``T_diag`` is ``None``). A preconditioned prior
+    returns them in the coordinates ``x_bar = x / T_diag`` (elementwise), in
+    which they are better conditioned; the filter changes into those coordinates
+    for the prediction and back, so its results are always in the original
+    coordinates.
+
+    Attributes:
+        A: Transition matrix, shape ``[D, D]``.
+        b: Drift, shape ``[D]``.
+        Q_sqr: Upper-triangular square-root process noise, shape ``[D, D]``.
+        T_diag: Diagonal of the preconditioner ``T(h)`` (``x = T x_bar``), shape
+            ``[D]``, or ``None`` for a plain prior.
+    """
+
+    A: Array
+    b: Array
+    Q_sqr: Array
+    T_diag: Array | None = None
+
+
 class BasePrior(ABC):
     """Base class of the Gauss-Markov priors.
 
@@ -25,7 +50,7 @@ class BasePrior(ABC):
     ``Y = [x, x', ..., x^(q)]`` of length ``(q+1)*d``. Over a step of size ``h`` it
     is the linear-Gaussian transition ``Y(t+h) = A(h) Y(t) + b(h) + noise`` with
     process noise covariance ``Q(h) = Q_sqr(h).T @ Q_sqr(h)``. Subclasses define
-    ``A``, ``b`` and ``Q``; the filters consume ``Q_sqr``.
+    ``A``, ``b`` and ``Q``; the filters consume ``transition(h)``.
 
     Args:
         q: Number of modelled derivatives (the smoothness order).
@@ -91,6 +116,15 @@ class BasePrior(ABC):
     @abstractmethod
     def Q(self, h: ArrayLike) -> Array:
         pass  # pragma: no cover
+
+    def transition(self, h: ArrayLike) -> Transition:
+        """The matrices a filter step of size ``h`` computes with.
+
+        Plain priors return ``A(h)``, ``b(h)`` and ``Q_sqr(h)``; preconditioned
+        priors override this to return them in preconditioned coordinates (see
+        ``Transition``).
+        """
+        return Transition(self.A(h), self.b(h), self.Q_sqr(h))
 
     def Q_sqr(self, h: ArrayLike) -> Array:
         """Upper-triangular square root of ``Q(h)``: ``Q_sqr.T @ Q_sqr == Q(h)``.

@@ -337,6 +337,27 @@ class BaseODEInformation(ABC):
         c_t = g_val - H_t @ state_arr
         return H_t, c_t
 
+    def linearize_ek0(self, state: Array, *, t: ArrayLike) -> tuple[Array, Array]:
+        """Zeroth-order (EK0) linearization: the vector field held constant.
+
+        The ODE rows of the Jacobian reduce to ``E_constraint``, the selector of
+        the ODE's left-hand side; the conservation rows are affine and exact.
+        Only the residual is evaluated, never the vector-field Jacobian.
+
+        Args:
+            state: State vector to linearize around.
+            t: Current time.
+
+        Returns:
+            Tuple ``(H, c)`` with ``H x + c`` equal to the residual at ``state``.
+        """
+        state_arr = self._validate_state(state)
+        jacobians = [self._E_constraint]
+        for c in self._conservations():
+            jacobians.append(c.jacobian() if c.full_state else c.jacobian() @ self._E0)
+        H = np.concatenate(jacobians) if len(jacobians) > 1 else jacobians[0]
+        return H, self.g(state_arr, t=t) - H @ state_arr
+
     def _validate_state(self, state: Array) -> Array:
         """Validate and convert state to required format."""
         state_arr = np.asarray(state)

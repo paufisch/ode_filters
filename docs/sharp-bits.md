@@ -21,33 +21,25 @@ jax.config.update("jax_enable_x64", True)
 Anything named `*_sqr` is an upper-triangular factor, not a covariance. Reconstruct
 with `P = P_sqr.T @ P_sqr`; for standard deviations use
 `np.sqrt(np.diag(P_sqr.T @ P_sqr))`. The one exception is the diffusion:
-`sigma_sqr` (and `min_sigma_sqr`) is sigma *squared*, a variance. See
+`sigma_sqr` (and a policy's `min_sigma_sqr`) is sigma *squared*, a variance. See
 [Notation](notation.md).
 
 ### The solvers are not pre-jitted: wrap them yourself
 
 `gaussian_filter` and friends are plain functions. The simplest way to compile one
-is `equinox.filter_jit`: it traces the arrays and treats everything else (prior,
-measurement model, `tspan`, `N`, `calibration`, `correction`, ...) as static:
+is `equinox.filter_jit`: it traces the arrays (including the time grid `ts`) and
+treats everything else (prior, measurement model, `calibration`, `correction`,
+...) as static:
 
 ```python
 import equinox as eqx
 
 solve = eqx.filter_jit(gaussian_filter)
-result = solve(mu_0, P0_sqr, prior, measure, (0.0, 10.0), 100, calibration="none")
+result = solve(m_0, P_0_sqr, prior, measure, np.linspace(0.0, 10.0, 101))
 ```
 
-With `jax.jit`, every non-array argument has to be marked static, keyword
-arguments included, and static arguments must be hashable, so `tspan` has to be a
-tuple rather than a list:
-
-```python
-solve = jax.jit(
-    gaussian_filter,
-    static_argnums=(2, 3, 4, 5),  # prior, measure, tspan, N
-    static_argnames=("calibration", "correction"),
-)
-```
+A traced grid is handled step by step (one transition per step); a concrete
+uniform grid passed outside `jit` computes the prior's transition once.
 
 ### Build models once and don't mutate them under `jit`
 
@@ -60,16 +52,16 @@ consequences:
   that has already seen `measure` keeps using the old noise. Build a new model
   instead (which recompiles), or call the solver without `jit`.
 
-Only arrays (`mu_0`, `P0_sqr`, the data in an `obs_model`, parameters) are traced,
-so differentiate with respect to those.
+Only arrays (`m_0`, `P_0_sqr`, the time grid, the data in an `obs_model`,
+parameters) are traced, so differentiate with respect to those.
 
-### Preconditioned priors: fixed grid only, some fields in bar coordinates
+### Data times must be grid nodes
 
-`PrecondIWP` / `PrecondMaternPrior` / `PrecondJointPrior` run the recursion in
-rescaled coordinates `x = T @ x_bar`. They work with `gaussian_filter` (without an
-`obs_model`), but `gaussian_filter_adaptive` and `JointPrior` reject them. In their
-results, `m_pred`, `P_pred_sqr` and the backward-pass fields are in bar
-coordinates; see the [filters API](api/filters/index.md).
+`prepare_observations` matches each measurement time to a node of the grid (with
+a small tolerance) and raises for a time that is not one. For data off a uniform
+grid, add their times to it, e.g. `ts = np.union1d(ts, z_t)`; every solver
+accepts non-uniform grids. Measurements may have different times: each step
+conditions on the rows that have data.
 
 ### A solve is differentiable on both stepping modes
 

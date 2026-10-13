@@ -1,13 +1,22 @@
 # Calibration
 
-The diffusion `sigma^2` sets the *size* of the posterior uncertainty: the filter's
-mean does not depend on it, its covariance scales with it. The solvers calibrate it
-online through their `calibration=` argument (`"dynamic"` by default, see
-[Diffusion calibration](../../calibration.md)). The functions here are for working
-with a finished run: estimate `sigma^2` from the innovations a result carries
+The diffusion `sigma^2` sets the *size* of the posterior uncertainty. The solvers
+calibrate it online with the policy passed as `calibration=` (`"dynamic"` by
+default, see [Diffusion calibration](../../calibration.md)). The estimators below
+work on a finished run: estimate `sigma^2` from the innovations a result carries
 (`result.mz`, `result.Pz_sqr`) and rescale its stored covariances.
 
-## Estimators
+## Online policies
+
+::: ode_filters.calibration.NoCalibration
+
+::: ode_filters.calibration.DynamicCalibration
+
+::: ode_filters.calibration.DiagonalCalibration
+
+::: ode_filters.calibration.Calibration
+
+## Post-hoc estimators
 
 ::: ode_filters.calibration.sigma.posthoc_mle_sigma_sqr
 

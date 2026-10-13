@@ -73,7 +73,7 @@ class TestNoiseExclusion:
     def test_added_R_biases_sigma_downward(self):
         """Adding R to the residual covariance lowers sigma_hat -- the classic
         confounding of diffusion scale and measurement noise."""
-        from ode_filters.gaussian.algebra import sqr_marginalization
+        from ode_filters.gaussian import Gaussian, marginalize
 
         H = np.asarray([[1.0, -0.5]])
         m_pred = np.asarray([0.3, 0.7])
@@ -81,11 +81,13 @@ class TestNoiseExclusion:
         c = np.zeros(1)
 
         # Noise-free residual sqrt covariance.
-        _, Pz_clean = sqr_marginalization(H, c, np.zeros((1, 1)), m_pred, P_pred_sqr)
+        Pz_clean = marginalize(
+            H, c, np.zeros((1, 1)), Gaussian(m_pred, P_pred_sqr)
+        ).P_sqr
         # R > 0 added.
-        _, Pz_with_R = sqr_marginalization(
-            H, c, np.asarray([[0.5]]), m_pred, P_pred_sqr
-        )
+        Pz_with_R = marginalize(
+            H, c, np.asarray([[0.5]]), Gaussian(m_pred, P_pred_sqr)
+        ).P_sqr
         mz = H @ m_pred + c
 
         sigma_clean = float(quasi_mle_sigma_sqr(mz, Pz_clean))
@@ -95,57 +97,32 @@ class TestNoiseExclusion:
             "quasi-MLE downward."
         )
 
-    def test_adaptive_step_body_excludes_R_from_calibration(self):
-        """A single adaptive step body call: the per-step sigma_sqr should
-        equal the dynamic-diffusion quasi-MLE from ``H Q(h) H.T`` regardless
-        of the R the measurement model exposes (R only enters the update,
-        never the calibration)."""
-        from ode_filters.filters.ode_filter_adaptive import _make_step_body
+    def test_measurement_noise_never_enters_the_calibration(self):
+        """The per-step estimate is the quasi-MLE from ``H Q(h) H.T``, whatever
+        noise the measurement model carries (it only enters the update)."""
+        from ode_filters import gaussian_filter
         from ode_filters.information import ODEInformation
         from ode_filters.priors import IWP, taylor_mode_initialization
 
         def vf(x, *, t):
             return x * (1 - x)
 
-        x0 = np.asarray([0.1])
         prior = IWP(q=2, d=1)
-        mu_0, S0 = taylor_mode_initialization(vf, x0, q=2)
-        h, t = 0.1, 0.1
+        m_0, P_0_sqr = taylor_mode_initialization(vf, np.asarray([0.1]), q=2)
+        ts = np.asarray([0.0, 0.1])
+        clean = ODEInformation(vf, prior.E0, prior.E1)
+        noisy = ODEInformation(vf, prior.E0, prior.E1)
+        noisy.R = 0.5  # large, so any leakage would show
+        sigma_clean = gaussian_filter(m_0, P_0_sqr, prior, clean, ts).sigma_sqr[0]
+        sigma_noisy = gaussian_filter(m_0, P_0_sqr, prior, noisy, ts).sigma_sqr[0]
+        assert float(sigma_noisy) == pytest.approx(float(sigma_clean), rel=1e-10)
 
-        m_zero = ODEInformation(vf, prior.E0, prior.E1)
-        body_zero = _make_step_body(prior, m_zero, atol=1e-4, rtol=1e-2)
-        out_zero = body_zero(h, t, mu_0, S0)
-        # Step body always returns sigma as a length-d array (broadcast from
-        # scalar in non-diagonal modes). Index 0 for d=1 logistic.
-        sigma_zero = float(out_zero[9][0])
-
-        m_with_R = ODEInformation(vf, prior.E0, prior.E1)
-        m_with_R.R = 0.5  # large R to make any leakage obvious
-        body_R = _make_step_body(prior, m_with_R, atol=1e-4, rtol=1e-2)
-        out_R = body_R(h, t, mu_0, S0)
-        sigma_R = float(out_R[9][0])
-
-        # R=0 and R>0 calibration values agree: R never enters the
-        # dynamic-diffusion estimator.
-        assert sigma_R == pytest.approx(sigma_zero, rel=1e-10)
-
-        # Independent re-derivation via the dynamic-diffusion estimator.
-        # Linearise at the provisional predicted mean A m_prev + b (the
-        # quantity actually used inside the step body).
-        A_h = prior.A(h)
-        b_h = prior.b(h)
-        Q_h_sqr = np.linalg.cholesky(prior.Q(h)).T
-        m_pred_prov = A_h @ mu_0 + b_h
-        H_t, c_t = m_zero.linearize(m_pred_prov, t=t)
-        mz_pred = H_t @ m_pred_prov + c_t
-        sigma_recompute = float(quasi_mle_sigma_sqr_from_Q(mz_pred, H_t, Q_h_sqr))
-        assert sigma_zero == pytest.approx(sigma_recompute, rel=1e-10)
-
-        # Sanity: a naive estimator that *includes* R in P_z differs.
-        full_mz = out_R[5]
-        full_Pz = out_R[6]
-        sigma_naive_with_R = float(quasi_mle_sigma_sqr(full_mz, full_Pz))
-        assert sigma_naive_with_R != pytest.approx(sigma_zero, rel=1e-3)
+        # Independent re-derivation at the predicted mean.
+        h = 0.1
+        m_pred = prior.A(h) @ m_0 + prior.b(h)
+        H, c = clean.linearize(m_pred, t=h)
+        expected = quasi_mle_sigma_sqr_from_Q(H @ m_pred + c, H, prior.Q_sqr(h))
+        assert float(sigma_clean) == pytest.approx(float(expected), rel=1e-10)
 
 
 class TestPosthocMLE:

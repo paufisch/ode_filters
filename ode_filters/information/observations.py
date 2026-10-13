@@ -15,31 +15,25 @@ from ..gaussian.algebra import _check_noise_covariance, _safe_cholesky_sqr
 # Default measurement noise for observations
 DEFAULT_MEASUREMENT_NOISE = 1e-6
 
-# Tolerances for matching a query time t against Measurement.z_t. Set to
-# absorb the ~1e-8 drift between numpy.linspace and jax.numpy.linspace on
-# typical grids. Re-exported so the adaptive loop's "did we land on a
-# measurement time?" check uses the same tolerance as find_index.
+# Tolerances for matching measurement times to grid nodes, absorbing the ~1e-8
+# drift between numpy.linspace and jax.numpy.linspace on typical grids.
 MEASUREMENT_TIME_RTOL = 1e-5
 MEASUREMENT_TIME_ATOL = 1e-7
 
 
 class ObsModel(NamedTuple):
-    """Pre-computed observation data for sequential filtering.
+    """Data observations on a time grid, for the filters' ``obs_model``.
 
-    Describes linear, time-invariant observations where the observation
-    matrix ``H`` and noise covariance are constant across time and only
-    the measurement values vary per step.  Built by
-    ``prepare_observations`` from a list of ``Measurement``
-    objects and a time grid.
+    Linear observations ``y = H x + v`` with a constant ``H`` and noise; only the
+    data vary per step. Built by ``prepare_observations``.
 
     Attributes:
-        H: Observation Jacobian (constant), shape ``[obs_dim, state_dim]``.
-        R_sqr: Square-root noise covariance for active observations
-            (constant), shape ``[obs_dim, obs_dim]``.
-        c_seq: Observation offsets per step, shape ``[N, obs_dim]``.
-            Equal to ``-z[idx]`` when the observation is active, zero
-            otherwise.
-        mask: Boolean mask for active dimensions, shape ``[N, obs_dim]``.
+        H: Observation matrix, shape ``[obs_dim, state_dim]``.
+        R_sqr: Square-root noise covariance, shape ``[obs_dim, obs_dim]``.
+        c_seq: Offsets per filter step, ``-y`` where a row has data and zero
+            elsewhere, shape ``[N, obs_dim]``.
+        mask: Which rows have data at each step, shape ``[N, obs_dim]``. Rows
+            without data are ignored, so measurements can have different times.
     """
 
     H: Array
@@ -48,110 +42,95 @@ class ObsModel(NamedTuple):
     mask: Array
 
 
+def _grid_steps(times: onp.ndarray, steps: onp.ndarray) -> onp.ndarray:
+    """Index of the grid step ending at each time; ``-1`` where none does."""
+    idx = onp.clip(onp.searchsorted(steps, times), 0, len(steps) - 1)
+    out = onp.full(times.shape, -1)
+    for candidate in (idx, onp.clip(idx - 1, 0, len(steps) - 1)):
+        hit = onp.isclose(
+            steps[candidate],
+            times,
+            rtol=MEASUREMENT_TIME_RTOL,
+            atol=MEASUREMENT_TIME_ATOL,
+        )
+        out = onp.where((out < 0) & hit, candidate, out)
+    return out
+
+
 def prepare_observations(
     observations: list[Measurement],
     E0: ArrayLike,
     ts: ArrayLike,
 ) -> ObsModel | None:
-    """Build an ``ObsModel`` from ``Measurement`` objects.
+    """Build an ``ObsModel`` on the grid ``ts`` from ``Measurement`` objects.
 
-    Assumes linear, time-invariant observation matrices (``A`` and noise
-    are constant across time; only the measurement values ``z`` vary).
+    Filter step ``n`` updates at ``ts[n + 1]``, so every measurement time must be
+    a node of ``ts[1:]`` (matched with a small tolerance). Measurements may have
+    different times: at each step only the rows with data are conditioned on.
+    Off-grid data need the grid to include their times, e.g.
+    ``ts = np.union1d(ts, z_t)``; the filters accept non-uniform grids. The time
+    matching runs on the host, so the times must be concrete, while the data
+    values may be traced (e.g. differentiated).
 
     Args:
-        observations: List of Measurement constraints.
-        E0: State extraction matrix, shape ``[d, state_dim]``.
-        ts: Time grid of shape ``[N+1]`` (includes initial time ``t0``).
-            The filter uses ``ts[1:]`` for the ``N`` filter steps.
+        observations: The measurements.
+        E0: State extraction matrix, shape ``[d, state_dim]`` (for measurements
+            on ``E0 @ state``).
+        ts: Time grid of shape ``[N + 1]``, the solver's grid.
 
     Returns:
-        An ``ObsModel``, or ``None`` when *observations* is empty.
+        An ``ObsModel``, or ``None`` when ``observations`` is empty.
+
+    Raises:
+        ValueError: If a measurement time is not a node of ``ts[1:]``.
     """
     if not observations:
         return None
 
     E0 = np.asarray(E0)
-    ts = np.asarray(ts)
-    N = len(ts) - 1
+    steps = onp.asarray(ts, dtype=float)[1:]
+    n_steps = steps.shape[0]
     state_dim = E0.shape[1]
-    max_obs_dim = sum(m.dim for m in observations)
+    obs_dim = sum(m.dim for m in observations)
 
-    # --- Constant Jacobian and noise (computed once) ---
-    H = np.zeros((max_obs_dim, state_dim))
-    R_block = np.zeros((max_obs_dim, max_obs_dim))
+    H = np.zeros((obs_dim, state_dim))
+    R = np.zeros((obs_dim, obs_dim))
+    c_seq = np.zeros((n_steps, obs_dim))
+    mask = onp.zeros((n_steps, obs_dim), dtype=bool)
     offset = 0
     for m in observations:
-        H_m = m.A if m.full_state else m.A @ E0
-        H = H.at[offset : offset + m.dim, :].set(H_m)
-        R_block = R_block.at[offset : offset + m.dim, offset : offset + m.dim].set(
-            m.get_noise_matrix()
-        )
+        rows = slice(offset, offset + m.dim)
+        H = H.at[rows, :].set(m.A if m.full_state else m.A @ E0)
+        R = R.at[rows, rows].set(m.get_noise_matrix())
+        times = onp.asarray(m.z_t, dtype=float)
+        idx = _grid_steps(times, steps)
+        if onp.any(idx < 0):
+            missing = times[idx < 0]
+            raise ValueError(
+                f"Measurement times {missing.tolist()} are not nodes of the grid "
+                "ts[1:]. Include them in the grid (e.g. ts = np.union1d(ts, z_t); "
+                "the filters accept non-uniform grids); data at the initial time "
+                "ts[0] belong in the initial state."
+            )
+        c_seq = c_seq.at[idx, rows].set(-np.asarray(m.z))
+        mask[idx, rows] = True
         offset += m.dim
-
-    R_sqr = _safe_cholesky_sqr(R_block, max_obs_dim)
-
-    # --- Per-step offsets and masks ---
-    c_list: list[Array] = []
-    mask_list: list[Array] = []
-
-    for i in range(N):
-        t = float(ts[i + 1])
-        c_i = np.zeros(max_obs_dim)
-        mask_i = np.zeros(max_obs_dim, dtype=bool)
-
-        offset = 0
-        for m in observations:
-            idx = m.find_index(t)
-            if idx is not None:
-                c_i = c_i.at[offset : offset + m.dim].set(-m.z[idx])
-                mask_i = mask_i.at[offset : offset + m.dim].set(True)
-            offset += m.dim
-
-        c_list.append(c_i)
-        mask_list.append(mask_i)
-
-    mask = np.stack(mask_list)
-
-    # Guard against asynchronous / partial-dimension observations. The masked
-    # update consumed by the scan / adaptive paths is all-or-nothing per step
-    # (it gates on ``mask.any()``), so a step where only *some* of the stacked
-    # measurements fire would silently condition the inactive rows on a
-    # fabricated "observe 0". Such a step has a mask row that is neither all-on
-    # nor all-off. Reject it loudly until per-dimension masking is implemented
-    # (see ROADMAP: observation-API consolidation).
-    row_any = mask.any(axis=1)
-    row_all = mask.all(axis=1)
-    if bool(np.any(row_any & ~row_all)):
-        raise NotImplementedError(
-            "Asynchronous / partial observations are not supported by the "
-            "fixed-shape masked update: at some time step only a subset of the "
-            "stacked measurements fire, which would corrupt the inactive rows. "
-            "Use measurements that share the same observation times, or the "
-            "embedded-Measurement Python path (sqr_adaptive_loop). "
-            "Per-dimension masking is planned."
-        )
 
     return ObsModel(
         H=H,
-        R_sqr=R_sqr,
-        c_seq=np.stack(c_list),
-        mask=mask,
+        R_sqr=_safe_cholesky_sqr(R, obs_dim),
+        c_seq=c_seq,
+        mask=np.asarray(mask),
     )
 
 
 @dataclass(frozen=True)
 class Measurement:
-    """Time-varying linear measurement: A @ x = z[t] (active only at specified times).
+    """Noisy linear data ``z[n] = A @ x(z_t[n]) + v`` at the times ``z_t``.
 
-    This constraint is only active when the filter's current time matches one of
-    the measurement times in z_t. Time matching uses tolerance-based comparison
-    (not exact equality) to handle floating-point discrepancies.
-
-    Important:
-        When creating time grids, use the same linspace implementation (preferably
-        jax.numpy.linspace) for both measurement times (z_t) and filter time steps.
-        NumPy and JAX linspace can produce slightly different values (~1e-8 differences)
-        which may cause measurements to be missed with exact comparison.
+    Passed to the solvers through ``prepare_observations``, which matches the
+    times to the solver's grid with a small tolerance (absorbing the ~1e-8
+    differences between NumPy and JAX ``linspace``).
 
     Args:
         A: Measurement matrix (shape [k, d] or [k, state_dim] if full_state=True).
@@ -197,43 +176,6 @@ class Measurement:
                 f"({self.dim}, {self.dim}) matrix, got shape {np.shape(self.noise)}."
             )
         _check_noise_covariance(noise, "Measurement noise")
-
-    def find_index(
-        self,
-        t: float,
-        rtol: float = MEASUREMENT_TIME_RTOL,
-        atol: float = MEASUREMENT_TIME_ATOL,
-    ) -> int | None:
-        """Find measurement index for time t, or None if not found.
-
-        Uses binary search with tolerance for robust floating-point comparison.
-        Times are assumed to be sorted.
-
-        Note: Default tolerances are set to handle discrepancies between
-        NumPy and JAX linspace implementations, which can differ by ~1e-8
-        for typical time grids.
-        """
-        z_t = onp.asarray(self.z_t)
-        t_val = float(t)
-        idx = int(onp.searchsorted(z_t, t_val))
-        # Check the found position and neighbors for a close match
-        for i in [idx, idx - 1]:
-            if 0 <= i < len(z_t) and onp.isclose(z_t[i], t_val, rtol=rtol, atol=atol):
-                return i
-        return None
-
-    def residual(self, x: Array, t: float) -> Array | None:
-        """Compute residual: A @ x - z[t], or None if no measurement at t."""
-        idx = self.find_index(t)
-        if idx is None:
-            return None
-        return self.A @ x - self.z[idx]
-
-    def jacobian(self, t: float) -> Array | None:
-        """Return Jacobian (constant): A, or None if no measurement at t."""
-        if self.find_index(t) is None:
-            return None
-        return self.A
 
     @property
     def dim(self) -> int:

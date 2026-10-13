@@ -79,8 +79,7 @@ def _model_and_data(lam_init):
         vf=vf,
         init_fn=init_fn,
         prior=prior,
-        tspan=TSPAN,
-        N=N,
+        ts=np.linspace(*TSPAN, N + 1),
         ode_params=PositiveReal(np.array([lam_init])),
     )
     return model, data

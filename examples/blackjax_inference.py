@@ -41,7 +41,9 @@ def _problem_and_data():
         measure = ODEInformation(lambda x, *, t: -lam * x, prior.E0, prior.E1)
         return np.array([X0, 0.0, 0.0]), np.diag(np.array([1e-2, 1.0, 1.0])), measure
 
-    return InferenceProblem(build=build, prior=prior, tspan=TSPAN, N=N), data
+    return InferenceProblem(
+        build=build, prior=prior, ts=np.linspace(*TSPAN, N + 1)
+    ), data
 
 
 def run(num_warmup: int = 300, num_samples: int = 300, seed: int = 0):

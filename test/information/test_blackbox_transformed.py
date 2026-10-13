@@ -628,30 +628,6 @@ class TestMeasurementEdgeCases:
 
         assert np.allclose(R, noise_matrix)
 
-    def test_measurement_residual_no_measurement_at_time(self):
-        """Test that residual returns None when no measurement at time."""
-        A = np.array([[1.0]])
-        z = np.array([[0.5]])
-        z_t = np.array([0.5])
-
-        m = Measurement(A=A, z=z, z_t=z_t)
-
-        # No measurement at t=0
-        residual = m.residual(np.array([1.0]), t=0.0)
-        assert residual is None
-
-    def test_measurement_jacobian_no_measurement_at_time(self):
-        """Test that jacobian returns None when no measurement at time."""
-        A = np.array([[1.0]])
-        z = np.array([[0.5]])
-        z_t = np.array([0.5])
-
-        m = Measurement(A=A, z=z, z_t=z_t)
-
-        # No measurement at t=0
-        jacobian = m.jacobian(t=0.0)
-        assert jacobian is None
-
     def test_measurement_constraint_dimension_mismatch(self):
         """Test that mismatched constraint dimension raises error."""
 
@@ -708,7 +684,9 @@ class TestBlackBoxMeasurementInSolvers:
         def run(measure):
             if adaptive:
                 return gaussian_filter_adaptive(mu_0, P0_sqr, prior, measure, save_at)
-            return gaussian_filter(mu_0, P0_sqr, prior, measure, (0.0, 2.0), N=20)
+            return gaussian_filter(
+                mu_0, P0_sqr, prior, measure, np.linspace(0.0, 2.0, 21)
+            )
 
         got, want = run(black_box), run(reference)
         assert np.allclose(got.m, want.m, atol=1e-12)

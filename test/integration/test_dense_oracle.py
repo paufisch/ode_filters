@@ -60,14 +60,9 @@ def _upper_chol(P):
 
 
 def _transition(prior, h):
-    """Original-coordinate ``(A, Q)`` of one step, for plain and preconditioned priors."""
-    A = prior.A(h)
+    """Original-coordinate ``(A, Q)`` of one step (also for preconditioned priors)."""
     Q_sqr = prior.Q_sqr(h)
-    if hasattr(prior, "T"):
-        T = prior.T(h)
-        T_inv = np.linalg.inv(T)
-        return T @ A @ T_inv, T @ (Q_sqr.T @ Q_sqr) @ T.T
-    return A, Q_sqr.T @ Q_sqr
+    return prior.A(h), Q_sqr.T @ Q_sqr
 
 
 def _observations(E0, ts, H_obs_x, key):
@@ -119,7 +114,12 @@ def test_linear_ode_matches_dense_kalman(prior_name, calibration):
     ts = np.linspace(*TSPAN, N + 1)
 
     res = gaussian_filter(
-        m0, _upper_chol(P0), prior, measure, TSPAN, N, calibration=calibration
+        m0,
+        _upper_chol(P0),
+        prior,
+        measure,
+        np.linspace(*TSPAN, N + 1),
+        calibration=calibration,
     )
     H = prior.E1 - L @ prior.E0
     ref = dense_kalman(m0, P0, _steps(prior, H, ts), calibration=calibration)
@@ -128,7 +128,7 @@ def test_linear_ode_matches_dense_kalman(prior_name, calibration):
     assert_close(cov(res.P_sqr), ref.P, rtol=RTOL)
     assert_close(res.log_likelihood, ref.log_likelihood, rtol=RTOL)
     assert_close(res.sigma_sqr, ref.sigma_sqr, rtol=RTOL)
-    m_s, P_s_sqr = rts_smoother(prior, res)
+    m_s, P_s_sqr = rts_smoother(res)
     assert_close(m_s, ref.m_smooth, rtol=RTOL)
     assert_close(cov(P_s_sqr), ref.P_smooth, rtol=RTOL)
 
@@ -150,8 +150,7 @@ def test_linear_ode_with_observations_matches_dense_kalman(calibration):
         _upper_chol(P0),
         prior,
         measure,
-        TSPAN,
-        N,
+        np.linspace(*TSPAN, N + 1),
         calibration=calibration,
         obs_model=obs_model,
     )
@@ -164,7 +163,7 @@ def test_linear_ode_with_observations_matches_dense_kalman(calibration):
     assert_close(res.log_likelihood, ref.log_likelihood, rtol=RTOL)
     assert res.log_likelihood_obs is not None
     assert_close(res.log_likelihood_obs, ref.log_likelihood_obs, rtol=RTOL)
-    m_s, P_s_sqr = rts_smoother(prior, res)
+    m_s, P_s_sqr = rts_smoother(res)
     assert_close(m_s, ref.m_smooth, rtol=RTOL)
     assert_close(cov(P_s_sqr), ref.P_smooth, rtol=RTOL)
 
@@ -196,8 +195,7 @@ def test_hidden_input_with_non_diagonal_xi_matches_dense_kalman(calibration):
         _upper_chol(P0),
         prior,
         measure,
-        TSPAN,
-        N,
+        np.linspace(*TSPAN, N + 1),
         calibration=calibration,
         obs_model=obs_model,
     )
@@ -217,6 +215,6 @@ def test_hidden_input_with_non_diagonal_xi_matches_dense_kalman(calibration):
     assert res.log_likelihood_obs is not None
     assert_close(res.log_likelihood_obs, ref.log_likelihood_obs, rtol=RTOL)
     assert_close(res.sigma_sqr, ref.sigma_sqr, rtol=RTOL)
-    m_s, P_s_sqr = rts_smoother(prior, res)
+    m_s, P_s_sqr = rts_smoother(res)
     assert_close(m_s, ref.m_smooth, rtol=RTOL)
     assert_close(cov(P_s_sqr), ref.P_smooth, rtol=RTOL)
