@@ -12,9 +12,9 @@ name --
 - the **correction** (EK0/EK1/IEKF) is an object passed as ``correction=``;
 - **calibration** is a string (``"none"`` = static diffusion).
 
-All variants return a single :class:`FilterResult` with named fields, instead of
+All variants return a single ``FilterResult`` with named fields, instead of
 the old 9-to-16-wide positional tuples. Smoothing is a separate call,
-:func:`rts_smoother`, which consumes a result's backward pass.
+``rts_smoother``, which consumes a result's backward pass.
 """
 
 from __future__ import annotations
@@ -55,7 +55,10 @@ class FilterResult(NamedTuple):
             across calibration modes (for data-driven model comparison use
             ``log_likelihood_obs``).
         m_pred: Predicted (prior) means per step, ``[K-1, state_dim]`` (``None`` for
-            the adaptive save-at solver, which keeps no backward pass).
+            the adaptive save-at solver). For a preconditioned prior this and the
+            next four fields are in the preconditioned coordinates ``x_bar`` with
+            ``x = T @ x_bar``; map back with e.g. ``m_pred @ T.T`` and
+            ``P_pred_sqr @ T.T``.
         P_pred_sqr: Predicted square-root covariances per step.
         G_back: Backward-pass gains per step (smoother input).
         d_back: Backward-pass offsets per step.
@@ -64,7 +67,7 @@ class FilterResult(NamedTuple):
             to post-hoc diffusion calibration. For the adaptive solver this is the
             innovation of the sub-step that lands on each save time (its ``h`` is
             clamped to hit the save time, so the raw magnitudes are not comparable
-            across save points -- see :class:`AdaptiveSolveResult`; the whitened
+            across save points -- see ``AdaptiveSolveResult``; the whitened
             residual and NIS are unaffected).
         Pz_sqr: Predicted-observation innovation square-root covariances per step.
         mz_obs: External-observation innovation means per step,
@@ -91,13 +94,13 @@ class FilterResult(NamedTuple):
             adaptive solver always returns ``None`` here and folds the observation
             contribution into the combined ``log_likelihood`` instead.
         m_bar: Preconditioned-space means (``None`` unless the prior is
-            preconditioned); internal, consumed by :func:`rts_smoother`.
+            preconditioned); internal, consumed by ``rts_smoother``.
         P_bar_sqr: Preconditioned-space square-root covariances (``None`` for plain).
         T: Preconditioner matrix (``None`` for plain); presence selects the
             preconditioned smoother.
         success: Scalar boolean -- whether an adaptive solve reached every save
             time *and* produced a finite log-likelihood (see
-            :class:`AdaptiveSolveResult`). ``None`` for the fixed-grid paths,
+            ``AdaptiveSolveResult``). ``None`` for the fixed-grid paths,
             which run a deterministic number of steps and always complete.
     """
 
@@ -149,14 +152,15 @@ def gaussian_filter(
         tspan: Time interval ``(t0, t1)`` (a tuple, for jit-static hashing).
         N: Number of fixed-grid steps.
         correction: Linearization strategy (``TaylorCorrection`` /
-            ``IteratedTaylorCorrection``); ``None`` defaults to EK1.
+            ``IteratedTaylorCorrection`` / ``QuadratureCorrection``); ``None``
+            defaults to EK1.
         calibration: Diffusion calibration mode -- ``"dynamic"`` (default),
             ``"none"`` (static), ``"diagonal"``, or ``"diagonal_ekf0"``.
         obs_model: Optional external observations (see ``prepare_observations``).
         min_sigma_sqr: Lower bound on the per-step ``sigma_hat^2``.
 
     Returns:
-        A :class:`FilterResult`.
+        A ``FilterResult``.
     """
     t = np.linspace(tspan[0], tspan[1], N + 1)
 
@@ -302,23 +306,57 @@ def gaussian_filter_adaptive(
 ) -> FilterResult:
     """Adaptive-step Gaussian filter, returning the solution at ``save_at``.
 
-    ``jit`` / ``vmap`` / reverse-``grad``-able (checkpointed adaptive loop).
-    See :func:`sqr_adaptive_solve` for the full argument docs.
-
-    ``correction`` selects the linearization (EK0/EK1/IEKF), matching
-    :func:`gaussian_filter`; ``result.success`` reports whether the adaptive
-    sub-stepping reached every save time.
+    Between consecutive save times the solver takes as many accepted/rejected
+    sub-steps as the error control needs; the last sub-step of each interval is
+    shortened to land exactly on the save time. The whole solve is ``jit`` /
+    ``vmap`` / reverse-``grad``-able (a checkpointed while-loop inside a scan),
+    and ``result.success`` reports whether every save time was reached.
 
     With an ``obs_model`` the observation likelihood is folded into the combined
     ``result.log_likelihood`` (summed over accepted steps); unlike the fixed-grid
-    :func:`gaussian_filter`, ``result.log_likelihood_obs`` is always ``None`` on
-    the adaptive path.
+    ``gaussian_filter``, ``result.log_likelihood_obs`` is always ``None`` here.
 
-    With ``smoother=True`` the result carries a fixed-point-smoothing backward
-    pass (one composite conditional per save interval, O(#save points) memory),
-    so :func:`rts_smoother` applies directly. Default ``False`` keeps the
-    filtering-only path (no backward pass, lower cost); ``smoother=True`` is not
-    supported together with ``obs_model``.
+    Args:
+        mu_0: Initial state mean, shape ``[state_dim]``.
+        P_0_sqr: Initial state covariance (square-root form).
+        prior: Gauss-Markov prior (not preconditioned; see Raises). Its ``q`` sets
+            the default controller order.
+        measure: ODE-information measurement model (ODE + Conservation).
+        save_at: Strictly increasing 1-D array of save times; ``save_at[0]`` is the
+            initial time, where the initial state is returned unchanged.
+        correction: Linearization strategy (``TaylorCorrection`` /
+            ``IteratedTaylorCorrection`` / ``QuadratureCorrection``); ``None``
+            defaults to EK1.
+        obs_model: Optional linear observations, assimilated at the save times.
+            Build it on the save grid,
+            ``prepare_observations(measurements, prior.E0, save_at)``.
+        atol: Absolute tolerance of the normalised local-error estimate.
+        rtol: Relative tolerance of the normalised local-error estimate.
+        h_init: First trial step; defaults to ``(save_at[-1] - save_at[0]) / 100``.
+        calibration: Diffusion calibration mode -- ``"dynamic"`` (default),
+            ``"none"``, ``"diagonal"``, or ``"diagonal_ekf0"``.
+        controller: Step-size controller; defaults to
+            ``PIController(order=prior.q)``. Its ``propose`` runs inside the
+            traced loop, so a custom controller must use ``jax.numpy``.
+        min_sigma_sqr: Lower bound on the per-step ``sigma_hat^2``.
+        max_steps: Cap on sub-steps *per save interval* (it bounds the
+            checkpointed while-loop). Raise it, or loosen the tolerances, if
+            ``result.success`` is ``False``.
+        smoother: Also compute a fixed-point-smoothing backward pass (one
+            composite conditional per save interval, ``O(#save points)`` memory),
+            so ``rts_smoother`` applies to the result. Not supported together
+            with ``obs_model``.
+
+    Returns:
+        A ``FilterResult`` on the ``save_at`` grid. ``m_pred``, ``P_pred_sqr`` and
+        ``sigma_sqr`` are ``None``; the backward-pass fields are ``None`` unless
+        ``smoother=True``.
+
+    Raises:
+        ValueError: If ``calibration`` is unknown, or a diagonal mode is used
+            with a non-diagonal state-block ``Xi``.
+        NotImplementedError: If ``prior`` is preconditioned, or ``smoother=True``
+            is combined with ``obs_model``.
     """
     res = sqr_adaptive_solve(
         mu_0,
@@ -363,16 +401,17 @@ def gaussian_filter_adaptive(
 def rts_smoother(prior: BasePrior, result: FilterResult) -> tuple[Array, Array]:
     """Rauch-Tung-Striebel smoothing of a Gaussian-filter result.
 
-    Works on a :func:`gaussian_filter` result (backward pass over the fixed grid)
-    or a :func:`gaussian_filter_adaptive` result run with ``smoother=True`` (the
+    Works on a ``gaussian_filter`` result (backward pass over the fixed grid)
+    or a ``gaussian_filter_adaptive`` result run with ``smoother=True`` (the
     fixed-point backward pass over the save grid); both carry the required
     ``G_back`` / ``d_back`` / ``P_back_sqr``. A filtering-only adaptive result
     (``smoother=False``, the default) does not, and raises.
 
     Args:
-        prior: The prior used for the forward filter (selects the preconditioned
-            smoother when preconditioned).
-        result: A :class:`FilterResult` carrying a backward pass.
+        prior: Unused; kept for backward compatibility. The result carries
+            everything the backward pass needs (a preconditioned run is
+            recognised by its ``result.T``).
+        result: A ``FilterResult`` carrying a backward pass.
 
     Returns:
         Tuple ``(m_smooth, P_smooth_sqr)`` of smoothed means and square-root

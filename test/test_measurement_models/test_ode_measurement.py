@@ -1,15 +1,19 @@
 """Tests for ODE information classes and constraint dataclasses."""
 
+import jax
 import jax.numpy as np
 import pytest
 
 from ode_filters.measurement.measurement_models import (
+    BlackBoxMeasurement,
     Conservation,
     Measurement,
     ODEInformation,
     ODEInformationWithHidden,
+    SecondOrderODEInformation,
     SecondOrderODEInformationWithHidden,
 )
+from ode_filters.priors.gmp_priors import IWP
 
 
 def make_projection_matrices(d: int, q: int):
@@ -440,3 +444,123 @@ class TestHiddenStates:
         # dg/d[x, x', x'', u, u', u''] = [1, 2, 1, 0.5, 0, 0]
         expected = np.array([[1.0, 2.0, 1.0, 0.5, 0.0, 0.0]])
         assert np.allclose(jacobian, expected, atol=1e-5)
+
+
+class TestSelectorValidation:
+    """Mismatched selection matrices used to broadcast silently."""
+
+    @staticmethod
+    def vf(x, *, t):
+        return -x
+
+    def test_rejects_E1_with_fewer_rows_than_E0(self):
+        prior = IWP(q=2, d=2)
+        with pytest.raises(ValueError, match="E1 must have as many rows as E0"):
+            ODEInformation(self.vf, prior.E0, prior.E1[:1])
+
+    def test_rejects_mismatched_columns(self):
+        with pytest.raises(ValueError, match="one column per state entry"):
+            ODEInformation(self.vf, IWP(q=2, d=1).E0, IWP(q=1, d=1).E1)
+
+    def test_rejects_non_matrix_selector(self):
+        prior = IWP(q=2, d=1)
+        with pytest.raises(ValueError, match="E0 must be a 2-D selection matrix"):
+            ODEInformation(self.vf, prior.E0[0], prior.E1)
+
+    def test_missing_E2_names_the_cause(self):
+        prior = IWP(q=1, d=1)  # E2 needs q >= 2
+        with pytest.raises(ValueError, match=r"E2 is None .*q >= 2"):
+            SecondOrderODEInformation(
+                lambda x, v, *, t: -x, prior.E0, prior.E1, prior.E2
+            )
+
+    def test_missing_other_selector(self):
+        prior = IWP(q=2, d=1)
+        with pytest.raises(ValueError, match="E1 is None"):
+            ODEInformation(self.vf, prior.E0, None)
+
+
+class TestConstraintInputs:
+    def test_conservation_accepts_lists(self):
+        cons = Conservation(A=[[1.0, 1.0]], p=[1.0])
+        assert cons.A.shape == (1, 2) and cons.p.shape == (1,)
+
+    def test_conservation_rejects_wrong_ranks(self):
+        with pytest.raises(ValueError, match="2-D 'A' and a 1-D 'p'"):
+            Conservation(A=np.ones(2), p=np.ones(1))
+
+    def test_unknown_constraint_type_is_rejected(self):
+        prior = IWP(q=1, d=2)
+        with pytest.raises(TypeError, match="must be Conservation objects"):
+            ODEInformation(
+                lambda x, *, t: -x, prior.E0, prior.E1, constraints=[(1.0, 2.0)]
+            )
+
+    def test_constraints_list_is_copied(self):
+        prior = IWP(q=1, d=2)
+        constraints = [Conservation(np.array([[1.0, 1.0]]), np.array([1.0]))]
+        model = ODEInformation(
+            lambda x, *, t: -x, prior.E0, prior.E1, constraints=constraints
+        )
+        constraints.append(Conservation(np.array([[1.0, -1.0]]), np.array([0.0])))
+        assert model.g(np.ones(4), t=0.0).shape == (3,)
+
+    def test_measurement_accepts_lists(self):
+        meas = Measurement(A=[[1.0]], z=[[0.5], [0.6]], z_t=[0.1, 0.2])
+        assert meas.z.shape == (2, 1) and meas.z_t.shape == (2,)
+
+
+class TestNoiseCovarianceValidation:
+    """A singular noise covariance that mixes channels used to give NaN deep
+    inside a solve; noise-free channels (zero rows/columns) stay allowed."""
+
+    singular = np.array([[1.0, 1.0], [1.0, 1.0]])
+
+    def test_measurement_rejects_singular_correlated_noise(self):
+        with pytest.raises(ValueError, match="positive-definite covariance"):
+            Measurement(
+                A=np.eye(2), z=np.zeros((1, 2)), z_t=np.zeros(1), noise=self.singular
+            )
+
+    def test_measurement_rejects_wrongly_shaped_noise(self):
+        with pytest.raises(ValueError, match="'noise' must be a scalar"):
+            Measurement(
+                A=np.eye(2), z=np.zeros((1, 2)), z_t=np.zeros(1), noise=np.ones(3)
+            )
+
+    def test_noise_free_channels_are_allowed(self):
+        Measurement(
+            A=np.eye(2),
+            z=np.zeros((1, 2)),
+            z_t=np.zeros(1),
+            noise=np.diag(np.array([0.0, 1.0])),
+        )
+        prior = IWP(q=1, d=2)
+        model = ODEInformation(lambda x, *, t: -x, prior.E0, prior.E1)
+        model.R = 0.0
+        assert np.all(np.isfinite(model.get_noise(t=0.0)))
+
+    def test_R_setter_rejects_singular_correlated_noise(self):
+        prior = IWP(q=1, d=2)
+        model = ODEInformation(lambda x, *, t: -x, prior.E0, prior.E1)
+        with pytest.raises(ValueError, match="positive-definite covariance"):
+            model.R = self.singular
+
+    def test_black_box_rejects_singular_correlated_noise(self):
+        with pytest.raises(ValueError, match="positive-definite covariance"):
+            BlackBoxMeasurement(
+                lambda s, *, t: s[:2], state_dim=4, obs_dim=2, noise=self.singular
+            )
+        model = BlackBoxMeasurement(lambda s, *, t: s[:2], state_dim=4, obs_dim=2)
+        with pytest.raises(ValueError, match="positive-definite covariance"):
+            model.R = self.singular
+
+    def test_check_is_skipped_for_traced_noise(self):
+        """Noise as a differentiated parameter must not trip the eager check."""
+
+        def noise_matrix(n):
+            return Measurement(
+                A=np.eye(1), z=np.zeros((1, 1)), z_t=np.zeros(1), noise=n
+            ).get_noise_matrix()
+
+        assert np.allclose(jax.jit(noise_matrix)(0.5), 0.5)

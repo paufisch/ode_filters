@@ -1,6 +1,6 @@
 """Pluggable linearization/correction strategies for the Gaussian ODE filter.
 
-A :class:`Correction` owns the predicted-mean -> updated-posterior transition of a
+A ``Correction`` owns the predicted-mean -> updated-posterior transition of a
 filter step. The measurement model declares *what* to observe (the residual ``g``,
 its Jacobian, and the observation noise); the Correction decides *how* to linearize
 and update. Separating these two axes lets any measurement model (ODE information,
@@ -27,7 +27,7 @@ Shipped schemes:
 
 The Taylor schemes reuse the existing square-root algebra;
 ``QuadratureCorrection`` adds only the quadrature of
-:mod:`~ode_filters.filters.statistical_linearization` on top of the same update.
+``statistical_linearization`` on top of the same update.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ from .statistical_linearization import QuadratureRule, quadrature_nodes, slr_lin
 
 
 class CorrectionResult(NamedTuple):
-    """Output of a single :meth:`Correction.correct` call.
+    """Output of a single ``Correction.correct`` call.
 
     Attributes:
         m: Updated posterior mean (shape ``[state_dim]``).
@@ -96,9 +96,9 @@ def _noise(measure: BaseODEInformation, t: ArrayLike) -> Array:
 class Correction(eqx.Module):
     """Base class for linearization/correction strategies.
 
-    A Correction is an :class:`equinox.Module` (static configuration), so it can be
+    A Correction is an ``equinox.Module`` (static configuration), so it can be
     captured by ``jax.jit`` / ``jax.lax.scan`` without retracing. Subclasses own the
-    full predicted -> posterior update and return a :class:`CorrectionResult`.
+    full predicted -> posterior update and return a ``CorrectionResult``.
     """
 
     @abc.abstractmethod
@@ -189,7 +189,7 @@ class QuadratureCorrection(Correction):
     Replaces the Taylor tangent at the predicted mean with the affine map that
     best fits the residual *over the predictive spread*, computing the required
     Gaussian expectations by quadrature on the projected marginal (see
-    :mod:`~ode_filters.filters.statistical_linearization`). Two things change
+    ``statistical_linearization``). Two things change
     relative to ``TaylorCorrection(order=1)``:
 
     - ``H`` becomes the *expected* Jacobian rather than the Jacobian at the mean;
@@ -221,9 +221,9 @@ class QuadratureCorrection(Correction):
         max_iters: Number of posterior-linearization passes. ``1`` (default) is
             the one-shot filter; ``> 1`` is the iterated posterior-linearization
             filter (IPLF), which refits the surrogate over the *updated* density.
-            Contrast :class:`IteratedTaylorCorrection`, which iterates the
+            Contrast ``IteratedTaylorCorrection``, which iterates the
             linearization *point* at zero spread. The whole-trajectory version is
-            :func:`~ode_filters.filters.ipls.ipls_smoother`.
+            ``ipls_smoother``.
     """
 
     rule: QuadratureRule = eqx.field(static=True, default="gauss_hermite")

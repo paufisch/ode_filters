@@ -10,7 +10,7 @@ import jax.experimental.jet
 import jax.numpy as np
 import numpy as onp
 from jax import Array
-from jax.scipy.linalg import expm
+from jax.scipy.linalg import block_diag, expm
 from jax.typing import ArrayLike
 
 MatrixFunction = Callable[[ArrayLike], Array]
@@ -49,6 +49,23 @@ def _safe_sqrt(x: ArrayLike) -> Array:
 
 
 class BasePrior(ABC):
+    """Base class of the Gauss-Markov priors.
+
+    A prior models a ``d``-dimensional solution ``x(t)`` together with its first
+    ``q`` derivatives, stacked derivative-major into the state
+    ``Y = [x, x', ..., x^(q)]`` of length ``(q+1)*d``. Over a step of size ``h`` it
+    is the linear-Gaussian transition ``Y(t+h) = A(h) Y(t) + b(h) + noise`` with
+    process noise covariance ``Q(h) = Q_sqr(h).T @ Q_sqr(h)``. Subclasses define
+    ``A``, ``b`` and ``Q``; the filters consume ``Q_sqr``.
+
+    Args:
+        q: Number of modelled derivatives (the smoothness order).
+        d: Dimension of the solution ``x``.
+        Xi: Component-correlation matrix of the driving noise, shape ``[d, d]``;
+            defaults to the identity. It sets the scale of the prior uncertainty
+            (together with the calibrated ``sigma^2``).
+    """
+
     def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         if not isinstance(q, int):
             raise TypeError("q must be an integer.")
@@ -77,17 +94,17 @@ class BasePrior(ABC):
 
     @property
     def E0(self) -> Array:
-        """State extraction matrix (shape [d, (q+1)*d])."""
+        """State extraction matrix (shape ``[d, (q+1)*d]``)."""
         return self._E0
 
     @property
     def E1(self) -> Array:
-        """First derivative extraction matrix (shape [d, (q+1)*d])."""
+        """First derivative extraction matrix (shape ``[d, (q+1)*d]``)."""
         return self._E1
 
     @property
     def E2(self) -> Array | None:
-        """Second derivative extraction matrix (shape [d, (q+1)*d]), or None if q < 2."""
+        """Second derivative extraction matrix (shape ``[d, (q+1)*d]``), or None if q < 2."""
         return self._E2
 
     @staticmethod
@@ -358,7 +375,7 @@ def _iwp_precond_q_bar_sqr(q: int) -> Array:
 def _check_iwp_q_bar_factor(factor: Array, q: int) -> None:
     """Defensive backstop: raise if the IWP ``Q_bar`` square-root factor is non-finite.
 
-    With the closed-form factor (:func:`_iwp_precond_q_bar_sqr`) this stays finite and
+    With the closed-form factor (``_iwp_precond_q_bar_sqr``) this stays finite and
     accurate well past ``q = 20``, so this guard is not expected to fire in any
     practical range; it remains a cheap construction-time sanity check so that a
     pathological non-finite factor fails loudly instead of silently propagating a
@@ -385,7 +402,19 @@ def _check_iwp_q_bar_factor(factor: Array, q: int) -> None:
 
 
 class IWP(BasePrior):
-    """Integrated Wiener Process prior model."""
+    """Integrated Wiener process prior: the default choice.
+
+    The ``q``-th derivative of the solution is Brownian motion, so between grid
+    points the prior behaves like a polynomial of degree ``q`` whose top
+    coefficient is driven by noise. ``A(h)`` and the square-root process noise
+    ``Q_sqr(h)`` are closed-form.
+
+    Args:
+        q: Number of modelled derivatives (the order of the method).
+        d: Dimension of the solution ``x``.
+        Xi: Component-correlation matrix of the driving noise, shape ``[d, d]``;
+            defaults to the identity.
+    """
 
     def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
         super().__init__(q, d, Xi)
@@ -409,7 +438,7 @@ class IWP(BasePrior):
             h: Step size.
 
         Returns:
-            State transition matrix (shape [(q+1)*d, (q+1)*d]).
+            State transition matrix (shape ``[(q+1)*d, (q+1)*d]``).
         """
         return np.kron(self._A(self._validate_h(h)), self._id)
 
@@ -420,7 +449,7 @@ class IWP(BasePrior):
             h: Step size.
 
         Returns:
-            Zero drift vector (shape [(q+1)*d]).
+            Zero drift vector (shape ``[(q+1)*d]``).
         """
         return self._b
 
@@ -431,7 +460,7 @@ class IWP(BasePrior):
             h: Step size.
 
         Returns:
-            Diffusion matrix (shape [(q+1)*d, (q+1)*d]).
+            Diffusion matrix (shape ``[(q+1)*d, (q+1)*d]``).
         """
         return np.kron(self._Q(self._validate_h(h)), self.xi)
 
@@ -439,7 +468,7 @@ class IWP(BasePrior):
         """Closed-form upper-triangular square root of ``Q(h)``.
 
         ``Q(h)_sqr = kron(chol(Q_bar).T @ T(h), chol(xi).T)`` (see
-        :meth:`__init__`); never forms or factorizes the dense ill-conditioned
+        ``__init__``); never forms or factorizes the dense ill-conditioned
         ``Q(h)``.
         """
         Q_scalar_sqr = self._Q_bar_sqr_scalar @ self._T_scalar(self._validate_h(h))
@@ -447,11 +476,19 @@ class IWP(BasePrior):
 
 
 class PrecondIWP(BasePrior):
-    """Preconditioned Integrated Wiener Process prior.
+    """Integrated Wiener process prior in step-size-preconditioned coordinates.
 
-    Uses a preconditioning transformation T(h) to make matrices stepsize-independent.
-    The transformation matrices A() and Q() are constant (independent of h), while
-    the stepsize dependence is absorbed into T(h).
+    The same process as ``IWP``, expressed in the coordinates
+    ``x_bar = T(h)^-1 x`` in which ``A`` and ``Q`` no longer depend on the step
+    size; all of the ``h`` dependence moves into the diagonal ``T(h)``. This keeps
+    the recursion well conditioned at high ``q`` or small ``h``. Supported by the
+    fixed-grid ``gaussian_filter`` only.
+
+    Args:
+        q: Number of modelled derivatives (the order of the method).
+        d: Dimension of the solution ``x``.
+        Xi: Component-correlation matrix of the driving noise, shape ``[d, d]``;
+            defaults to the identity.
     """
 
     def __init__(self, q: int, d: int, Xi: ArrayLike | None = None):
@@ -471,7 +508,7 @@ class PrecondIWP(BasePrior):
             h: Step size (unused, accepted for interface compatibility).
 
         Returns:
-            Constant transition matrix (shape [(q+1)*d, (q+1)*d]).
+            Constant transition matrix (shape ``[(q+1)*d, (q+1)*d]``).
         """
         return np.kron(self._A_bar, self._id)
 
@@ -482,7 +519,7 @@ class PrecondIWP(BasePrior):
             h: Step size (unused, accepted for interface compatibility).
 
         Returns:
-            Zero drift vector (shape [(q+1)*d]).
+            Zero drift vector (shape ``[(q+1)*d]``).
         """
         return self._b
 
@@ -493,14 +530,14 @@ class PrecondIWP(BasePrior):
             h: Step size (unused, accepted for interface compatibility).
 
         Returns:
-            Constant diffusion matrix (shape [(q+1)*d, (q+1)*d]).
+            Constant diffusion matrix (shape ``[(q+1)*d, (q+1)*d]``).
         """
         return np.kron(self._Q_bar, self.xi)
 
     def Q_sqr(self, h: ArrayLike | None = None) -> Array:
         """Return the constant upper-triangular square root of ``Q``.
 
-        Stepsize-independent in preconditioned space (see :meth:`__init__`).
+        Stepsize-independent in preconditioned space (see ``__init__``).
         """
         return self._Q_sqr_const
 
@@ -511,7 +548,7 @@ class PrecondIWP(BasePrior):
             h: Step size.
 
         Returns:
-            Preconditioning transformation matrix (shape [(q+1)*d, (q+1)*d]).
+            Preconditioning transformation matrix (shape ``[(q+1)*d, (q+1)*d]``).
         """
         return np.kron(self._T(self._validate_h(h)), self._id)
 
@@ -582,7 +619,7 @@ def _gauss_legendre(n_quad: int, q: int) -> tuple[Array, Array]:
 
     Raises:
         ValueError: If ``n_quad <= q``. The QR in
-            :func:`_sqr_noise_via_quadrature` stacks one block of rows per node
+            ``_sqr_noise_via_quadrature`` stacks one block of rows per node
             (one row per dispersion column), so fewer than ``q + 1`` nodes yields
             a factor with fewer rows than the ``q + 1`` derivative blocks of the
             state instead of a square one -- which is not a mildly less accurate
@@ -640,7 +677,7 @@ def _make_matern_sqr_noise(
     ``gl_weights`` the Gauss-Legendre nodes/weights on ``[-1, 1]``.
 
     Raises:
-        ValueError: If ``n_quad <= q`` (see :func:`_gauss_legendre`).
+        ValueError: If ``n_quad <= q`` (see ``_gauss_legendre``).
     """
     gl_nodes, gl_weights = _gauss_legendre(n_quad, q)
     D = q + 1
@@ -677,7 +714,7 @@ def _matern_scalar_Q_sqr(
     (Bosch, Hennig & Tronarp 2023, used there for the IOUP prior). The dense,
     severely ill-conditioned ``Q(h)`` is never formed or factorized, and the
     matrix exponentials are evaluated in the well-scaled normalized coordinates of
-    :func:`_make_matern_sqr_noise`; the factor is mapped back with ``D_lam``. This
+    ``_make_matern_sqr_noise``; the factor is mapped back with ``D_lam``. This
     is jit/vmap/grad-safe (reduced-mode QR).
     """
     F_bar, g_bar, D_lam, gl_nodes, gl_weights = consts
@@ -691,7 +728,7 @@ def _matern_scalar_A(
     """Scalar Matern transition ``A(h) = expm(F h)`` (the ``[q+1, q+1]`` block).
 
     Evaluated as ``D_lam expm(lam M h) D_lam^-1`` in the length-scale-normalized
-    coordinates of :func:`_make_matern_sqr_noise`: the companion drift is
+    coordinates of ``_make_matern_sqr_noise``: the companion drift is
     ``F = D_lam (lam M) D_lam^-1``, so the exponential is taken of a matrix whose
     entries are ``O(lam h)`` instead of ``O(lam^(q+1) h)``. This stays finite at
     short length scales, where the ``expm`` of the ``[[F, S], [0, -F.T]]``
@@ -708,13 +745,13 @@ class MaternPrior(BasePrior):
     Note:
         ``Q(h)`` is the dense block-matrix-exponential (matrix-fraction) noise,
         which is severely ill-conditioned at high smoothness. The square-root
-        factor :meth:`Q_sqr` that the filter consumes is therefore *not* a
+        factor ``Q_sqr`` that the filter consumes is therefore *not* a
         Cholesky of that dense ``Q``; it is built directly by a square-root
         matrix-fraction decomposition in length-scale-normalized coordinates
-        (see :func:`_matern_scalar_Q_sqr`), which stays finite and accurate up to
+        (see ``_matern_scalar_Q_sqr``), which stays finite and accurate up to
         the float64 order ceiling (roughly ``q ~ 18``). The number of quadrature
         nodes is configurable via ``n_quad``. (``Q(h)`` itself still loses
-        positive-definiteness around ``q >= 6``; prefer :meth:`Q_sqr` downstream.)
+        positive-definiteness around ``q >= 6``; prefer ``Q_sqr`` downstream.)
     """
 
     def __init__(
@@ -743,7 +780,7 @@ class MaternPrior(BasePrior):
             length_scale: Length scale of the process.
             Xi: Optional component-correlation matrix (shape [d, d]).
             n_quad: Number of Gauss-Legendre nodes for the square-root
-                matrix-fraction decomposition used by :meth:`Q_sqr` (must exceed
+                matrix-fraction decomposition used by ``Q_sqr`` (must exceed
                 ``q``; the default is robust to the float64 order ceiling).
         """
         super().__init__(q, d, Xi)
@@ -770,14 +807,17 @@ class MaternPrior(BasePrior):
             )
 
     def A_and_Q(self, h: ArrayLike) -> tuple[Array, Array]:
-        """Scalar ``(A(h), Q(h))``, both in length-scale-normalized coordinates.
+        """Scalar ``(A(h), Q(h))``: the ``[q+1, q+1]`` blocks before the ``kron``.
+
+        Both are in the original coordinates; they are *computed* via the
+        length-scale-normalized form for stability.
 
         ``A(h) = D_lam expm(lam M h) D_lam^-1`` -- the companion drift is
         ``F = D_lam (lam M) D_lam^-1`` with ``M`` the fixed binomial companion of
-        :func:`_make_matern_sqr_noise`, so the exponential is taken of a matrix
+        ``_make_matern_sqr_noise``, so the exponential is taken of a matrix
         whose entries are ``O(lam h)`` instead of ``O(lam^(q+1) h)``.  ``Q(h)`` is
         ``R.T @ R`` from the square-root matrix-fraction decomposition that
-        :meth:`Q_sqr` already uses.
+        ``Q_sqr`` already uses.
 
         Both used to come out of one ``expm`` of the ``[[F, S], [0, -F.T]]``
         Hamiltonian block (matrix fraction decomposition).  That
@@ -792,9 +832,8 @@ class MaternPrior(BasePrior):
             h: Step size.
 
         Returns:
-            Tuple of (A_h, Q_h) where:
-            - A_h: State transition matrix (shape [n, n])
-            - Q_h: Diffusion matrix (shape [n, n])
+            Tuple ``(A_h, Q_h)`` of the scalar transition matrix and process-noise
+            covariance, each of shape ``[q+1, q+1]``.
         """
         h = self._validate_h(h)
         A_h = self._A_scalar(h)
@@ -812,7 +851,7 @@ class MaternPrior(BasePrior):
             h: Step size.
 
         Returns:
-            State transition matrix (shape [n, n]).
+            State transition matrix (shape ``[(q+1)*d, (q+1)*d]``).
         """
         return np.kron(self._A_scalar(self._validate_h(h)), self._id)
 
@@ -823,7 +862,7 @@ class MaternPrior(BasePrior):
             h: Step size.
 
         Returns:
-            Zero drift vector (shape [(q+1)*d]).
+            Zero drift vector (shape ``[(q+1)*d]``).
         """
         # ``self._b`` is the Kron-lifted zero drift of length ``(q+1)*d`` set by
         # ``BasePrior.__init__`` -- using it (rather than ``np.zeros(self.n)``,
@@ -838,7 +877,7 @@ class MaternPrior(BasePrior):
             h: Step size.
 
         Returns:
-            Diffusion matrix (shape [(q+1)*d, (q+1)*d]).
+            Diffusion matrix (shape ``[(q+1)*d, (q+1)*d]``).
         """
         _, Q_h = self.A_and_Q(h)
         Q_h = 0.5 * (Q_h + Q_h.T)
@@ -848,7 +887,7 @@ class MaternPrior(BasePrior):
         """Upper-triangular square root of ``Q(h)``: ``Q_sqr.T @ Q_sqr == Q(h)``.
 
         ``Q(h)_sqr = kron(R(h), chol(Xi))`` where ``R`` is the scalar Matern noise
-        factor from :func:`_matern_scalar_Q_sqr` (a square-root matrix-fraction
+        factor from ``_matern_scalar_Q_sqr`` (a square-root matrix-fraction
         decomposition in length-scale-normalized coordinates). Unlike the
         dense-Cholesky default this never forms the severely ill-conditioned
         ``Q(h)``, so it stays finite and accurate up to the float64 order ceiling
@@ -868,9 +907,9 @@ class PrecondMaternPrior(BasePrior):
     Note:
         The IWP diagonal preconditioner here only removes the step-size scaling;
         it does *not* address the length-scale/order conditioning of the dense
-        ``expm``-derived ``Q``. The square-root factor :meth:`Q_sqr` therefore uses
+        ``expm``-derived ``Q``. The square-root factor ``Q_sqr`` therefore uses
         the same stable square-root matrix-fraction decomposition as
-        ``MaternPrior`` (see :func:`_matern_scalar_Q_sqr`), staying finite up to the
+        ``MaternPrior`` (see ``_matern_scalar_Q_sqr``), staying finite up to the
         float64 order ceiling (``q ~ 18``) rather than NaN-ing around ``q >= 6``.
 
     Args:
@@ -879,7 +918,7 @@ class PrecondMaternPrior(BasePrior):
         length_scale: Length scale of the Matern process.
         Xi: Optional scaling matrix (shape [d, d]).
         n_quad: Number of Gauss-Legendre nodes for the square-root
-            matrix-fraction decomposition used by :meth:`Q_sqr` (must exceed
+            matrix-fraction decomposition used by ``Q_sqr`` (must exceed
             ``q``; the default is robust to the float64 order ceiling).
     """
 
@@ -903,8 +942,8 @@ class PrecondMaternPrior(BasePrior):
     def _raw_A_and_Q(self, h: ArrayLike) -> tuple[Array, Array]:
         """Compute raw (non-preconditioned) scalar ``A(h)`` and ``Q(h)``.
 
-        Same stable construction as :meth:`MaternPrior.A_and_Q`: ``A`` from the
-        length-scale-normalized exponential (:func:`_matern_scalar_A`) and
+        Same stable construction as ``MaternPrior.A_and_Q``: ``A`` from the
+        length-scale-normalized exponential (``_matern_scalar_A``) and
         ``Q = R.T @ R`` from the square-root MFD factor. The ``expm`` of the
         ``[[F, S], [0, -F.T]]`` Hamiltonian block that used to be taken here
         overflows to NaN at short length scales (e.g. ``q = 2``,
@@ -948,7 +987,7 @@ class PrecondMaternPrior(BasePrior):
             h: Step size (required; Matern preconditioning is stepsize-dependent).
 
         Returns:
-            Preconditioned transition matrix (shape [(q+1)*d, (q+1)*d]).
+            Preconditioned transition matrix (shape ``[(q+1)*d, (q+1)*d]``).
         """
         if h is None:
             raise ValueError("PrecondMaternPrior.A requires a step size h.")
@@ -962,7 +1001,7 @@ class PrecondMaternPrior(BasePrior):
             h: Step size (required; Matern preconditioning is stepsize-dependent).
 
         Returns:
-            Preconditioned diffusion matrix (shape [(q+1)*d, (q+1)*d]).
+            Preconditioned diffusion matrix (shape ``[(q+1)*d, (q+1)*d]``).
         """
         if h is None:
             raise ValueError("PrecondMaternPrior.Q requires a step size h.")
@@ -973,7 +1012,7 @@ class PrecondMaternPrior(BasePrior):
         """Upper-triangular square root of the preconditioned ``Q(h)``.
 
         Built from the stable scalar Matern noise factor (square-root MFD, see
-        :func:`_matern_scalar_Q_sqr`) rather than a Cholesky of the dense
+        ``_matern_scalar_Q_sqr``) rather than a Cholesky of the dense
         ``expm``-derived ``Q``: ``Q(h)_sqr = kron(R(h) @ T_inv, chol(Xi))`` where
         ``R.T @ R`` is the raw scalar ``Q(h)`` and ``T_inv`` applies the IWP
         diagonal preconditioner (scaling the columns of the upper-triangular ``R``
@@ -994,7 +1033,7 @@ class PrecondMaternPrior(BasePrior):
             h: Step size (unused, accepted for interface compatibility).
 
         Returns:
-            Zero drift vector (shape [(q+1)*d]).
+            Zero drift vector (shape ``[(q+1)*d]``).
         """
         return self._b
 
@@ -1007,7 +1046,7 @@ class PrecondMaternPrior(BasePrior):
             h: Step size.
 
         Returns:
-            Preconditioning transformation matrix (shape [(q+1)*d, (q+1)*d]).
+            Preconditioning transformation matrix (shape ``[(q+1)*d, (q+1)*d]``).
         """
         return np.kron(self._T(self._validate_h(h)), self._id)
 
@@ -1028,7 +1067,7 @@ class IOUPPrior(BasePrior):
     For a constant rate, ``A(h) = exp(F h)`` and the square-root process noise
     ``Q_sqr(h)`` are computed per step size like any other prior, the latter via the
     same square-root matrix-fraction decomposition as ``MaternPrior``
-    (:func:`_sqr_noise_via_quadrature`), never forming the dense ``Q(h)``.
+    (``_sqr_noise_via_quadrature``), never forming the dense ``Q(h)``.
 
     Note:
         The diffusion fit by ``calibration="dynamic"/"diagonal"`` is estimated on the
@@ -1047,7 +1086,7 @@ class IOUPPrior(BasePrior):
             the linear part / a reference Jacobian of the ODE).
         Xi: Optional component-correlation matrix of the driving noise (shape [d, d]).
         n_quad: Number of Gauss-Legendre nodes for the square-root matrix-fraction
-            decomposition used by :meth:`Q_sqr`.
+            decomposition used by ``Q_sqr``.
     """
 
     def __init__(
@@ -1101,26 +1140,26 @@ class IOUPPrior(BasePrior):
             h: Step size.
 
         Returns:
-            State transition matrix (shape [(q+1)*d, (q+1)*d]).
+            State transition matrix (shape ``[(q+1)*d, (q+1)*d]``).
         """
         return expm(self._F * self._validate_h(h))
 
     def b(self, h: ArrayLike) -> Array:
-        """Return the zero drift vector (shape [(q+1)*d])."""
+        """Return the zero drift vector (shape ``[(q+1)*d]``)."""
         return self._b
 
     def Q_sqr(self, h: ArrayLike) -> Array:
         """Upper-triangular square root of ``Q(h)``: ``Q_sqr.T @ Q_sqr == Q(h)``.
 
         Square-root matrix-fraction decomposition (see
-        :func:`_sqr_noise_via_quadrature`); never forms the dense ``Q(h)``.
+        ``_sqr_noise_via_quadrature``); never forms the dense ``Q(h)``.
         """
         return _sqr_noise_via_quadrature(
             self._F, self._G, self._gl_nodes, self._gl_weights, self._validate_h(h)
         )
 
     def Q(self, h: ArrayLike) -> Array:
-        """Return the dense diffusion matrix ``Q(h)`` (shape [(q+1)*d, (q+1)*d])."""
+        """Return the dense diffusion matrix ``Q(h)`` (shape ``[(q+1)*d, (q+1)*d]``)."""
         Q_sqr = self.Q_sqr(h)
         return Q_sqr.T @ Q_sqr
 
@@ -1257,7 +1296,7 @@ class JointPrior(BasePrior):
 
         ``Q`` is block-diagonal, so its square root is the block-diagonal of the
         sub-priors' square roots -- this delegates to each sub-prior's
-        :meth:`Q_sqr` (closed-form for ``IWP``) rather than factorizing the
+        ``Q_sqr`` (closed-form for ``IWP``) rather than factorizing the
         dense joint ``Q(h)``.
         """
         return np.block(
@@ -1271,6 +1310,15 @@ class JointPrior(BasePrior):
     def E0_state(self) -> Array:
         """State-only value projection (Bosch et al. 2022 sec. 3)."""
         return self._E0_x
+
+    @property
+    def xi(self) -> Array:
+        """Component correlation of the stacked solution ``[x, u]``.
+
+        Block-diagonal ``blkdiag(Xi_x, Xi_u)``, shape ``[d_x + d_u, d_x + d_u]``:
+        the state and hidden processes are independent.
+        """
+        return block_diag(self._prior_x.xi, self._prior_u.xi)
 
     @property
     def xi_state(self) -> Array:
@@ -1469,7 +1517,7 @@ class PrecondJointPrior:
     def Q_sqr(self, h: ArrayLike | None = None) -> Array:
         """Block-diagonal upper-triangular square root of ``Q``.
 
-        Delegates to each sub-prior's :meth:`Q_sqr` (constant for ``PrecondIWP``)
+        Delegates to each sub-prior's ``Q_sqr`` (constant for ``PrecondIWP``)
         rather than factorizing the dense joint ``Q``.
         """
         return np.block(
@@ -1499,6 +1547,15 @@ class PrecondJointPrior:
         return self._E0_x
 
     @property
+    def xi(self) -> Array:
+        """Component correlation of the stacked solution ``[x, u]``.
+
+        Block-diagonal ``blkdiag(Xi_x, Xi_u)``, shape ``[d_x + d_u, d_x + d_u]``:
+        the state and hidden processes are independent.
+        """
+        return block_diag(self._prior_x.xi, self._prior_u.xi)
+
+    @property
     def xi_state(self) -> Array:
         """State-prior component-correlation matrix (shape ``[d_x, d_x]``)."""
         return self._prior_x.xi
@@ -1507,7 +1564,7 @@ class PrecondJointPrior:
         """Scale only the state block of ``Q_sqr`` by ``sqrt(sigma_sqr)``.
 
         Accepts a scalar or a length-``d_x`` vector. See
-        :meth:`JointPrior.apply_state_sigma_sqr` for the rationale.
+        ``JointPrior.apply_state_sigma_sqr`` for the rationale.
         """
         sigma_sqr = np.asarray(sigma_sqr)
         if sigma_sqr.ndim == 0:
@@ -1523,6 +1580,6 @@ class PrecondJointPrior:
     def apply_state_sigma_to_cov_sqr(self, P_sqr: Array, sigma_sqr: ArrayLike) -> Array:
         """Scale only the state block of a full-state covariance sqrt.
 
-        See :meth:`JointPrior.apply_state_sigma_to_cov_sqr` for the rationale.
+        See ``JointPrior.apply_state_sigma_to_cov_sqr`` for the rationale.
         """
         return P_sqr.at[:, : self._D_x].multiply(_safe_sqrt(sigma_sqr))

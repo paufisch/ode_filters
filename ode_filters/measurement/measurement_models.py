@@ -21,16 +21,78 @@ DEFAULT_MEASUREMENT_NOISE = 1e-6
 MEASUREMENT_TIME_RTOL = 1e-5
 MEASUREMENT_TIME_ATOL = 1e-7
 
-# Small jitter for Cholesky of PSD matrices with zero eigenvalues
+# Jitter that lets the Cholesky through noise-free channels: a zero row/column
+# of R (e.g. the noise-free ODE-defect rows) becomes a ~1e-16 diagonal entry.
+# It is far below float64 resolution for any nonzero variance, so it does not
+# rescue a singular R whose zero-variance direction mixes channels -- that is
+# rejected up front by ``_check_noise_covariance``.
 _JITTER = 1e-32
 
 
 def _safe_cholesky_sqr(R: Array, dim: int) -> Array:
-    """Upper-triangular Cholesky of a PSD matrix that may have zero eigenvalues.
+    """Upper-triangular Cholesky of a noise covariance with noise-free channels.
 
     Returns the upper-triangular square root L such that L.T @ L = R + jitter*I.
+    Works for positive-definite ``R`` and for ``R`` with zero rows/columns
+    (noise-free channels); see ``_check_noise_covariance`` for the rest.
     """
     return np.linalg.cholesky(R + _JITTER * np.eye(dim)).T
+
+
+def _check_noise_covariance(R: ArrayLike, name: str) -> None:
+    """Reject a concrete noise covariance the solvers cannot factorize.
+
+    ``_safe_cholesky_sqr`` handles positive-definite matrices and noise-free
+    channels (zero rows and columns), but a singular matrix whose zero-variance
+    direction mixes channels (e.g. ``[[1, 1], [1, 1]]``) or an indefinite one
+    would give NaN inside the solve. Skipped for traced values (e.g. when the
+    noise is a differentiated parameter).
+    """
+    try:
+        R_host = onp.asarray(R, dtype=float)
+    except jax.errors.TracerArrayConversionError:
+        return
+    jittered = R_host + _JITTER * onp.eye(R_host.shape[0])
+    try:
+        onp.linalg.cholesky(0.5 * (jittered + jittered.T))
+    except onp.linalg.LinAlgError:
+        raise ValueError(
+            f"{name} must be a symmetric positive-definite covariance; noise-free "
+            "channels (zero rows and columns) are allowed, but a singular or "
+            "indefinite covariance that mixes channels is not."
+        ) from None
+
+
+def _check_selectors(**selectors: ArrayLike | None) -> None:
+    """Validate the selection matrices of an ODE-information model.
+
+    All must be 2-D with one column per state entry, and ``E1`` / ``E2`` need one
+    row per solution component, like ``E0``; ``E0_hidden`` may have any number
+    of rows. Catches e.g. a sliced ``E1`` that would otherwise broadcast
+    silently into a wrong residual.
+    """
+    shapes = {}
+    for name, E in selectors.items():
+        if E is None:
+            hint = " (a prior provides E2 only for q >= 2)" if name == "E2" else ""
+            raise ValueError(f"{name} is None{hint}.")
+        shape = np.shape(E)
+        if len(shape) != 2:
+            raise ValueError(
+                f"{name} must be a 2-D selection matrix, got shape {shape}."
+            )
+        shapes[name] = shape
+    if len({shape[1] for shape in shapes.values()}) > 1:
+        listed = ", ".join(f"{name}: {shape}" for name, shape in shapes.items())
+        raise ValueError(
+            f"Selection matrices must all have one column per state entry; got {listed}."
+        )
+    d = shapes["E0"][0]
+    for name in ("E1", "E2"):
+        if name in shapes and shapes[name][0] != d:
+            raise ValueError(
+                f"{name} must have as many rows as E0 ({d}), got shape {shapes[name]}."
+            )
 
 
 class ObsModel(NamedTuple):
@@ -39,7 +101,7 @@ class ObsModel(NamedTuple):
     Describes linear, time-invariant observations where the observation
     matrix ``H`` and noise covariance are constant across time and only
     the measurement values vary per step.  Built by
-    :func:`prepare_observations` from a list of :class:`Measurement`
+    ``prepare_observations`` from a list of ``Measurement``
     objects and a time grid.
 
     Attributes:
@@ -63,7 +125,7 @@ def prepare_observations(
     E0: ArrayLike,
     ts: ArrayLike,
 ) -> ObsModel | None:
-    """Build an :class:`ObsModel` from :class:`Measurement` objects.
+    """Build an ``ObsModel`` from ``Measurement`` objects.
 
     Assumes linear, time-invariant observation matrices (``A`` and noise
     are constant across time; only the measurement values ``z`` vary).
@@ -75,7 +137,7 @@ def prepare_observations(
             The filter uses ``ts[1:]`` for the ``N`` filter steps.
 
     Returns:
-        An :class:`ObsModel`, or ``None`` when *observations* is empty.
+        An ``ObsModel``, or ``None`` when *observations* is empty.
     """
     if not observations:
         return None
@@ -164,6 +226,13 @@ class Conservation:
     full_state: bool = False
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "A", np.asarray(self.A))
+        object.__setattr__(self, "p", np.asarray(self.p))
+        if self.A.ndim != 2 or self.p.ndim != 1:
+            raise ValueError(
+                f"Conservation needs a 2-D 'A' and a 1-D 'p', got shapes "
+                f"{self.A.shape} and {self.p.shape}."
+            )
         if self.A.shape[0] != self.p.shape[0]:
             raise ValueError(
                 f"A.shape[0] ({self.A.shape[0]}) must match p.shape[0] ({self.p.shape[0]})."
@@ -213,6 +282,8 @@ class Measurement:
     full_state: bool = False
 
     def __post_init__(self) -> None:
+        for name in ("A", "z", "z_t"):
+            object.__setattr__(self, name, np.asarray(getattr(self, name)))
         if self.A.ndim != 2:
             raise ValueError(f"'A' must be 2D, got {self.A.ndim}D.")
         if self.z.ndim != 2 or self.z.shape[1] != self.A.shape[0]:
@@ -232,6 +303,13 @@ class Measurement:
                 f"'z_t' length must match number of measurements {self.z.shape[0]}, "
                 f"got {self.z_t.shape[0]}."
             )
+        noise = self.get_noise_matrix()
+        if noise.shape != (self.dim, self.dim):
+            raise ValueError(
+                f"'noise' must be a scalar, a length-{self.dim} vector or a "
+                f"({self.dim}, {self.dim}) matrix, got shape {np.shape(self.noise)}."
+            )
+        _check_noise_covariance(noise, "Measurement noise")
 
     def find_index(
         self,
@@ -303,12 +381,13 @@ class BaseODEInformation(ABC):
     ) -> None:
         """Initialize constraint list and validate.
 
-        Only :class:`Conservation` constraints (noiseless, always-on model
+        Only ``Conservation`` constraints (noiseless, always-on model
         structure) are accepted. Data observations are *not* part of the
         measurement model -- pass them as an ``obs_model`` built with
-        :func:`prepare_observations`.
+        ``prepare_observations``.
         """
-        self._constraints = constraints or []
+        # A copy, so appending to the caller's list later cannot change the model.
+        self._constraints = list(constraints or [])
         for c in self._constraints:
             if isinstance(c, Conservation):
                 expected = self._state_dim if c.full_state else self._d
@@ -325,6 +404,10 @@ class BaseODEInformation(ABC):
                     "prepare_observations([Measurement(...)], E0, ts) and pass "
                     "obs_model= to the solver. `measure` carries only the ODE "
                     "information and Conservation constraints."
+                )
+            else:
+                raise TypeError(
+                    f"constraints must be Conservation objects, got {type(c).__name__}."
                 )
 
     def _conservations(self) -> list[Conservation]:
@@ -366,7 +449,7 @@ class BaseODEInformation(ABC):
         correction uses it directly as the ODE-row Jacobian (vector field
         treated as locally constant); the first-order (EK1) Jacobian
         additionally subtracts the vector-field Jacobian (see
-        :meth:`_ode_jacobian`). Shape ``[ode_dim, state_dim]``.
+        ``_ode_jacobian``). Shape ``[ode_dim, state_dim]``.
         """
         return self._E_constraint
 
@@ -381,7 +464,7 @@ class BaseODEInformation(ABC):
         never enter here.
 
         Statistical linearisation integrates over this projected subspace only
-        (see :func:`~ode_filters.filters.statistical_linearization.slr_linearize`),
+        (see ``slr_linearize``),
         which is what keeps the quadrature dimension equal to the ODE dimension
         rather than the full state dimension.
 
@@ -389,7 +472,7 @@ class BaseODEInformation(ABC):
         A custom subclass whose ``_ode_residual`` reads more than ``E0 @ state``
         **must override this**, or SLR-based corrections will silently miss the
         spread in the omitted directions; validate with
-        :func:`~ode_filters.filters.statistical_linearization.check_arg_projection`.
+        ``check_arg_projection``.
         Shape ``[p, state_dim]``.
         """
         return self._E0
@@ -430,6 +513,7 @@ class BaseODEInformation(ABC):
             self._base_R = R_arr
         else:
             raise ValueError("R must be scalar, 1D, or 2D array.")
+        _check_noise_covariance(self._base_R, "R")
 
     @abstractmethod
     def _ode_residual(self, state: Array, *, t: ArrayLike) -> Array:
@@ -564,6 +648,7 @@ class ODEInformation(BaseODEInformation):
         E1: ArrayLike,
         constraints: list[Conservation] | None = None,
     ):
+        _check_selectors(E0=E0, E1=E1)
         self._vf = vf
         self._E0 = np.asarray(E0)
         self._E1 = np.asarray(E1)
@@ -609,6 +694,7 @@ class ODEInformationWithHidden(BaseODEInformation):
         E0_hidden: ArrayLike,
         constraints: list[Conservation] | None = None,
     ):
+        _check_selectors(E0=E0, E1=E1, E0_hidden=E0_hidden)
         self._vf = vf
         self._E0 = np.asarray(E0)
         self._E1 = np.asarray(E1)
@@ -666,6 +752,7 @@ class SecondOrderODEInformation(BaseODEInformation):
         E2: ArrayLike,
         constraints: list[Conservation] | None = None,
     ):
+        _check_selectors(E0=E0, E1=E1, E2=E2)
         self._vf = vf
         self._E0 = np.asarray(E0)
         self._E1 = np.asarray(E1)
@@ -723,6 +810,7 @@ class SecondOrderODEInformationWithHidden(BaseODEInformation):
         E0_hidden: ArrayLike,
         constraints: list[Conservation] | None = None,
     ):
+        _check_selectors(E0=E0, E1=E1, E2=E2, E0_hidden=E0_hidden)
         self._vf = vf
         self._E0 = np.asarray(E0)
         self._E1 = np.asarray(E1)
@@ -843,6 +931,7 @@ class BlackBoxMeasurement:
             self._R = noise_arr
         else:
             raise ValueError("'noise' must be scalar, 1D, or 2D array.")
+        _check_noise_covariance(self._R, "noise")
 
     @property
     def ode_dim(self) -> int:
@@ -880,6 +969,7 @@ class BlackBoxMeasurement:
             self._R = R_arr
         else:
             raise ValueError("'noise' must be scalar, 1D, or 2D array.")
+        _check_noise_covariance(self._R, "R")
 
     def g(self, state: Array, *, t: ArrayLike) -> Array:
         """Evaluate the measurement function.
@@ -967,11 +1057,12 @@ class TransformedMeasurement:
         base_model: Base measurement model with g, jacobian_g, get_noise, linearize.
         sigma: State transformation function sigma(state) -> transformed_state.
             Must be differentiable and compatible with JAX.
-        use_autodiff_jacobian: If True (default), compute J_sigma via autodiff.
-            If False, expect sigma_jacobian to be provided.
-        sigma_jacobian: Optional explicit Jacobian function for sigma.
-            If provided and use_autodiff_jacobian=False, this will be used
-            instead of autodiff.
+        use_autodiff_jacobian: Whether to compute ``J_sigma`` by autodiff. Defaults
+            to autodiff exactly when no ``sigma_jacobian`` is given; passing
+            ``True`` together with a ``sigma_jacobian``, or ``False`` without
+            one, raises.
+        sigma_jacobian: Optional explicit Jacobian function for ``sigma``; used
+            instead of autodiff when given.
 
     Example:
         >>> # Apply softmax transformation to state before ODE measurement
@@ -988,24 +1079,29 @@ class TransformedMeasurement:
         self,
         base_model: BaseODEInformation | BlackBoxMeasurement,
         sigma: Callable[[Array], Array],
-        use_autodiff_jacobian: bool = True,
+        use_autodiff_jacobian: bool | None = None,
         sigma_jacobian: Callable[[Array], Array] | None = None,
     ):
         if not callable(sigma):
             raise TypeError("'sigma' must be callable.")
+        if use_autodiff_jacobian is None:
+            use_autodiff_jacobian = sigma_jacobian is None
+        if use_autodiff_jacobian and sigma_jacobian is not None:
+            raise ValueError(
+                "Got both 'use_autodiff_jacobian=True' and a 'sigma_jacobian'; "
+                "pass only one of them."
+            )
+        if not use_autodiff_jacobian and sigma_jacobian is None:
+            raise ValueError(
+                "Must provide 'sigma_jacobian' when 'use_autodiff_jacobian=False'."
+            )
 
         self._base = base_model
         self._sigma = sigma
         self._use_autodiff = use_autodiff_jacobian
-
-        if use_autodiff_jacobian:
-            self._jacobian_sigma = jax.jacfwd(sigma)
-        elif sigma_jacobian is not None:
-            self._jacobian_sigma = sigma_jacobian
-        else:
-            raise ValueError(
-                "Must provide 'sigma_jacobian' when 'use_autodiff_jacobian=False'."
-            )
+        self._jacobian_sigma = (
+            jax.jacfwd(sigma) if sigma_jacobian is None else sigma_jacobian
+        )
 
     @property
     def R(self) -> Array:
@@ -1027,16 +1123,9 @@ class TransformedMeasurement:
         slice ``H_t[:ode_dim]`` for calibration, so without the delegation a
         transformed measure cannot be run through them at all.
 
-        Raises:
-            AttributeError: If the base model carries no ODE-information
-                structure (e.g. a :class:`BlackBoxMeasurement`), which has no
-                notion of which of its rows are ODE defect.
+        Both base types declare it (a ``BlackBoxMeasurement`` through its
+        ``ode_dim`` argument).
         """
-        if not isinstance(self._base, BaseODEInformation):
-            raise AttributeError(
-                f"{type(self._base).__name__} base has no 'ode_dim': it does not "
-                "declare which of its rows are ODE defect."
-            )
         return self._base.ode_dim
 
     @property
@@ -1060,7 +1149,7 @@ class TransformedMeasurement:
 
         Raises:
             AttributeError: If the base model declares no argument selector
-                (e.g. a :class:`BlackBoxMeasurement`). Raising -- rather than
+                (e.g. a ``BlackBoxMeasurement``). Raising -- rather than
                 guessing one -- is what keeps ``slr_linearize``'s identity
                 fallback correct, since it probes with ``getattr``.
         """

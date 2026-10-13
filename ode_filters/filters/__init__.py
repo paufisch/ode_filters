@@ -1,8 +1,8 @@
 """Filtering and smoothing routines for ODE models.
 
-The public solver API is the consolidated :func:`gaussian_filter` /
-:func:`gaussian_filter_adaptive` / :func:`rts_smoother` (returning
-:class:`FilterResult`), plus the pluggable :class:`Correction` strategies and the
+The public solver API is the consolidated ``gaussian_filter`` /
+``gaussian_filter_adaptive`` / ``rts_smoother`` (returning
+``FilterResult``), plus the pluggable ``Correction`` strategies and the
 adaptive step-size controllers. The historical ``sqr_loop*`` / ``*_step*``
 matrix is now an implementation detail of those entry points; import it from the
 ``ode_filters.filters.ode_filter_loop`` / ``ode_filter_step`` /

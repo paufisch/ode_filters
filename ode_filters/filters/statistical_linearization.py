@@ -111,7 +111,7 @@ def gauss_hermite_rule(dim: int, n_nodes: int) -> tuple[Array, Array]:
 
     Raises:
         ValueError: If ``n_nodes < 1`` or the node count exceeds
-            :data:`MAX_NODES`.
+            ``MAX_NODES``.
     """
     if n_nodes < 1:
         raise ValueError(f"n_nodes must be >= 1, got {n_nodes!r}.")
@@ -185,9 +185,9 @@ def _arg_projection(measure: BaseODEInformation, state_dim: int) -> Array:
     """Selection matrix for the coordinates the residual is nonlinear in.
 
     Falls back to the identity for measurement models that do not declare
-    ``E_args`` (e.g. :class:`~ode_filters.measurement.measurement_models.\
-BlackBoxMeasurement`, which is duck-typed rather than a
-    :class:`BaseODEInformation` subclass). That fallback is always *correct* --
+    ``E_args`` (e.g. ``\
+BlackBoxMeasurement``, which is duck-typed rather than a
+    ``BaseODEInformation`` subclass). That fallback is always *correct* --
     quadrature over the full state integrates over a superset of the directions
     that matter -- but it costs the full state dimension.
     """
@@ -222,12 +222,12 @@ def slr_linearize(
     Args:
         measure: ODE-information measurement model. Its ``E_args`` declares which
             coordinates the vector field reads; use
-            :func:`check_arg_projection` when writing a custom subclass.
+            ``check_arg_projection`` when writing a custom subclass.
         m_lin: Mean of the linearisation density, shape ``[state_dim]``.
         P_lin_sqr: Square-root covariance of the linearisation density
             (``P_lin = P_lin_sqr.T @ P_lin_sqr``).
         t: Current time.
-        rule: Quadrature rule (see :func:`quadrature_nodes`).
+        rule: Quadrature rule (see ``quadrature_nodes``).
         n_nodes: Nodes per dimension for the Gauss-Hermite rule. Exactness is
             ``2 * n_nodes - 1``, so a degree-``k`` polynomial vector field needs
             ``n_nodes >= (k + 1) / 2`` for ``H`` and ``c`` and
@@ -235,7 +235,7 @@ def slr_linearize(
             ``n_nodes = 4``).
 
     Returns:
-        The :class:`SLRModel` surrogate.
+        The ``SLRModel`` surrogate.
     """
     proj = _arg_projection(measure, m_lin.shape[0])
     dim = proj.shape[0]
@@ -287,7 +287,7 @@ def check_arg_projection(
 ) -> None:
     """Verify that ``measure.E_args`` covers every coordinate ``g`` is nonlinear in.
 
-    An ``E_args`` that is too *small* makes :func:`slr_linearize` silently wrong:
+    An ``E_args`` that is too *small* makes ``slr_linearize`` silently wrong:
     the quadrature would miss the spread in a direction the vector field
     actually reads. This checks the defining property directly -- the Jacobian of
     ``g`` must be unchanged by any state perturbation that leaves ``E_args @

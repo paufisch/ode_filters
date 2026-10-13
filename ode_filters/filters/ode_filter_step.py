@@ -46,7 +46,7 @@ def sqr_filter_step(
     """Perform a single square-root Gaussian prediction and update step.
 
     The prediction is a square-root marginalization; the measurement update is
-    delegated to a :class:`Correction` strategy, which decides *how* to
+    delegated to a ``Correction`` strategy, which decides *how* to
     linearize (EK0/EK1/...) given *what* the measurement model observes.
 
     Args:
@@ -113,7 +113,7 @@ class _BarMeasure:
 
     The state evolves in bar space (``x = T x_bar``) but the measurement model
     linearizes in original space. This wrapper presents the model *as if* it
-    acted on the bar state, so the same :class:`Correction` strategy (EK0 / EK1 /
+    acted on the bar state, so the same ``Correction`` strategy (EK0 / EK1 /
     IEKF) used on the plain path can drive the preconditioned update with no
     duplicated linearization logic:
 
@@ -174,8 +174,8 @@ def sqr_filter_step_preconditioned(
 ) -> PreconditionedFilterStepResult:
     """Perform a single preconditioned square-root EKF step.
 
-    The measurement update is delegated to a :class:`Correction` strategy
-    operating in preconditioned coordinates (via :class:`_BarMeasure`), so EK0 /
+    The measurement update is delegated to a ``Correction`` strategy
+    operating in preconditioned coordinates (via ``_BarMeasure``), so EK0 /
     EK1 / IEKF all work on the preconditioned path with the same linearization
     logic as the plain step. The default ``TaylorCorrection(order=1)`` (EK1) is
     bit-identical to the previous inlined behavior.

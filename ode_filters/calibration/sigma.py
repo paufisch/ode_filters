@@ -15,12 +15,12 @@ different generative-model assumptions:
   ``sigma^2``. This is the Bosch-Tronarp-Hennig 2021 per-step quasi-MLE
   (Eq. 32). The estimate is meant to be baked into the current step's
   ``Q_h`` *before* propagation; past steps keep their own calibration.
-  :func:`quasi_mle_sigma_sqr_from_Q` is the convenience wrapper.
+  ``quasi_mle_sigma_sqr_from_Q`` is the convenience wrapper.
 
 - ``S = H P_pred H.T`` (full noise-free residual cov, including
   ``A P_prev A.T``). The implicit model is ``sigma^2`` multiplying every
   covariance globally. Useful for *post-hoc* calibration of a sigma=1
-  trajectory; cf. :func:`posthoc_mle_sigma_sqr`.
+  trajectory; cf. ``posthoc_mle_sigma_sqr``.
 
 References:
     Bosch, Tronarp, Hennig. "Calibrated Adaptive Probabilistic ODE Solvers."
@@ -55,8 +55,8 @@ def quasi_mle_sigma_sqr(m_z: Array, P_z_sqr: Array) -> Array:
     For pure ODE-information filtering (``measure.get_noise`` returns zero
     -- the typical case) the distinction is moot. For data-assimilation
     workflows with ``R != 0``, pre-compute the noise-free covariance via
-    :func:`~ode_filters.inference.sqr_gaussian_inference.sqr_marginalization`
-    with a zero ``R_sqr`` (or use :func:`quasi_mle_sigma_sqr_from_Q`, which
+    ``sqr_marginalization``
+    with a zero ``R_sqr`` (or use ``quasi_mle_sigma_sqr_from_Q``, which
     builds ``H Q H.T`` directly and never sees ``R``).
 
     Args:
@@ -113,9 +113,9 @@ def posthoc_mle_sigma_sqr(mz_seq: ArrayLike, Pz_seq_sqr: ArrayLike) -> Array:
         sigma_hat^2 = (1 / (N * d)) * sum_n m_z^{(n)} . T @ S_n^{-1} @ m_z^{(n)}
 
     which is the joint MLE under a constant sigma assumption. Equivalent to the
-    mean of :func:`quasi_mle_sigma_sqr` applied step-by-step.
+    mean of ``quasi_mle_sigma_sqr`` applied step-by-step.
 
-    The same R=0 caveat as :func:`quasi_mle_sigma_sqr` applies: ``Pz_seq_sqr``
+    The same R=0 caveat as ``quasi_mle_sigma_sqr`` applies: ``Pz_seq_sqr``
     must be the *prior-propagated* predicted-observation covariance, with no
     measurement noise mixed in. For the typical fixed-step ODE-information
     run, ``Pz_seq_sqr`` from the loop output already satisfies this because
@@ -147,7 +147,7 @@ def aggregate_sigma_sqr(
         kind: Aggregation method.
 
             - ``"mean"``: arithmetic mean (closed-form joint MLE under constant
-              sigma; equivalent to :func:`posthoc_mle_sigma_sqr`).
+              sigma; equivalent to ``posthoc_mle_sigma_sqr``).
             - ``"last"``: use only the final per-step estimate.
             - ``"running"``: per-step running mean
               ``sigma_hat^2_n = (1/n) sum_{k<=n} sigma^2_k``. Returns an array
