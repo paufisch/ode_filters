@@ -50,6 +50,7 @@ def _model_and_data(lam_init, correction=None):
     return model, obs_model
 
 
+@pytest.mark.standard_promotion
 @pytest.mark.parametrize(
     "correction",
     [TaylorCorrection(order=0), IteratedTaylorCorrection(max_iters=3)],
@@ -69,6 +70,7 @@ def test_loglik_method_finite():
     assert np.isfinite(ll)
 
 
+@pytest.mark.standard_promotion
 def test_fit_recovers_parameter():
     model, data = _model_and_data(lam_init=0.4)  # wrong start
     fitted, losses = fit(model, data, optax.adam(0.05), steps=300)
@@ -85,6 +87,7 @@ def test_fit_zero_steps_is_noop():
     assert losses.shape == (0,)
 
 
+@pytest.mark.standard_promotion
 def test_fit_only_trains_ode_params():
     """vf / prior / grid are static; init is theta-independent here, so the only
     thing that changes is ode_params."""

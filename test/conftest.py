@@ -32,6 +32,21 @@ settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 jax.config.update("jax_enable_x64", True)
 
 
+@pytest.fixture(autouse=True)
+def _standard_promotion_for_marked_tests(request):
+    """Run tests marked ``standard_promotion`` under standard dtype promotion.
+
+    optax, NumPyro and BlackJAX fail under JAX_NUMPY_DTYPE_PROMOTION=strict in
+    their own code (optax's Adam raises a Python float to an int32 step count),
+    so the tests that drive them keep the default promotion rules there.
+    """
+    if request.node.get_closest_marker("standard_promotion") is None:
+        yield
+        return
+    with jax.numpy_dtype_promotion("standard"):
+        yield
+
+
 def pytest_collection_modifyitems(config, items):
     """Under runtime type checking, skip the tests of wrongly typed input.
 

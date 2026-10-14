@@ -30,6 +30,7 @@ def _load_example(name: str) -> ModuleType:
 
 
 @pytest.mark.slow
+@pytest.mark.standard_promotion
 def test_blackjax_samples_recover_rate():
     pytest.importorskip("blackjax")
     samples = _load_example("blackjax_inference").run(
@@ -42,6 +43,7 @@ def test_blackjax_samples_recover_rate():
 
 
 @pytest.mark.slow
+@pytest.mark.standard_promotion
 def test_numpyro_samples_recover_rate():
     pytest.importorskip("numpyro")
     samples = _load_example("numpyro_inference").run(

@@ -186,6 +186,10 @@ fixes below come on top.
 - `IOUPPrior` accepted `n_quad <= q` and returned a wrongly shaped `Q_sqr`.
 - The opt-in runtime type checking (`ODE_FILTERS_TYPECHECK=1`) failed at import.
 - `JointPrior.xi` raised `AttributeError`; it returns `blkdiag(Xi_x, Xi_u)`.
+- `IWP`, `PrecondIWP`, `PrecondMaternPrior`, `gaussian_filter_adaptive`,
+  `aggregate_sigma_sqr(kind="running")` and `residual_autocorrelation` raised
+  under JAX's strict promotion (`jax_numpy_dtype_promotion="strict"`,
+  `jax_numpy_rank_promotion="raise"`). Values and gradients are unchanged.
 - Input checks for configurations that failed silently or deep inside a solve:
   - the information classes validate their selection matrices (a sliced `E1`
     used to broadcast into a wrong residual);

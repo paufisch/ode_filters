@@ -571,5 +571,5 @@ def test_diagonal_ekf0_uses_the_measurement_selector_for_second_order_odes(
     h = (tspan[1] - tspan[0]) / N
     E2Q_sqr = prior.E2 @ IWP(q=3, d=1).Q_sqr(h).T
     denom = np.sum(E2Q_sqr**2, axis=1)  # diag(E2 Q E2.T)
-    expected = res.mz[:, :1] ** 2 / denom
+    expected = res.mz[:, :1] ** 2 / denom[None, :]
     assert np.allclose(res.sigma_sqr, expected, rtol=1e-6, atol=1e-300)

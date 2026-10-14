@@ -20,7 +20,7 @@ def _assert_covariance_close(P_hat, P):
 
 
 def _empirical(samples):
-    centered = samples - samples.mean(axis=0)
+    centered = samples - samples.mean(axis=0, keepdims=True)
     return samples.mean(axis=0), centered.T @ centered / samples.shape[0]
 
 

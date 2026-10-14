@@ -54,21 +54,36 @@ def _iwp_constants(q: int) -> tuple[onp.ndarray, onp.ndarray, onp.ndarray]:
     return A_bar, Q_bar_sqr, inv_factorials
 
 
+def _int_pow(h: ArrayLike, powers: onp.ndarray) -> Array:
+    """Elementwise ``h ** powers`` for a scalar ``h`` and integer ``powers >= 0``.
+
+    Same values and derivatives as ``h ** powers``, which JAX cannot
+    differentiate under strict dtype promotion
+    (``jax_numpy_dtype_promotion="strict"``): the derivative rule of a float
+    base and an integer exponent promotes the two. The exponents are cast to
+    the dtype of ``h`` instead, which lowers to the same ``power`` operation.
+    The float derivative ``0 * h**-1`` of a zero power is NaN at ``h = 0``, so
+    zero powers are set to one by ``np.where``, with a safe exponent in the
+    branch it discards.
+    """
+    h = np.asarray(h)
+    exponents = np.asarray(onp.maximum(powers, 1), dtype=h.dtype)
+    return np.where(powers == 0, 1.0, h**exponents)
+
+
 def _iwp_scalar_A(q: int, h: ArrayLike) -> Array:
     """Scalar transition ``A(h)[i, j] = h^(j-i) / (j-i)!`` for ``j >= i``."""
     _, _, inv_factorials = _iwp_constants(q)
     i, j = onp.indices((q + 1, q + 1))
     power = onp.maximum(j - i, 0)
-    return np.asarray(
-        np.where(j >= i, np.asarray(h) ** power * inv_factorials[power], 0.0)
-    )
+    return np.asarray(np.where(j >= i, _int_pow(h, power) * inv_factorials[power], 0.0))
 
 
 def _iwp_T_diag(q: int, h: ArrayLike) -> Array:
     """Diagonal of the preconditioner ``T(h)[i, i] = sqrt(h) h^(q-i) / (q-i)!``."""
     _, _, inv_factorials = _iwp_constants(q)
     powers = q - onp.arange(q + 1)
-    return np.sqrt(h) * np.asarray(h) ** powers * inv_factorials[powers]
+    return np.sqrt(h) * _int_pow(h, powers) * inv_factorials[powers]
 
 
 class IWP(BasePrior):

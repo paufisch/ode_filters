@@ -235,6 +235,7 @@ def gaussian_filter_adaptive(
         # A non-finite error is a rejection: the controller maps it to its
         # minimum factor, so the loop shrinks h instead of accepting NaN.
         accept = (err <= 1.0) & np.isfinite(err)
+        n_new = accept.astype(c.n_total.dtype)  # counter increments, no bool + int
 
         def keep(new, old):
             return jax.tree.map(lambda a, b: np.where(accept, a, b), new, old)
@@ -253,7 +254,7 @@ def gaussian_filter_adaptive(
                 sigma_sqr=record.sigma_sqr.at[i].set(
                     np.where(write, sigma, record.sigma_sqr[i])
                 ),
-                count=c.n_total + accept,
+                count=c.n_total + n_new,
             )
         return _Carry(
             t=np.where(accept, t_next, c.t),
@@ -267,9 +268,9 @@ def gaussian_filter_adaptive(
             err_prev=np.where(accept, err, c.err_prev),
             innovation=keep(out.innovation, c.innovation),
             sigma_sum=np.where(accept, c.sigma_sum + sigma, c.sigma_sum),
-            n_total=c.n_total + accept,
-            n_accepted=c.n_accepted + accept,
-            n_rejected=c.n_rejected + (~accept),
+            n_total=c.n_total + n_new,
+            n_accepted=c.n_accepted + n_new,
+            n_rejected=c.n_rejected + (1 - n_new),
             composite=composite,
             record=record,
         )

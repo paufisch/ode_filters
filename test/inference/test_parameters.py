@@ -101,6 +101,7 @@ def test_loglik_with_wrapped_param():
     assert np.isfinite(ll)
 
 
+@pytest.mark.standard_promotion
 def test_fit_recovers_positive_param_in_unconstrained_space():
     model, data = _model_and_data(lam_init=0.3)
     fitted, losses = fit(model, data, optax.adam(0.05), steps=300)

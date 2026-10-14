@@ -70,7 +70,7 @@ def residual_autocorrelation(whitened: ArrayLike, max_lag: int) -> Array:
         entries are close to zero, within about ``2 / sqrt(N)``.
     """
     v = np.asarray(whitened)
-    v = v - v.mean(axis=0)
+    v = v - v.mean(axis=0, keepdims=True)
     variance = np.sum(v * v, axis=0)
     lags = [
         np.sum(v[lag:] * v[:-lag], axis=0) / variance for lag in range(1, max_lag + 1)

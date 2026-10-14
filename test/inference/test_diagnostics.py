@@ -72,7 +72,7 @@ def test_whitening_does_not_depend_on_the_signs_of_the_factor():
 def test_a_slow_drift_is_positively_autocorrelated():
     """A drifting misfit shows as positive autocorrelation, whatever the signs."""
     n = np.arange(200)
-    mz = np.sin(2.0 * np.pi * n / 50.0)[:, None]
+    mz = np.sin(2.0 * np.pi * n.astype(float) / 50.0)[:, None]
     Pz_sqr = np.where(n % 2 == 0, 1.0, -1.0)[:, None, None]  # alternating QR signs
     rho = residual_autocorrelation(whitened_residuals(mz, Pz_sqr), max_lag=1)
     assert float(rho[0, 0]) > 0.9
@@ -119,7 +119,8 @@ def test_observation_predictive_is_the_pushforward():
     marginals = Gaussian(m, P_sqr)
     noisy = observation_predictive(marginals, H, R_sqr)
     assert_close(noisy.m, m @ H.T, rtol=1e-12)
-    assert_close(cov(noisy.P_sqr), H @ cov(P_sqr) @ H.T + R_sqr.T @ R_sqr, rtol=1e-10)
+    R = (R_sqr.T @ R_sqr)[None]
+    assert_close(cov(noisy.P_sqr), H @ cov(P_sqr) @ H.T + R, rtol=1e-10)
     clean = observation_predictive(marginals, H)
     assert_close(cov(clean.P_sqr), H @ cov(P_sqr) @ H.T, rtol=1e-10)
 
