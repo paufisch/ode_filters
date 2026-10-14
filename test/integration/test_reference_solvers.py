@@ -246,13 +246,6 @@ def _exact_derivatives_of_exp_sin(order: int) -> list[float]:
     return out
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="taylor_mode_initialization evaluates the vector field at the fixed "
-    "time t0, so for a non-autonomous field the derivatives from the third on "
-    "miss the explicit t-dependence (here 1, 1, 1, 1, 1 instead of 1, 1, 1, 0, "
-    "-3)",
-)
 def test_taylor_initialization_of_a_non_autonomous_field_is_exact():
     """DETEST A3, ``y' = y cos t``: the initial state should be exact."""
     q = 4
