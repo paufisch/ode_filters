@@ -186,9 +186,9 @@ def marginalize(A: Array, b: Array, Q_sqr: Array, x: Gaussian) -> Gaussian:
             f"A has {A.shape[1]} columns but the state has dimension "
             f"{P_sqr.shape[0]} (A: {A.shape}, P_sqr: {P_sqr.shape})."
         )
-    m_z = A @ x.m + b
-    P_z_sqr = _safe_qr(np.concatenate([P_sqr @ A.T, Q_sqr], axis=0))
-    return Gaussian(m_z, P_z_sqr)
+    mz = A @ x.m + b
+    Pz_sqr = _safe_qr(np.concatenate([P_sqr @ A.T, Q_sqr], axis=0))
+    return Gaussian(mz, Pz_sqr)
 
 
 def invert(A: Array, Q_sqr: Array, x: Gaussian, z: Gaussian) -> Conditional:
@@ -213,11 +213,11 @@ def invert(A: Array, Q_sqr: Array, x: Gaussian, z: Gaussian) -> Conditional:
     """
     n_state = A.shape[1]
     P_sqr = np.atleast_2d(x.P_sqr)
-    P_z_sqr = np.atleast_2d(z.P_sqr)
-    # G = P A^T P_z^-1 by two triangular solves with the factor of P_z.
+    Pz_sqr = np.atleast_2d(z.P_sqr)
+    # G = P A^T Pz^-1 by two triangular solves with the factor of Pz.
     cross = (A @ P_sqr.T) @ P_sqr
-    Z = jax.scipy.linalg.solve_triangular(P_z_sqr.T, cross, lower=True)
-    G = jax.scipy.linalg.solve_triangular(P_z_sqr, Z, lower=False).T
+    Z = jax.scipy.linalg.solve_triangular(Pz_sqr.T, cross, lower=True)
+    G = jax.scipy.linalg.solve_triangular(Pz_sqr, Z, lower=False).T
     d = x.m - G @ z.m
     B = np.eye(n_state) - G @ A
     stacked = np.concatenate(
@@ -265,12 +265,12 @@ def compose(outer: Conditional, inner: Conditional) -> Conditional:
 
 
 def log_likelihood(innovation: Gaussian) -> Array:
-    """Log-density at zero of the innovation ``N(m_z, P_z)``: ``log N(0; m_z, P_z)``.
+    """Log-density at zero of the innovation ``N(mz, Pz)``: ``log N(0; mz, Pz)``.
 
     The evidence an update contributes when it observes ``z = 0``.
     """
-    P_z_sqr = innovation.P_sqr
-    log_det = 2.0 * np.sum(np.log(np.abs(np.diag(P_z_sqr))))
-    v = jax.scipy.linalg.solve_triangular(P_z_sqr.T, innovation.m, lower=True)
+    Pz_sqr = innovation.P_sqr
+    log_det = 2.0 * np.sum(np.log(np.abs(np.diag(Pz_sqr))))
+    v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, innovation.m, lower=True)
     k = innovation.m.shape[0]
     return -0.5 * (k * np.log(2 * np.pi) + log_det + v @ v)

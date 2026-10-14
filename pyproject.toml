@@ -87,6 +87,7 @@ testpaths = ["test"]
 addopts = "--cov=ode_filters --cov-report=term-missing --cov-fail-under=100"
 markers = [
     "slow: long-running tests (MCMC runs of the example scripts); deselect with -m 'not slow'",
+    "wrong_input_types: passes wrongly typed input on purpose to test an error message; skipped under ODE_FILTERS_TYPECHECK=1, whose checker rejects the input first",
 ]
 
 [tool.coverage.report]

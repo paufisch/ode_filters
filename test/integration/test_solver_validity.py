@@ -27,12 +27,12 @@ def _solve_standard(vf, x0, *, tspan, N, q=3, Xi_scale=0.5):
     """
     d = x0.shape[0]
     prior = IWP(q=q, d=d, Xi=Xi_scale * np.eye(d))
-    mu_0, Sigma_0_sqr = taylor_mode_initialization(vf, x0, q)
+    m_0, P_0_sqr = taylor_mode_initialization(vf, x0, q)
     measure = ODEInformation(vf, prior.E0, prior.E1)
 
     result = gaussian_filter(
-        mu_0,
-        Sigma_0_sqr,
+        m_0,
+        P_0_sqr,
         prior,
         measure,
         np.linspace(*tspan, N + 1),
@@ -64,12 +64,12 @@ def _solve_preconditioned(vf, x0, *, tspan, N, q=3, Xi_scale=0.5):
     """
     d = x0.shape[0]
     prior = PrecondIWP(q=q, d=d, Xi=Xi_scale * np.eye(d))
-    mu_0, Sigma_0_sqr = taylor_mode_initialization(vf, x0, q)
+    m_0, P_0_sqr = taylor_mode_initialization(vf, x0, q)
     measure = ODEInformation(vf, prior.E0, prior.E1)
 
     result = gaussian_filter(
-        mu_0,
-        Sigma_0_sqr,
+        m_0,
+        P_0_sqr,
         prior,
         measure,
         np.linspace(*tspan, N + 1),

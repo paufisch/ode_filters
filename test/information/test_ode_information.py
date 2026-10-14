@@ -429,6 +429,7 @@ class TestSelectorValidation:
         with pytest.raises(ValueError, match="E0 must be a 2-D selection matrix"):
             ODEInformation(self.vf, prior.E0[0], prior.E1)
 
+    @pytest.mark.wrong_input_types
     def test_missing_E2_names_the_cause(self):
         prior = IWP(q=1, d=1)  # E2 needs q >= 2
         with pytest.raises(ValueError, match=r"E2 is None .*q >= 2"):
@@ -436,6 +437,7 @@ class TestSelectorValidation:
                 lambda x, v, *, t: -x, prior.E0, prior.E1, prior.E2
             )
 
+    @pytest.mark.wrong_input_types
     def test_missing_other_selector(self):
         prior = IWP(q=2, d=1)
         with pytest.raises(ValueError, match="E1 is None"):
@@ -443,6 +445,7 @@ class TestSelectorValidation:
 
 
 class TestConstraintInputs:
+    @pytest.mark.wrong_input_types
     def test_conservation_accepts_lists(self):
         cons = Conservation(A=[[1.0, 1.0]], p=[1.0])
         assert cons.A.shape == (1, 2) and cons.p.shape == (1,)
@@ -451,6 +454,7 @@ class TestConstraintInputs:
         with pytest.raises(ValueError, match="2-D 'A' and a 1-D 'p'"):
             Conservation(A=np.ones(2), p=np.ones(1))
 
+    @pytest.mark.wrong_input_types
     def test_unknown_constraint_type_is_rejected(self):
         prior = IWP(q=1, d=2)
         with pytest.raises(TypeError, match="must be Conservation laws"):
@@ -467,6 +471,7 @@ class TestConstraintInputs:
         constraints.append(Conservation(np.array([[1.0, -1.0]]), np.array([0.0])))
         assert model.g(np.ones(4), t=0.0).shape == (3,)
 
+    @pytest.mark.wrong_input_types
     def test_measurement_accepts_lists(self):
         meas = Measurement(A=[[1.0]], z=[[0.5], [0.6]], z_t=[0.1, 0.2])
         assert meas.z.shape == (2, 1) and meas.z_t.shape == (2,)
@@ -693,6 +698,7 @@ class TestConservationMethods:
         assert R.shape == (3, 3)
 
 
+@pytest.mark.wrong_input_types
 def test_measurement_rejected_as_measure_constraint():
     E0, E1 = make_projection_matrices(1, 2)
     m = Measurement(A=np.eye(1), z=np.zeros((1, 1)), z_t=np.array([0.0]))

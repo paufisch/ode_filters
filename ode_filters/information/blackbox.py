@@ -12,7 +12,7 @@ from jax.typing import ArrayLike
 
 from ..gaussian.algebra import _safe_cholesky_sqr
 from .noise import noise_matrix
-from .ode_information import BaseODEInformation
+from .ode_information import BaseODEInformation, check_state
 from .protocol import MeasurementModel
 
 
@@ -109,14 +109,7 @@ class BlackBoxMeasurement(eqx.Module):
         return H, value - H @ state
 
     def _validate_state(self, state: Array) -> Array:
-        state = np.asarray(state)
-        if state.ndim != 1:
-            raise ValueError("'state' must be a one-dimensional array.")
-        if state.shape[0] != self.state_dim:
-            raise ValueError(
-                f"'state' must have length {self.state_dim}, got {state.shape[0]}."
-            )
-        return state
+        return check_state(state, self.state_dim)
 
 
 class TransformedMeasurement(eqx.Module):

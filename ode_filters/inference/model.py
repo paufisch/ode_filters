@@ -31,6 +31,8 @@ from jax import Array
 
 from ..calibration.policies import Calibration, CalibrationMode
 from ..information import ObsModel, ODEInformation
+from ..linearization import Correction
+from ..priors import BasePrior
 from .likelihood import InferenceProblem, marginal_loglik
 
 
@@ -56,11 +58,11 @@ class ODEFilter(eqx.Module):
 
     vf: Callable = eqx.field(static=True)
     init_fn: Callable = eqx.field(static=True)
-    prior: Any
+    prior: BasePrior
     ts: tuple[float, ...] = eqx.field(static=True, converter=_as_static_grid)
-    ode_params: Array
+    ode_params: Any  # a pytree of arrays and parameter wrappers (PositiveReal, ...)
     calibration: Calibration | CalibrationMode = eqx.field(static=True, default="none")
-    correction: Any = eqx.field(static=True, default=None)
+    correction: Correction | None = eqx.field(static=True, default=None)
 
     def loglik(self, data: ObsModel) -> Array:
         """Data marginal log-likelihood at the current parameters."""

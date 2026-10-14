@@ -59,3 +59,5 @@ combine plain and preconditioned blocks.
 ## Initialization
 
 ::: ode_filters.priors.taylor_mode_initialization
+
+::: ode_filters.priors.joint_taylor_initialization

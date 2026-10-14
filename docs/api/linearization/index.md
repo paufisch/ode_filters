@@ -29,14 +29,12 @@ One affine model per filter step, for `affine_filter` and `iterated_smoother`.
 
 ## Statistical linearization
 
-::: ode_filters.linearization.statistical.slr_linearize
+The primitive behind `QuadratureCorrection` and `slr_surrogate`, and a check for
+the argument selectors of a custom measurement model. The quadrature rule is
+chosen by name (`rule="gauss_hermite"` or `"cubature"`, with `n_nodes`).
 
-::: ode_filters.linearization.statistical.SLRModel
+::: ode_filters.linearization.slr_linearize
 
-::: ode_filters.linearization.statistical.gauss_hermite_rule
+::: ode_filters.linearization.SLRModel
 
-::: ode_filters.linearization.statistical.cubature_rule
-
-::: ode_filters.linearization.statistical.quadrature_nodes
-
-::: ode_filters.linearization.statistical.check_arg_projection
+::: ode_filters.linearization.check_arg_projection

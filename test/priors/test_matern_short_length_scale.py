@@ -98,12 +98,12 @@ def test_precond_matern_filter_matches_plain_at_short_length_scale():
     def vf(x, *, t):
         return -x
 
-    mu_0, P0_sqr = taylor_mode_initialization(vf, jnp.array([1.0]), q=2)
+    m_0, P_0_sqr = taylor_mode_initialization(vf, jnp.array([1.0]), q=2)
     means = []
     for cls in (MaternPrior, PrecondMaternPrior):
         prior = cls(2, 1, 2.6e-3)
         measure = ODEInformation(vf, prior.E0, prior.E1)
-        res = gaussian_filter(mu_0, P0_sqr, prior, measure, np.linspace(0.0, 1.0, 101))
+        res = gaussian_filter(m_0, P_0_sqr, prior, measure, np.linspace(0.0, 1.0, 101))
         means.append(np.asarray(res.m))
     assert np.isfinite(means[1]).all()
     assert np.allclose(means[1], means[0], atol=1e-10)

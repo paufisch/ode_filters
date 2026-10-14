@@ -82,10 +82,10 @@ def _prior_and_measure(vf, q=3):
 def _setup(vf=logistic, q=3, x0=0.1, jitter=0.0):
     prior = IWP(q=q, d=1)
     measure = ODEInformation(vf, prior.E0, prior.E1)
-    mu_0, P0_sqr = taylor_mode_initialization(vf, np.array([x0]), q=q)
+    m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([x0]), q=q)
     if jitter:
-        P0_sqr = P0_sqr + jitter * np.eye(q + 1)
-    return prior, measure, mu_0, P0_sqr
+        P_0_sqr = P_0_sqr + jitter * np.eye(q + 1)
+    return prior, measure, m_0, P_0_sqr
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +100,7 @@ def test_defaults():
     assert corr.max_iters == 1
 
 
+@pytest.mark.wrong_input_types
 def test_rejects_bad_configuration_at_construction():
     """A bad rule must fail eagerly, not inside a traced scan body."""
     with pytest.raises(ValueError, match="gauss_hermite"):
@@ -117,10 +118,10 @@ def test_rejects_bad_configuration_at_construction():
 
 def test_affine_field_reproduces_ek1():
     """Nothing changes on a linear problem: Omega is zero and H is the Jacobian."""
-    prior, measure, mu_0, P0_sqr = _setup(vf=linear_vf)
+    prior, measure, m_0, P_0_sqr = _setup(vf=linear_vf)
     ek1 = gaussian_filter(
-        mu_0,
-        P0_sqr,
+        m_0,
+        P_0_sqr,
         prior,
         measure,
         np.linspace(*TSPAN, N_STEPS + 1),
@@ -131,8 +132,8 @@ def test_affine_field_reproduces_ek1():
         QuadratureCorrection(rule="cubature"),
     ):
         slr = gaussian_filter(
-            mu_0,
-            P0_sqr,
+            m_0,
+            P_0_sqr,
             prior,
             measure,
             np.linspace(*TSPAN, N_STEPS + 1),
@@ -256,14 +257,14 @@ def test_iplf_is_a_no_op_on_affine_fields():
 
 def test_solves_a_nonlinear_ode_accurately():
     """A pure solve must still converge: the correction changes the constant, not the order."""
-    prior, measure, mu_0, P0_sqr = _setup()
+    prior, measure, m_0, P_0_sqr = _setup()
 
     def exact(t, x0=0.1):
         return x0 * np.exp(t) / (1 - x0 + x0 * np.exp(t))
 
     res = gaussian_filter(
-        mu_0,
-        P0_sqr,
+        m_0,
+        P_0_sqr,
         prior,
         measure,
         np.linspace(*TSPAN, N_STEPS + 1),
@@ -287,7 +288,7 @@ def test_reaches_through_the_filter_step():
 
 
 def test_works_with_the_observation_path():
-    prior, measure, mu_0, P0_sqr = _setup()
+    prior, measure, m_0, P_0_sqr = _setup()
     ts = np.linspace(*TSPAN, N_STEPS + 1)
     z_t = ts[::6][1:]
     obs = Measurement(
@@ -296,8 +297,8 @@ def test_works_with_the_observation_path():
     obs_model = prepare_observations([obs], prior.E0, ts)
 
     res = gaussian_filter(
-        mu_0,
-        P0_sqr,
+        m_0,
+        P_0_sqr,
         prior,
         measure,
         np.linspace(*TSPAN, N_STEPS + 1),
@@ -313,20 +314,20 @@ def test_works_on_the_preconditioned_path():
     q = 3
     prior = PrecondIWP(q=q, d=1)
     measure = ODEInformation(logistic, prior.E0, prior.E1)
-    mu_0, P0_sqr = taylor_mode_initialization(logistic, np.array([0.1]), q=q)
+    m_0, P_0_sqr = taylor_mode_initialization(logistic, np.array([0.1]), q=q)
 
     plain_prior = IWP(q=q, d=1)
     plain = gaussian_filter(
-        mu_0,
-        P0_sqr,
+        m_0,
+        P_0_sqr,
         plain_prior,
         ODEInformation(logistic, plain_prior.E0, plain_prior.E1),
         np.linspace(*TSPAN, N_STEPS + 1),
         correction=QuadratureCorrection(n_nodes=4),
     )
     precond = gaussian_filter(
-        mu_0,
-        P0_sqr,
+        m_0,
+        P_0_sqr,
         prior,
         measure,
         np.linspace(*TSPAN, N_STEPS + 1),
@@ -336,20 +337,20 @@ def test_works_on_the_preconditioned_path():
 
 
 def test_jit_and_grad_safe():
-    prior, measure, mu_0, P0_sqr = _setup(vf=cubic, jitter=1e-3)
+    prior, measure, m_0, P_0_sqr = _setup(vf=cubic, jitter=1e-3)
 
     def terminal(mu):
         return gaussian_filter(
             mu,
-            P0_sqr,
+            P_0_sqr,
             prior,
             measure,
             np.linspace(*TSPAN, N_STEPS + 1),
             correction=QuadratureCorrection(n_nodes=4),
         ).m[-1, 0]
 
-    assert onp.isfinite(float(jax.jit(terminal)(mu_0)))
-    assert bool(np.all(np.isfinite(jax.grad(terminal)(mu_0))))
+    assert onp.isfinite(float(jax.jit(terminal)(m_0)))
+    assert bool(np.all(np.isfinite(jax.grad(terminal)(m_0))))
 
 
 def test_cubature_scales_to_a_multidimensional_ode():
@@ -362,15 +363,15 @@ def test_cubature_scales_to_a_multidimensional_ode():
     prior = IWP(q=q, d=d)
     measure = ODEInformation(lotka_volterra, prior.E0, prior.E1)
     assert measure.E_args.shape == (2, prior.E0.shape[1])
-    mu_0, P0_sqr = taylor_mode_initialization(lotka_volterra, np.array([1.0, 1.0]), q=q)
+    m_0, P_0_sqr = taylor_mode_initialization(lotka_volterra, np.array([1.0, 1.0]), q=q)
 
     for corr in (
         QuadratureCorrection(rule="cubature"),
         QuadratureCorrection(n_nodes=3),
     ):
         res = gaussian_filter(
-            mu_0,
-            P0_sqr,
+            m_0,
+            P_0_sqr,
             prior,
             measure,
             np.linspace(*(0.0, 1.0), 30 + 1),

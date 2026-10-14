@@ -151,6 +151,7 @@ def test_diagonal_calibration_resolves_a_multiscale_problem():
         ({"calibration": "bogus"}, "calibration must be"),
     ],
 )
+@pytest.mark.wrong_input_types
 def test_invalid_arguments_raise(kwargs, match):
     prior, m_0, P_0_sqr, measure = _setup()
     with pytest.raises(ValueError, match=match):

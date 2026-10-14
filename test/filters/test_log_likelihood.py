@@ -40,14 +40,14 @@ class TestLogLikelihoodMatchesManual:
     q = 2
     d = 1
 
-    def test_sqr_loop(self):
+    def test_fixed_grid(self):
         prior = IWP(q=self.q, d=self.d)
-        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf, self.x0, self.q)
+        m_0, P_0_sqr = taylor_mode_initialization(_vf, self.x0, self.q)
         measure = ODEInformation(_vf, prior.E0, prior.E1)
 
         result = gaussian_filter(
-            mu_0,
-            Sigma_0_sqr,
+            m_0,
+            P_0_sqr,
             prior,
             measure,
             np.linspace(*self.tspan, self.N + 1),
@@ -61,14 +61,14 @@ class TestLogLikelihoodMatchesManual:
         expected = _manual_log_likelihood(mz_seq, Pz_seq_sqr)
         assert float(log_likelihood) == pytest.approx(float(expected), rel=1e-10)
 
-    def test_sqr_loop_preconditioned(self):
+    def test_fixed_grid_preconditioned(self):
         prior = PrecondIWP(q=self.q, d=self.d)
-        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf, self.x0, self.q)
+        m_0, P_0_sqr = taylor_mode_initialization(_vf, self.x0, self.q)
         measure = ODEInformation(_vf, prior.E0, prior.E1)
 
         result = gaussian_filter(
-            mu_0,
-            Sigma_0_sqr,
+            m_0,
+            P_0_sqr,
             prior,
             measure,
             np.linspace(*self.tspan, self.N + 1),
@@ -97,14 +97,14 @@ class TestLogLikelihoodDifferentiable:
     q = 2
     d = 1
 
-    def test_sqr_loop_grad(self):
+    def test_fixed_grid_grad(self):
         prior = IWP(q=self.q, d=self.d)
-        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf, self.x0, self.q)
+        m_0, P_0_sqr = taylor_mode_initialization(_vf, self.x0, self.q)
         measure = ODEInformation(_vf, prior.E0, prior.E1)
 
         def lml_fn(Sigma_0_sqr_):
             result = gaussian_filter(
-                mu_0,
+                m_0,
                 Sigma_0_sqr_,
                 prior,
                 measure,
@@ -113,17 +113,17 @@ class TestLogLikelihoodDifferentiable:
             )
             return result.log_likelihood
 
-        grad_val = jax.grad(lml_fn)(Sigma_0_sqr)
+        grad_val = jax.grad(lml_fn)(P_0_sqr)
         assert np.all(np.isfinite(grad_val))
 
-    def test_sqr_loop_preconditioned_grad(self):
+    def test_fixed_grid_preconditioned_grad(self):
         prior = PrecondIWP(q=self.q, d=self.d)
-        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf, self.x0, self.q)
+        m_0, P_0_sqr = taylor_mode_initialization(_vf, self.x0, self.q)
         measure = ODEInformation(_vf, prior.E0, prior.E1)
 
         def lml_fn(Sigma_0_sqr_):
             result = gaussian_filter(
-                mu_0,
+                m_0,
                 Sigma_0_sqr_,
                 prior,
                 measure,
@@ -132,5 +132,5 @@ class TestLogLikelihoodDifferentiable:
             )
             return result.log_likelihood
 
-        grad_val = jax.grad(lml_fn)(Sigma_0_sqr)
+        grad_val = jax.grad(lml_fn)(P_0_sqr)
         assert np.all(np.isfinite(grad_val))

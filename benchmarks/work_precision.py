@@ -155,7 +155,7 @@ def _dense_grid(problem: ODEProblem) -> jnp.ndarray:
 
 def make_ode_filters_fixed(problem: ODEProblem, N: int, order: int) -> Callable:
     prior = IWP(Q, problem.dim, Xi=0.5 * jnp.eye(problem.dim))
-    mu_0, S0 = taylor_mode_initialization(problem.vf, problem.x0, Q)
+    m_0, S0 = taylor_mode_initialization(problem.vf, problem.x0, Q)
     measure = ODEInformation(problem.vf, prior.E0, prior.E1)
     corr = TaylorCorrection(order=order)
     e0 = prior.E0
@@ -163,7 +163,7 @@ def make_ode_filters_fixed(problem: ODEProblem, N: int, order: int) -> Callable:
     @jax.jit
     def run():
         res = gaussian_filter(
-            mu_0,
+            m_0,
             S0,
             prior,
             measure,
@@ -178,7 +178,7 @@ def make_ode_filters_fixed(problem: ODEProblem, N: int, order: int) -> Callable:
 
 def make_ode_filters_adaptive(problem: ODEProblem, tol: float, order: int) -> Callable:
     prior = IWP(Q, problem.dim, Xi=0.5 * jnp.eye(problem.dim))
-    mu_0, S0 = taylor_mode_initialization(problem.vf, problem.x0, Q)
+    m_0, S0 = taylor_mode_initialization(problem.vf, problem.x0, Q)
     measure = ODEInformation(problem.vf, prior.E0, prior.E1)
     corr = TaylorCorrection(order=order)
     e0 = prior.E0
@@ -187,7 +187,7 @@ def make_ode_filters_adaptive(problem: ODEProblem, tol: float, order: int) -> Ca
     @jax.jit
     def run():
         res = gaussian_filter_adaptive(
-            mu_0,
+            m_0,
             S0,
             prior,
             measure,

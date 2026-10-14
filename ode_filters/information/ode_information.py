@@ -246,14 +246,17 @@ class BaseODEInformation(eqx.Module):
         return eqx.tree_at(lambda m: m.R, self, noise_matrix(R, self.ode_dim, "R"))
 
     def _validate_state(self, state: Array) -> Array:
-        state = np.asarray(state)
-        if state.ndim != 1:
-            raise ValueError("'state' must be a one-dimensional array.")
-        if state.shape[0] != self.state_dim:
-            raise ValueError(
-                f"'state' must have length {self.state_dim}, got {state.shape[0]}."
-            )
-        return state
+        return check_state(state, self.state_dim)
+
+
+def check_state(state: ArrayLike, state_dim: int) -> Array:
+    """``state`` as an array, checked to be one-dimensional of length ``state_dim``."""
+    state = np.asarray(state)
+    if state.ndim != 1:
+        raise ValueError("'state' must be a one-dimensional array.")
+    if state.shape[0] != state_dim:
+        raise ValueError(f"'state' must have length {state_dim}, got {state.shape[0]}.")
+    return state
 
 
 def _init_ode_information(

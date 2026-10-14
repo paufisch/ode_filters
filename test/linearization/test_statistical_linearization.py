@@ -116,6 +116,7 @@ def test_quadrature_nodes_dispatch():
     assert cub[0].shape == (4, 2)
 
 
+@pytest.mark.wrong_input_types
 def test_quadrature_rule_errors():
     with pytest.raises(ValueError, match="gauss_hermite"):
         quadrature_nodes("unscented", 2, 3)

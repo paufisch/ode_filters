@@ -126,10 +126,10 @@ meas = Measurement(A=np.eye(1), z=x_true[:, None], z_t=obs_times, noise=1e-4)
 obs_model = prepare_observations([meas], prior_joint.E0_x, ts)
 
 # State layout [x, x', x'', x''', u]: start at rest at x = 1, u unknown
-mu_0 = np.array([1.0, 0.0, -1.0, 0.0, 0.0])
+m_0 = np.array([1.0, 0.0, -1.0, 0.0, 0.0])
 P_0_sqr = np.diag(np.array([0.0, 0.0, 0.0, 1.0, 1.0]))
 
-result = gaussian_filter(mu_0, P_0_sqr, prior_joint, model, ts, obs_model=obs_model)
+result = gaussian_filter(m_0, P_0_sqr, prior_joint, model, ts, obs_model=obs_model)
 u_hat = prior_joint.E0_hidden @ result.m[-1]  # estimated damping: ~0.297
 ```
 

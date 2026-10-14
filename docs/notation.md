@@ -48,7 +48,7 @@ standard deviations (computed from the factor's column norms, without forming
   `apply_state_sigma_sqr`.
 - **Model inputs are covariances, not factors.** `Xi`, `R=` and `noise=` take
   the covariance (or a variance); the models factor them internally
-  (`measure.noise_sqr(t)`, `ObsModel.R_sqr`).
+  (`measure.noise_sqr(t=t)`, `ObsModel.R_sqr`).
 
 The filter never forms `P`
 explicitly — predictions and updates are QR-based operations on the factors

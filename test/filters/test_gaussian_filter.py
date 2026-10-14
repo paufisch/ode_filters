@@ -145,6 +145,7 @@ def test_calibration_policy_objects_and_strings_agree():
     assert_close(by_object.m, by_name.m, rtol=0.0)
 
 
+@pytest.mark.wrong_input_types
 @pytest.mark.parametrize("calibration", ["bogus", 3])
 def test_unknown_calibration_raises(calibration):
     prior, measure, m_0, P_0_sqr = _logistic()

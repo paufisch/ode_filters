@@ -32,6 +32,7 @@ from ode_filters import (
 )
 from ode_filters.calibration import DiagonalCalibration
 from ode_filters.information import Measurement
+from test.helpers import assert_grad_matches_fd
 
 TSPAN = (0.0, 2.0)
 N = 30
@@ -45,26 +46,15 @@ CORRECTIONS = {
 }
 
 
-def _central_fd(f, x, eps=1e-5):
-    return (f(x + eps) - f(x - eps)) / (2 * eps)
-
-
-def _assert_grad_matches_fd(f, theta=THETA, rtol=2e-3, atol=1e-7):
-    g = float(jax.grad(f)(theta))
-    d = float(_central_fd(f, theta))
-    assert np.isfinite(g), f"non-finite gradient {g}"
-    assert abs(g - d) <= atol + rtol * abs(d), f"grad={g:.6e} vs fd={d:.6e}"
-
-
 def _logistic_inputs(prior, theta):
-    """Build (mu_0, Sigma_0_sqr, measure) for dx/dt = theta x (1-x), x0=0.5."""
+    """Build (m_0, P_0_sqr, measure) for dx/dt = theta x (1-x), x0=0.5."""
 
     def vf(x, *, t):
         return theta * x * (1.0 - x)
 
-    mu_0, S0_sqr = taylor_mode_initialization(vf, np.array([0.5]), q=prior.q)
+    m_0, S0_sqr = taylor_mode_initialization(vf, np.array([0.5]), q=prior.q)
     measure = ODEInformation(vf, prior.E0, prior.E1)
-    return mu_0, S0_sqr, measure
+    return m_0, S0_sqr, measure
 
 
 # --------------------------------------------------------------------------- #
@@ -78,9 +68,9 @@ def test_grad_fixed_filter(prior_cls, corr_name):
     prior = prior_cls(q=2, d=1)
 
     def f(theta):
-        mu_0, S0_sqr, measure = _logistic_inputs(prior, theta)
+        m_0, S0_sqr, measure = _logistic_inputs(prior, theta)
         res = gaussian_filter(
-            mu_0,
+            m_0,
             S0_sqr,
             prior,
             measure,
@@ -90,7 +80,7 @@ def test_grad_fixed_filter(prior_cls, corr_name):
         )
         return res.m[-1, 0]
 
-    _assert_grad_matches_fd(f)
+    assert_grad_matches_fd(f, THETA)
 
 
 @pytest.mark.parametrize("corr_name", list(CORRECTIONS))
@@ -99,9 +89,9 @@ def test_grad_fixed_filter_dynamic_calibration(corr_name):
     prior = IWP(q=2, d=1)
 
     def f(theta):
-        mu_0, S0_sqr, measure = _logistic_inputs(prior, theta)
+        m_0, S0_sqr, measure = _logistic_inputs(prior, theta)
         res = gaussian_filter(
-            mu_0,
+            m_0,
             S0_sqr,
             prior,
             measure,
@@ -111,7 +101,7 @@ def test_grad_fixed_filter_dynamic_calibration(corr_name):
         )
         return res.log_likelihood
 
-    _assert_grad_matches_fd(f)
+    assert_grad_matches_fd(f, THETA)
 
 
 def test_grad_fixed_filter_with_obs():
@@ -124,9 +114,9 @@ def test_grad_fixed_filter_with_obs():
     )
 
     def f(theta):
-        mu_0, S0_sqr, measure = _logistic_inputs(prior, theta)
+        m_0, S0_sqr, measure = _logistic_inputs(prior, theta)
         res = gaussian_filter(
-            mu_0,
+            m_0,
             S0_sqr,
             prior,
             measure,
@@ -136,7 +126,7 @@ def test_grad_fixed_filter_with_obs():
         )
         return res.log_likelihood_obs
 
-    _assert_grad_matches_fd(f)
+    assert_grad_matches_fd(f, THETA)
 
 
 # --------------------------------------------------------------------------- #
@@ -150,14 +140,14 @@ def test_grad_rts_smoother(prior_cls):
     prior = prior_cls(q=2, d=1)
 
     def f(theta):
-        mu_0, S0_sqr, measure = _logistic_inputs(prior, theta)
+        m_0, S0_sqr, measure = _logistic_inputs(prior, theta)
         res = gaussian_filter(
-            mu_0, S0_sqr, prior, measure, np.linspace(*TSPAN, N + 1), calibration="none"
+            m_0, S0_sqr, prior, measure, np.linspace(*TSPAN, N + 1), calibration="none"
         )
         m_s, _ = rts_smoother(res)
         return np.sum(m_s[:, 0])  # whole smoothed trajectory (theta-sensitive)
 
-    _assert_grad_matches_fd(f)
+    assert_grad_matches_fd(f, THETA)
 
 
 # --------------------------------------------------------------------------- #
@@ -170,9 +160,9 @@ def test_grad_adaptive(corr_name):
     prior = IWP(q=2, d=1)
 
     def f(theta):
-        mu_0, S0_sqr, measure = _logistic_inputs(prior, theta)
+        m_0, S0_sqr, measure = _logistic_inputs(prior, theta)
         res = gaussian_filter_adaptive(
-            mu_0,
+            m_0,
             S0_sqr,
             prior,
             measure,
@@ -183,7 +173,7 @@ def test_grad_adaptive(corr_name):
         )
         return res.m[-1, 0]
 
-    _assert_grad_matches_fd(f)
+    assert_grad_matches_fd(f, THETA)
 
 
 def test_grad_adaptive_with_obs():
@@ -195,9 +185,9 @@ def test_grad_adaptive_with_obs():
     )
 
     def f(theta):
-        mu_0, S0_sqr, measure = _logistic_inputs(prior, theta)
+        m_0, S0_sqr, measure = _logistic_inputs(prior, theta)
         res = gaussian_filter_adaptive(
-            mu_0,
+            m_0,
             S0_sqr,
             prior,
             measure,
@@ -209,7 +199,7 @@ def test_grad_adaptive_with_obs():
         )
         return res.log_likelihood
 
-    _assert_grad_matches_fd(f, rtol=5e-3)
+    assert_grad_matches_fd(f, THETA, rtol=5e-3)
 
 
 # --------------------------------------------------------------------------- #
@@ -240,7 +230,7 @@ def test_grad_marginal_loglik():
     def f(theta):
         return marginal_loglik(theta, obs, model=problem)
 
-    _assert_grad_matches_fd(f)
+    assert_grad_matches_fd(f, THETA)
 
 
 # --------------------------------------------------------------------------- #
@@ -259,10 +249,10 @@ def test_grad_finite_through_recoverable_guard_firing():
         def vf(x, *, t):
             return x * x
 
-        mu_0, S0_sqr = taylor_mode_initialization(vf, np.array([x0]), q=2)
+        m_0, S0_sqr = taylor_mode_initialization(vf, np.array([x0]), q=2)
         measure = ODEInformation(vf, prior.E0, prior.E1)
         return gaussian_filter_adaptive(
-            mu_0, S0_sqr, prior, measure, save, atol=1e-6, rtol=1e-6
+            m_0, S0_sqr, prior, measure, save, atol=1e-6, rtol=1e-6
         )
 
     x0 = np.array(0.49)
@@ -305,14 +295,14 @@ def test_grad_adaptive_smoother():
     save = np.linspace(0.0, 2.0, 5)
 
     def f(theta):
-        mu_0, S0_sqr, measure = _logistic_inputs(prior, theta)
+        m_0, S0_sqr, measure = _logistic_inputs(prior, theta)
         res = gaussian_filter_adaptive(
-            mu_0, S0_sqr, prior, measure, save, smoother=True, atol=1e-7, rtol=1e-7
+            m_0, S0_sqr, prior, measure, save, smoother=True, atol=1e-7, rtol=1e-7
         )
         m_s, _ = rts_smoother(res)
         return np.sum(m_s[:, 0])
 
-    _assert_grad_matches_fd(f)
+    assert_grad_matches_fd(f, THETA)
 
 
 @pytest.mark.parametrize(
@@ -330,16 +320,16 @@ def test_grad_is_zero_not_nan_at_an_equilibrium(calibration, adaptive):
             return theta * (1.0 - x)
 
         prior = IWP(q=2, d=1)
-        mu_0, P0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
+        m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
         measure = ODEInformation(vf, prior.E0, prior.E1)
         if adaptive:
             res = gaussian_filter_adaptive(
-                mu_0, P0_sqr, prior, measure, SAVE, calibration=calibration
+                m_0, P_0_sqr, prior, measure, SAVE, calibration=calibration
             )
         else:
             res = gaussian_filter(
-                mu_0,
-                P0_sqr,
+                m_0,
+                P_0_sqr,
                 prior,
                 measure,
                 np.linspace(*TSPAN, N + 1),

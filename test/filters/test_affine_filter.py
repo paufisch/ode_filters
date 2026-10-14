@@ -24,11 +24,11 @@ from ode_filters import (
     gaussian_filter,
     prepare_observations,
     rts_smoother,
-    slr_linearize,
     slr_surrogate,
     taylor_mode_initialization,
     taylor_surrogate,
 )
+from ode_filters.linearization import slr_linearize
 from test.helpers import (
     DenseStep,
     assert_close,

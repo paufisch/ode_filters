@@ -33,8 +33,8 @@ H_STEP = 0.1
 T_EVAL = 0.3
 
 
-def _predict(prior, m0, P0_sqr, h=H_STEP) -> Gaussian:
-    return marginalize(prior.A(h), prior.b(h), prior.Q_sqr(h), Gaussian(m0, P0_sqr))
+def _predict(prior, m_0, P_0_sqr, h=H_STEP) -> Gaussian:
+    return marginalize(prior.A(h), prior.b(h), prior.Q_sqr(h), Gaussian(m_0, P_0_sqr))
 
 
 def _nonlinear():
@@ -42,8 +42,8 @@ def _nonlinear():
         return -(x**2) + 0.5
 
     prior = IWP(q=2, d=1, Xi=0.5 * np.eye(1))
-    m0, P0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
-    return prior, ODEInformation(vf, prior.E0, prior.E1), m0, P0_sqr
+    m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
+    return prior, ODEInformation(vf, prior.E0, prior.E1), m_0, P_0_sqr
 
 
 def _dense_update(model: AffineModel, x: Gaussian):
@@ -60,8 +60,8 @@ def _dense_update(model: AffineModel, x: Gaussian):
 
 
 def test_ek1_linearizes_like_the_measurement_model():
-    prior, measure, m0, P0_sqr = _nonlinear()
-    x = _predict(prior, m0, P0_sqr)
+    prior, measure, m_0, P_0_sqr = _nonlinear()
+    x = _predict(prior, m_0, P_0_sqr)
     model = TaylorCorrection().linearize(measure, x.m, t=T_EVAL)
     H, c = measure.linearize(x.m, t=T_EVAL)
     assert_close(model.H, H)
@@ -70,8 +70,8 @@ def test_ek1_linearizes_like_the_measurement_model():
 
 
 def test_ek1_update_is_the_kalman_update_of_its_linearization():
-    prior, measure, m0, P0_sqr = _nonlinear()
-    x = _predict(prior, m0, P0_sqr)
+    prior, measure, m_0, P_0_sqr = _nonlinear()
+    x = _predict(prior, m_0, P_0_sqr)
     correction = TaylorCorrection(order=1)
     model = correction.linearize(measure, x.m, t=T_EVAL)
     posterior, innovation = correction.correct(measure, x, model, t=T_EVAL)
@@ -88,8 +88,8 @@ def test_ek1_with_conservation_rows():
     prior = IWP(q=2, d=2)
     cons = Conservation(np.ones((1, 2)), np.array([1.0]))
     measure = ODEInformation(vf, prior.E0, prior.E1, constraints=[cons])
-    m0 = np.linspace(0.1, 0.6, 6)
-    x = _predict(prior, m0, 0.2 * np.eye(6))
+    m_0 = np.linspace(0.1, 0.6, 6)
+    x = _predict(prior, m_0, 0.2 * np.eye(6))
     model = TaylorCorrection().linearize(measure, x.m, t=T_EVAL)
     assert model.H.shape == (3, 6)
     posterior, innovation = TaylorCorrection().correct(measure, x, model, t=T_EVAL)
@@ -116,8 +116,8 @@ def test_hidden_state_model_composes_with_ek1():
 
 
 def test_ek0_jacobian_is_the_lhs_selector_and_the_residual_is_exact():
-    prior, measure, m0, P0_sqr = _nonlinear()
-    x = _predict(prior, m0, P0_sqr)
+    prior, measure, m_0, P_0_sqr = _nonlinear()
+    x = _predict(prior, m_0, P_0_sqr)
     model = TaylorCorrection(order=0).linearize(measure, x.m, t=T_EVAL)
     assert_close(model.H, measure.E_lhs)
     assert_close(model.H @ x.m + model.c, measure.g(x.m, t=T_EVAL))
@@ -160,8 +160,8 @@ def test_ek0_needs_an_ode_information_model():
 
 
 def test_ek0_differs_from_ek1_for_a_nonlinear_vector_field_only():
-    prior, measure, m0, P0_sqr = _nonlinear()
-    x = _predict(prior, m0, P0_sqr)
+    prior, measure, m_0, P_0_sqr = _nonlinear()
+    x = _predict(prior, m_0, P_0_sqr)
 
     def posterior_mean(order, measure):
         correction = TaylorCorrection(order=order)
@@ -182,11 +182,11 @@ def test_ek0_solves_linear_decay():
         return -x
 
     prior = IWP(q=2, d=1)
-    m0, P0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
+    m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
     measure = ODEInformation(vf, prior.E0, prior.E1)
     res = gaussian_filter(
-        m0,
-        P0_sqr,
+        m_0,
+        P_0_sqr,
         prior,
         measure,
         np.linspace(0.0, 2.0, 201),
@@ -201,8 +201,8 @@ def test_ek0_solves_linear_decay():
 
 
 def test_iekf_with_one_iteration_is_ek1():
-    prior, measure, m0, P0_sqr = _nonlinear()
-    x = _predict(prior, m0, P0_sqr)
+    prior, measure, m_0, P_0_sqr = _nonlinear()
+    x = _predict(prior, m_0, P_0_sqr)
     model = TaylorCorrection().linearize(measure, x.m, t=T_EVAL)
     ek1 = TaylorCorrection().correct(measure, x, model, t=T_EVAL)
     iekf = IteratedTaylorCorrection(max_iters=1).correct(measure, x, model, t=T_EVAL)
@@ -211,8 +211,8 @@ def test_iekf_with_one_iteration_is_ek1():
 
 
 def test_iekf_converges_to_a_fixed_point_of_the_relinearization():
-    prior, measure, m0, P0_sqr = _nonlinear()
-    x = _predict(prior, m0, P0_sqr)
+    prior, measure, m_0, P_0_sqr = _nonlinear()
+    x = _predict(prior, m_0, P_0_sqr)
     model = TaylorCorrection().linearize(measure, x.m, t=T_EVAL)
     a = IteratedTaylorCorrection(max_iters=10).correct(measure, x, model, t=T_EVAL)[0]
     b = IteratedTaylorCorrection(max_iters=20).correct(measure, x, model, t=T_EVAL)[0]
@@ -227,9 +227,9 @@ def test_iekf_differs_from_ek1_for_a_nonlinear_vector_field():
         return -(x**2) + 0.5
 
     prior = IWP(q=2, d=1, Xi=0.5 * np.eye(1))
-    m0, P0_sqr = taylor_mode_initialization(vf, np.array([2.0]), q=2)
+    m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([2.0]), q=2)
     measure = ODEInformation(vf, prior.E0, prior.E1)
-    x = _predict(prior, m0, P0_sqr, h=1.0)
+    x = _predict(prior, m_0, P_0_sqr, h=1.0)
     model = TaylorCorrection().linearize(measure, x.m, t=0.0)
     ek1 = TaylorCorrection().correct(measure, x, model, t=0.0)[0]
     iekf = IteratedTaylorCorrection(max_iters=20).correct(measure, x, model, t=0.0)[0]
@@ -241,6 +241,7 @@ def test_iekf_differs_from_ek1_for_a_nonlinear_vector_field():
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.wrong_input_types
 @pytest.mark.parametrize("bad_order", [-1, 2, 0.5])
 def test_invalid_order_raises(bad_order):
     with pytest.raises(ValueError, match="order must be 0"):
@@ -258,8 +259,8 @@ def test_invalid_iteration_count_raises():
     ids=["ek0", "ek1", "iekf"],
 )
 def test_corrections_are_jittable(correction):
-    prior, measure, m0, P0_sqr = _nonlinear()
-    x = _predict(prior, m0, P0_sqr)
+    prior, measure, m_0, P_0_sqr = _nonlinear()
+    x = _predict(prior, m_0, P_0_sqr)
 
     def run(x):
         model = correction.linearize(measure, x.m, t=T_EVAL)

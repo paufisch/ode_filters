@@ -89,7 +89,7 @@ fixes below come on top.
   noise covariances are pytree leaves; orders, dimensions and vector fields are
   static. Compile with `equinox.filter_jit` (`jax.jit` with static model
   arguments fails). `measure.R = ...` becomes `measure.with_noise(...)`,
-  `E_constraint` becomes `E_lhs`, `get_noise(t=...)` becomes `noise_sqr(t)`.
+  `E_constraint` becomes `E_lhs`, `get_noise(t=...)` becomes `noise_sqr(t=...)`.
 - **Results.** `FilterResult` is in the original state coordinates for every
   prior (`m_bar`, `P_bar_sqr` and `T` are gone), gains `diffusion`,
   `n_accepted`, `n_rejected` and `steps`, and its field order changed.
@@ -140,7 +140,11 @@ fixes below come on top.
   `ode_filter_adaptive` (with the adaptive loop `sqr_adaptive_loop`, named
   `ekf1_sqr_adaptive_loop` before 0.7.2) and `ipls`. Its per-step trace is
   `record_steps=` and its `sigma_in_error="running_mean"` an option of
-  `gaussian_filter_adaptive`.
+  `gaussian_filter_adaptive`; its `h_min` and `h_max` have no counterpart.
+- The top-level exports `SLRModel` and `slr_linearize` (import them from
+  `ode_filters.linearization`), and the exports of the quadrature rules
+  `gauss_hermite_rule`, `cubature_rule` and `quadrature_nodes` (choose a rule
+  with `rule=` and `n_nodes=`).
 - `MaternPrior` internals `_F`, `_L`, `_q`, `S`, `n` and `A_and_Q`.
 - `docs/examples/ode_filters.mplstyle`.
 
@@ -162,6 +166,11 @@ fixes below come on top.
   `diagonal_ekf0`.**
 - `gaussian_filter_adaptive` did not validate `calibration`: a misspelled mode
   ran as `"none"`, and a diagonal mode with a non-diagonal `Xi` was accepted.
+- A diagonal calibration policy accepted a non-diagonal `Xi` under `jit`, where
+  `Xi` is traced. Priors now record at construction whether `Xi` is diagonal
+  (`xi_diagonal`), and the check uses that record under `jit`.
+- The `log_likelihood_obs` docstring called it the objective of Fenrir. It is
+  the sequential data evidence; Fenrir's objective is the new `fenrir_loglik`.
 - Reverse-mode gradients were NaN wherever a diffusion estimate or the adaptive
   local error is exactly zero -- e.g. any system started at an equilibrium or at
   rest: `sqrt'(0) = inf` turned the backward pass into `0 * inf`. The scaling

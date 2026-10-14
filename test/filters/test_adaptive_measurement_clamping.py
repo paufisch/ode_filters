@@ -3,13 +3,8 @@
 The adaptive solver lands exactly on every ``save_at`` time, and external
 observations (built with :func:`prepare_observations`, aligned to ``save_at``)
 are assimilated at those times. These end-to-end tests check that a precise
-observation at its time visibly shapes the filtered posterior.
-
-The mechanics of the (removed) embedded-``Measurement``-in-measure clamping --
-``measure.measurement_times()`` snapping, ``find_index`` tolerance, the Python
-``sqr_adaptive_loop`` landing on embedded-measurement times -- have no
-analog in the public save-at API and are covered for the obs-model path by
-``test/test_filters/test_adaptive_solve.py`` (the ``test_obs_model_*`` tests).
+observation at its time visibly shapes the filtered posterior. The solver-level
+observation tests are the ``test_obs_model_*`` tests in ``test_adaptive_solve.py``.
 """
 
 from __future__ import annotations
@@ -38,9 +33,9 @@ def _setup_logistic():
     """Build a small logistic-ODE filter problem."""
     prior = IWP(q=2, d=1)
     x0 = np.array([0.1])
-    mu_0, Sigma_0_sqr = taylor_mode_initialization(logistic_vf, x0, q=2)
+    m_0, P_0_sqr = taylor_mode_initialization(logistic_vf, x0, q=2)
     measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
-    return prior, mu_0, Sigma_0_sqr, measure
+    return prior, m_0, P_0_sqr, measure
 
 
 class TestMeasurementApplied:
@@ -51,12 +46,12 @@ class TestMeasurementApplied:
         observation of 0.6 with tight noise must pull the posterior up at that
         time relative to the unobserved (free) solve on the same grid.
         """
-        prior, mu_0, S0, measure = _setup_logistic()
+        prior, m_0, S0, measure = _setup_logistic()
         save_at = np.linspace(0.0, 1.0, 6)  # save_at[2] == 0.4
         t_idx = 2
 
         free = gaussian_filter_adaptive(
-            mu_0, S0, prior, measure, save_at, atol=1e-2, rtol=1e-2, calibration="none"
+            m_0, S0, prior, measure, save_at, atol=1e-2, rtol=1e-2, calibration="none"
         )
 
         meas = Measurement(
@@ -67,7 +62,7 @@ class TestMeasurementApplied:
         )
         obs = prepare_observations([meas], prior.E0, save_at)
         pulled = gaussian_filter_adaptive(
-            mu_0,
+            m_0,
             S0,
             prior,
             measure,
@@ -107,14 +102,14 @@ class TestJointPriorComposition:
             E0_hidden=joint.E0_hidden,
         )
         D = joint.E0.shape[1]
-        mu_0 = np.zeros(D).at[0].set(1.0).at[1].set(0.5).at[6].set(0.7)
+        m_0 = np.zeros(D).at[0].set(1.0).at[1].set(0.5).at[6].set(0.7)
         S0 = 1e-6 * np.eye(D)
 
         save_at = np.linspace(0.0, 1.0, 6)  # save_at[2] == 0.4
         t_idx = 2
 
         free = gaussian_filter_adaptive(
-            mu_0, S0, joint, measure, save_at, atol=1e-4, rtol=1e-2, calibration="none"
+            m_0, S0, joint, measure, save_at, atol=1e-4, rtol=1e-2, calibration="none"
         )
 
         # Observe the first ODE component; E0_x extracts the length-2 ODE state.
@@ -126,7 +121,7 @@ class TestJointPriorComposition:
         )
         obs = prepare_observations([meas], joint.E0_x, save_at)
         pulled = gaussian_filter_adaptive(
-            mu_0,
+            m_0,
             S0,
             joint,
             measure,
