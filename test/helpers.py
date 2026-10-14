@@ -284,3 +284,86 @@ def van_loan(F: Array, S: Array, h: float) -> tuple[Array, Array]:
     E = jax.scipy.linalg.expm(block * h)
     A = E[:n, :n]
     return A, E[:n, n:] @ A.T
+
+
+# ---------------------------------------------------------------------------
+# Gradient check of a function of several parameters
+# ---------------------------------------------------------------------------
+
+
+def assert_grad_matches_fd_vector(
+    f: Callable[[Array], Array],
+    theta: Array,
+    *,
+    eps: float = 1e-5,
+    rtol: float = 2e-3,
+    atol: float = 1e-7,
+) -> None:
+    """Assert ``jax.grad(f)(theta)`` matches central finite differences.
+
+    The vector variant of ``assert_grad_matches_fd``: ``f`` maps a vector to a
+    scalar, and every component of the gradient must satisfy
+    ``|g_i - fd_i| <= atol + rtol |fd_i|``.
+    """
+    theta = np.asarray(theta, dtype=float)
+    f_jit = jax.jit(f)
+    g = jax.jit(jax.grad(f))(theta)
+    steps = eps * np.eye(theta.shape[0])
+    fd = np.array([(f_jit(theta + e) - f_jit(theta - e)) / (2 * eps) for e in steps])
+    assert bool(np.all(np.isfinite(g))), f"non-finite gradient {g}"
+    err = np.abs(g - fd)
+    assert bool(np.all(err <= atol + rtol * np.abs(fd))), f"grad={g} vs fd={fd}"
+
+
+# ---------------------------------------------------------------------------
+# A linear ODE driven by a hidden input, with its solution
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HiddenProblem:
+    """An ODE ``x' = vf(x, u, t)`` driven by a known input ``u(t)``.
+
+    The filters treat ``u`` as hidden (a ``JointPrior`` block); ``hidden``
+    and ``solution`` give the true input and solution at given times, shapes
+    ``[K, d_u]`` and ``[K, d_x]``.
+    """
+
+    vf: Callable[..., Array]
+    x0: Array
+    tspan: tuple[float, float]
+    hidden: Callable[[Array], Array]
+    solution: Callable[[Array], Array]
+
+
+_HIDDEN_B = np.array([[0.0], [1.0]])
+_HIDDEN_OMEGA = 1.5
+
+
+def _hidden_linear_vf(x, u, *, t):
+    return _LINEAR_2D @ x + _HIDDEN_B @ u
+
+
+def _hidden_linear_input(ts):
+    return np.sin(_HIDDEN_OMEGA * ts)[:, None]
+
+
+def _hidden_linear_solution(ts):
+    """``x(t)`` from ``expm(M t)``: with the oscillator ``z = (sin, cos)(omega t)``
+    that generates the input, ``[x, z]`` solves the linear ODE ``y' = M y``."""
+    W = np.array([[0.0, _HIDDEN_OMEGA], [-_HIDDEN_OMEGA, 0.0]])
+    M = np.block(
+        [[_LINEAR_2D, _HIDDEN_B @ np.array([[1.0, 0.0]])], [np.zeros((2, 2)), W]]
+    )
+    y0 = np.array([1.0, 0.0, 0.0, 1.0])
+    return jax.vmap(lambda t: jax.scipy.linalg.expm(M * t) @ y0)(ts)[:, :2]
+
+
+# ``x' = L x + B u`` with ``u(t) = sin(1.5 t)`` entering the second component.
+HIDDEN_LINEAR = HiddenProblem(
+    _hidden_linear_vf,
+    np.array([1.0, 0.0]),
+    (0.0, 3.0),
+    hidden=_hidden_linear_input,
+    solution=_hidden_linear_solution,
+)
