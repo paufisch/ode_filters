@@ -184,6 +184,56 @@ def test_jit_vmap_and_gradients():
     assert_grad_matches_fd(by_scale, np.array(0.3))
 
 
+def _central_difference(f, s, direction, eps=1e-5):
+    """``(f(s + eps v) - f(s - eps v)) / (2 eps)`` for pytrees ``s`` and ``v``."""
+
+    def shifted(sign):
+        return f(jax.tree.map(lambda a, v: a + sign * eps * v, s, direction))
+
+    return float((shifted(1.0) - shifted(-1.0)) / (2.0 * eps))
+
+
+@pytest.mark.parametrize("output", ["log_likelihood", "log_likelihood_obs"])
+def test_gradients_in_the_surrogate_match_finite_differences(output):
+    """Reverse-mode derivatives in ``H``, ``c`` and ``R_sqr`` of the evidence.
+
+    Checked along a random direction in all entries at once and along single
+    entries of each field, at a realistic linearization (the EK1 predictions)
+    with a non-zero information noise.
+    """
+    prior, measure, m_0, P_0_sqr = _logistic()
+    obs = _data(prior.E0)
+    ek1 = gaussian_filter(m_0, P_0_sqr, prior, measure, TS, calibration="none")
+    surrogate = taylor_surrogate(measure, ek1.m_pred, ts=TS[1:])
+    surrogate = surrogate._replace(R_sqr=0.05 * np.ones_like(surrogate.R_sqr))
+
+    def evidence(s):
+        res = affine_filter(m_0, P_0_sqr, prior, s, TS, obs_model=obs)
+        return getattr(res, output)
+
+    f = jax.jit(evidence)
+    grad = jax.jit(jax.grad(evidence))(surrogate)
+    keys = jax.random.split(jax.random.PRNGKey(3), 3)
+    direction = AffineSurrogate(
+        *(
+            jax.random.normal(key, a.shape)
+            for key, a in zip(keys, surrogate, strict=True)
+        )
+    )
+    directional = sum(
+        float(np.sum(g * v)) for g, v in zip(grad, direction, strict=True)
+    )
+    fd = _central_difference(f, surrogate, direction)
+    assert abs(directional - fd) <= 1e-5 * abs(fd)
+
+    for field, index in [("H", (4, 0, 1)), ("c", (11, 0)), ("R_sqr", (16, 0, 0))]:
+        unit = jax.tree.map(np.zeros_like, surrogate)
+        unit = unit._replace(**{field: getattr(unit, field).at[index].set(1.0)})
+        fd = _central_difference(f, surrogate, unit)
+        g = float(getattr(grad, field)[index])
+        assert abs(g - fd) <= 1e-5 * abs(fd) + 1e-9, (field, g, fd)
+
+
 @pytest.mark.parametrize(
     ("change", "match"),
     [

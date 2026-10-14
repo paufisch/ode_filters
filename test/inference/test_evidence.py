@@ -16,6 +16,7 @@ from ode_filters import (
     IWP,
     AffineSurrogate,
     InferenceProblem,
+    InformationCriteria,
     JointPrior,
     MaternPrior,
     Measurement,
@@ -141,8 +142,8 @@ def _dense(prior, surrogate, m_0, P_0_sqr, obs):
     return V_mean, V_cov, VU_cov, kinds
 
 
-def test_evidence_and_informations_match_the_dense_oracle():
-    prior, surrogate, m_0, P_0_sqr, obs = _setup()
+def _oracle(prior, surrogate, m_0, P_0_sqr, obs):
+    """``log p(Y | Z)`` and the three informations from the dense joint Gaussian."""
     V_mean, V_cov, VU_cov, kinds = _dense(prior, surrogate, m_0, P_0_sqr, obs)
     z = np.array([i for i, (k, _) in enumerate(kinds) if k == "z"])
     y = np.array([i for i, (k, _) in enumerate(kinds) if k == "y"])
@@ -151,11 +152,6 @@ def test_evidence_and_informations_match_the_dense_oracle():
 
     log_p_zy = _logpdf_zero(V_mean, V_cov)
     log_p_z = _logpdf_zero(V_mean[z], V_cov[np.ix_(z, z)])
-    data_free = affine_filter(m_0, P_0_sqr, prior, surrogate, TS)
-    data = affine_filter(m_0, P_0_sqr, prior, surrogate, TS, obs_model=obs)
-    assert_close(fenrir_loglik(data_free, obs), log_p_zy - log_p_z, rtol=1e-9)
-    assert_close(conditional_loglik(data, data_free), log_p_zy - log_p_z, rtol=1e-9)
-
     all_v = np.arange(n_v)
     I_UZ = 0.5 * (
         _logdet(VU_cov[np.ix_(z, z)]) - _logdet(_conditional_cov(VU_cov, z, u))
@@ -173,10 +169,40 @@ def test_evidence_and_informations_match_the_dense_oracle():
                 _conditional_cov(VU_cov, np.array([i]), np.concatenate([past, u]))
             )
         )
+    return log_p_zy - log_p_z, InformationCriteria(I_UZ, I_UYZ - I_UZ, D)
+
+
+def _assert_matches_oracle(log_xi, *, atol):
+    prior, surrogate, m_0, P_0_sqr, obs = _setup(log_xi=log_xi)
+    log_p_y_given_z, expected = _oracle(prior, surrogate, m_0, P_0_sqr, obs)
+    data_free = affine_filter(m_0, P_0_sqr, prior, surrogate, TS)
+    data = affine_filter(m_0, P_0_sqr, prior, surrogate, TS, obs_model=obs)
+    assert_close(fenrir_loglik(data_free, obs), log_p_y_given_z, rtol=1e-9)
+    assert_close(conditional_loglik(data, data_free), log_p_y_given_z, rtol=1e-9)
     criteria = information_criteria(m_0, P_0_sqr, prior, surrogate, TS, obs)
-    assert_close(criteria.I_UZ, I_UZ, rtol=1e-8)
-    assert_close(criteria.I_UY_given_Z, I_UYZ - I_UZ, rtol=1e-8)
-    assert_close(criteria.D, D, rtol=1e-8)
+    for name in InformationCriteria._fields:
+        try:
+            assert_close(
+                getattr(criteria, name), getattr(expected, name), rtol=1e-9, atol=atol
+            )
+        except AssertionError as err:
+            raise AssertionError(f"{name}: {err}") from None
+
+
+def test_evidence_and_informations_match_the_dense_oracle():
+    _assert_matches_oracle(0.0, atol=0.0)
+
+
+@pytest.mark.parametrize("log_xi", [np.log(1e-10), np.log(1e10)], ids=["1e-10", "1e10"])
+def test_extreme_state_diffusions_match_the_dense_oracle(log_xi):
+    """The evidence and the informations at a state diffusion ``Xi`` of ``1e+-10``.
+
+    At ``Xi = 1e10`` the ODE information and the data say almost nothing about
+    the input: the informations are about ``1e-6`` nats, each a difference of
+    log-determinants of size about ``60``, which neither side computes to better
+    than about ``1e-13``. They are compared to an absolute ``1e-11`` nats.
+    """
+    _assert_matches_oracle(log_xi, atol=1e-11)
 
 
 def test_fenrir_equals_the_conditional_evidence_on_a_shared_surrogate():
@@ -238,13 +264,6 @@ def test_informations_are_differentiable_in_the_state_diffusion():
 
     assert_grad_matches_fd(criterion("I_UY_given_Z"), np.array(0.2))
     assert_grad_matches_fd(criterion("D"), np.array(0.2))
-
-
-@pytest.mark.parametrize("log_xi", [np.log(1e-10), np.log(1e10)])
-def test_extreme_state_diffusions_stay_finite(log_xi):
-    prior, surrogate, m_0, P_0_sqr, obs = _setup(log_xi=log_xi)
-    criteria = information_criteria(m_0, P_0_sqr, prior, surrogate, TS, obs)
-    assert all(bool(np.isfinite(v)) for v in criteria)
 
 
 def test_default_conditional_state_covariance_is_the_schur_complement():

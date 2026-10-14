@@ -6,7 +6,16 @@ import jax
 import jax.numpy as np
 import pytest
 
-from ode_filters import IWP, affine_filter, interpolate, rts_smoother, sample_posterior
+from ode_filters import (
+    IWP,
+    ODEInformation,
+    affine_filter,
+    gaussian_filter,
+    interpolate,
+    rts_smoother,
+    sample_posterior,
+    taylor_mode_initialization,
+)
 from ode_filters.linearization.surrogate import AffineSurrogate
 from test.helpers import assert_close, cov
 
@@ -128,3 +137,49 @@ def test_samples_are_joint_draws_from_the_smoothing_posterior():
         variances[k + 1],
         n,
     )
+
+
+def _logistic_dynamic():
+    """A dynamically calibrated EK1 run: the diffusion changes from step to step."""
+
+    def vf(x, *, t):
+        return x * (1.0 - x)
+
+    prior = IWP(q=2, d=1)
+    m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([0.1]), q=2)
+    ts = np.linspace(0.0, 5.0, 11)
+    measure = ODEInformation(vf, prior.E0, prior.E1)
+    return prior, ts, gaussian_filter(m_0, P_0_sqr, prior, measure, ts)
+
+
+def test_filtered_limits_at_a_node_under_dynamic_calibration():
+    """Left of node ``k + 1`` the filtered bridge is step ``k``'s prediction.
+
+    The prediction carries step ``k``'s diffusion in its covariance; just right
+    of the node the bridge starts from the filtered state there.
+    """
+    prior, ts, result = _logistic_dynamic()
+    assert result.sigma_sqr is not None and result.P_pred_sqr is not None
+    assert result.m_pred is not None
+    k, eps = 4, 1e-9
+    # The test can only see the diffusion index if neighbouring steps differ.
+    assert abs(float(result.sigma_sqr[k] / result.sigma_sqr[k - 1]) - 1.0) > 0.1
+    around = np.array([ts[k + 1] - eps, ts[k + 1] + eps])
+    filtered = interpolate(result, prior, around, smoothed=False)
+    assert_close(filtered.m[0], result.m_pred[k], rtol=1e-6)
+    assert_close(cov(filtered.P_sqr[0]), cov(result.P_pred_sqr[k]), rtol=1e-6)
+    assert_close(filtered.m[1], result.m[k + 1], rtol=1e-6)
+    assert_close(cov(filtered.P_sqr[1]), cov(result.P_sqr[k + 1]), rtol=1e-6)
+
+
+def test_smoothed_marginals_are_continuous_under_dynamic_calibration():
+    """Smoothed covariances, not only means, are continuous across a node."""
+    prior, ts, result = _logistic_dynamic()
+    smooth = rts_smoother(result)
+    node, eps = 6, 1e-9
+    around = np.array([ts[node] - eps, ts[node] + eps])
+    smoothed = interpolate(result, prior, around)
+    assert_close(
+        cov(smoothed.P_sqr), np.stack([cov(smooth.P_sqr[node])] * 2), rtol=1e-6
+    )
+    assert_close(smoothed.m, np.stack([smooth.m[node]] * 2), rtol=1e-6)
