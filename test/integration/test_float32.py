@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as np
+import pytest
 
 from ode_filters import (
     IWP,
@@ -18,6 +19,20 @@ from ode_filters import (
     rts_smoother,
     taylor_mode_initialization,
 )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_jax_caches():
+    """Keep the float32 solve from leaking into later float64 tests.
+
+    JAX 0.11 (not 0.8) keeps the device copy of a NumPy constant used under
+    ``jit`` across a change of ``jax_enable_x64``: after a float32 solve, the
+    cached prior constants (``_iwp_constants``) came back as float32 in the
+    float64 tests that ran next in the same process, eight digits short.
+    """
+    jax.clear_caches()
+    yield
+    jax.clear_caches()
 
 
 def _logistic(x, *, t):

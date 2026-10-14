@@ -161,5 +161,5 @@ def aggregate_sigma_sqr(
     if kind == "last":
         return arr[-1]
     if kind == "running":
-        return np.cumsum(arr) / np.arange(1, arr.shape[0] + 1)
+        return np.cumsum(arr) / np.arange(1, arr.shape[0] + 1, dtype=arr.dtype)
     raise ValueError(f"Unknown aggregator kind: {kind!r}")

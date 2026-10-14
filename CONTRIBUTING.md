@@ -67,6 +67,58 @@ Merging to `main` triggers an automated release (see [Releasing](#releasing-main
 
 The pull-request template prompts for each of these.
 
+## Testing
+
+`uv run pytest` runs the whole suite in parallel, one worker per core
+(pytest-xdist, `-n auto` in `[tool.pytest.ini_options]`), and fails below 100%
+line coverage, combined over the workers. Lines that cannot run by design carry
+`# pragma: no cover`. Every warning is an error: fix its cause, or, for a
+warning from a dependency that cannot be fixed on this side, add a specific
+`filterwarnings` entry in `pyproject.toml` with a comment saying why.
+
+```bash
+uv run pytest                               # parallel, with the coverage gate
+uv run pytest -n 0 --no-cov -k name --pdb   # one process, to debug one test
+HYPOTHESIS_PROFILE=ci uv run pytest         # 100 examples per property, as CI
+```
+
+Two stricter modes run in CI and are worth running before touching array code:
+
+```bash
+# Implicit dtype promotion (int with float, float32 with float64) and implicit
+# rank promotion (broadcasting arrays of different rank) raise.
+JAX_NUMPY_DTYPE_PROMOTION=strict JAX_NUMPY_RANK_PROMOTION=raise uv run pytest --no-cov
+# jaxtyping + beartype check every annotation at runtime (see Type checking).
+ODE_FILTERS_TYPECHECK=1 uv run pytest --no-cov
+```
+
+Under strict promotion, write the cast or the reshape out (`n.astype(float)`,
+`x.mean(axis=0, keepdims=True)`, `M[None]`). optax, NumPyro and BlackJAX do not
+support strict promotion; a test that drives them carries
+`@pytest.mark.standard_promotion`, which runs it under the default rules.
+
+CI (`.github/workflows/`) runs, on every push to and pull request against
+`development` and `main`:
+
+- **Checks**: `pre-commit run --all-files` (ruff, pyright, ...).
+- **Tests (py3.13, py3.14)**: the suite with the coverage gate, on the versions
+  pinned in `uv.lock`.
+- **Tests (strict promotion, runtime type checks)**: the two modes above.
+- **Build docs (strict)**: the MkDocs build, executing every notebook.
+- **Benchmark smoke run**: `benchmarks/work_precision.py --quick`, which keeps
+  the benchmark running against the current API:
+  `uv run --extra benchmarks python benchmarks/work_precision.py --quick --out-dir /tmp/bench`.
+- **Latest dependencies** (`latest-deps.yml`; also weekly and on demand): the
+  suite against the newest versions `pyproject.toml` allows, since `uv.lock`
+  pins `jax` at its lower bound. A failure there that the main tests do not show
+  comes from a new upstream release. To reproduce it locally, then return to
+  the lock:
+
+  ```bash
+  uv sync --upgrade --group dev && uv run pytest --no-cov
+  git checkout uv.lock && uv sync --group dev
+  ```
+
 ## Changelog and versioning
 
 The split is deliberate: **contributors describe the change, maintainers assign
@@ -142,7 +194,8 @@ The suite passes with it. Tests that pass wrongly typed input on purpose (to
 assert the library's own error message) carry the marker
 `@pytest.mark.wrong_input_types` and are skipped in this mode, because the
 runtime checker rejects their input first; mark new tests of that kind too. It
-is off by default because it slows the suite down. Migrating annotations from
+is off by default because it slows the suite down; CI runs it in a job of its
+own (see [Testing](#testing)). Migrating annotations from
 plain `Array` to jaxtyping shapes is an ongoing, incremental effort; new code is
 encouraged to use jaxtyping types.
 
@@ -153,5 +206,6 @@ encouraged to use jaxtyping types.
 | Install hooks   | `uv run pre-commit install`              |
 | Lint + format   | `uv run pre-commit run --all-files`      |
 | Tests           | `uv run pytest`                          |
+| One test, debug | `uv run pytest -n 0 --no-cov -k name`    |
 | Type check      | `uv run pyright`                         |
 | Docs preview    | `uv run --group docs mkdocs serve`       |

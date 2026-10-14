@@ -80,6 +80,10 @@ fixes below come on top.
   included, so a loose tolerance cannot step over a short feature such as a
   brief pulse; `None` (default) bounds the steps by the save times only. It
   takes over the `h_max` of the removed Python loop.
+- Tooling: the tests run in parallel (pytest-xdist) and treat warnings as
+  errors; CI also runs them under strict JAX promotion and runtime type checks,
+  against the newest allowed dependencies (weekly and on pull requests), and
+  runs the benchmark in a quick mode.
 
 ### Changed
 
@@ -214,6 +218,14 @@ fixes below come on top.
 - `IOUPPrior` accepted `n_quad <= q` and returned a wrongly shaped `Q_sqr`.
 - The opt-in runtime type checking (`ODE_FILTERS_TYPECHECK=1`) failed at import.
 - `JointPrior.xi` raised `AttributeError`; it returns `blkdiag(Xi_x, Xi_u)`.
+- `taylor_mode_initialization` failed with JAX 0.11 for a vector field that
+  unpacks its state (`s, i, r = x`): `jax.experimental.jet` cannot push an
+  empty series through the unpacking. The first coefficient, the vector field
+  itself, is now evaluated directly.
+- `IWP`, `PrecondIWP`, `PrecondMaternPrior`, `gaussian_filter_adaptive`,
+  `aggregate_sigma_sqr(kind="running")` and `residual_autocorrelation` raised
+  under JAX's strict promotion (`jax_numpy_dtype_promotion="strict"`,
+  `jax_numpy_rank_promotion="raise"`). Values and gradients are unchanged.
 - Input checks for configurations that failed silently or deep inside a solve:
   - the information classes validate their selection matrices (a sliced `E1`
     used to broadcast into a wrong residual);

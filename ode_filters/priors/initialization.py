@@ -89,11 +89,17 @@ def taylor_mode_initialization(
     series_terms: list[Array] = []
 
     for _ in range(q):
-        primals_out, series_out = jax.experimental.jet.jet(
-            aug_vf,
-            primals=(base_state,),
-            series=(tuple(series_terms),),
-        )
+        if series_terms:
+            primals_out, series_out = jax.experimental.jet.jet(
+                aug_vf,
+                primals=(base_state,),
+                series=(tuple(series_terms),),
+            )
+        else:
+            # The first term is the vector field itself, so evaluate it
+            # directly: from JAX 0.11 on, jet with an empty series fails on a
+            # vector field that unpacks its state (``s, i, r = x``).
+            primals_out, series_out = aug_vf(base_state), ()
 
         updated_series = [np.asarray(primals_out)]
         updated_series.extend(np.asarray(term) for term in series_out)

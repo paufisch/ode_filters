@@ -102,7 +102,9 @@ def test_interpolation_needs_a_per_step_diffusion():
 
 
 def _cross_cov(a, b):
-    return np.einsum("si,sj->ij", a - a.mean(0), b - b.mean(0)) / (a.shape[0] - 1)
+    a = a - a.mean(0, keepdims=True)
+    b = b - b.mean(0, keepdims=True)
+    return np.einsum("si,sj->ij", a, b) / (a.shape[0] - 1)
 
 
 def _assert_within_standard_errors(sample_cov, true_cov, var_a, var_b, n, k=5.0):
