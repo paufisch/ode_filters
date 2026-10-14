@@ -41,3 +41,26 @@ scenarios changed, by how much, and why.
   `length_scale=1.0`, where both conventions agree, and is unchanged. Only the
   `matern_dynamic` arrays were re-recorded; all others are kept bit for bit (a
   fresh run differs from them by rounding, below `1e-13`).
+- 2026-10-14, thirteen scenarios added; no recorded value changed (the arrays of
+  the existing scenarios were kept byte for byte; regenerating them reproduces
+  249 of 318 exactly and the rest to `6e-14` relative, rounding of the Matern,
+  joint and second-order runs). New, with compact outputs:
+  - `adaptive_running_mean`, `adaptive_p_controller`, `adaptive_diagonal`: the
+    adaptive solver with `sigma_in_error="running_mean"`, with a `PController`,
+    and with per-component calibration (a two-dimensional linear ODE). Besides
+    the save-time marginals they record the step counts and every accepted step
+    size and diffusion (`record_steps`), which pins the controller's decisions.
+  - `ieks_{0,1,3}` and `ieks_{0,1,3}_obs`: `iterated_smoother` (Taylor) with
+    0, 1 and 3 passes, without and with data, on a coarse grid through the
+    logistic's steep rise where the passes move the solution (by up to `2e-4`).
+    The convergence diagnostic `result.step` is not recorded: after the first
+    pass it is at the rounding level.
+  - `precond_matern_dynamic`: `PrecondMaternPrior` (`length_scale=1.0`, where
+    the library's and the textbook length-scale conventions agree), with the
+    full per-step outputs, as `matern_dynamic`.
+  - `blackbox_dynamic`: the logistic residual as a `BlackBoxMeasurement`.
+  - `posthoc_rescale`: runs with `calibration="none"` rescaled by
+    `posthoc_mle_sigma_sqr` and by the running mean of the per-step estimates;
+    a joint run rescales its state block only (`prior=`).
+  - `non_autonomous`: `x' = cos(t) x`, started from the exact derivatives of
+    `exp(sin t)` (`taylor_mode_initialization` holds the time fixed at `t0`).

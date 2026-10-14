@@ -223,6 +223,13 @@ fixes below come on top.
   were 5-9 orders of magnitude looser than the measured errors. The solvers are
   now also checked against recorded reference outputs and a dense Kalman
   oracle.
+- Tests: gaps a mutation run exposed are closed -- non-autonomous ODEs on every
+  solver path, `interpolate` under dynamic calibration (covariances, off-midpoint
+  times, against a dense bridge), several sensors with their own noises and
+  times, demeaning in `residual_autocorrelation`, gradients of `affine_filter`
+  in the surrogate, the evidence at extreme diffusions, an independent oracle
+  for `joint_taylor_initialization`, and whole runs of `TransformedMeasurement`
+  and `SecondOrderODEInformationWithHidden`; thirteen more reference scenarios.
 
 ## [0.7.3] - 2026-10-04
 

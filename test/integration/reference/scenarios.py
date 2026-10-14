@@ -23,21 +23,27 @@ from jax import Array
 from ode_filters import (
     IWP,
     AffineSurrogate,
+    BlackBoxMeasurement,
     InferenceProblem,
     IOUPPrior,
     IteratedTaylorCorrection,
     JointPrior,
     MaternPrior,
     ODEInformation,
+    PController,
     PrecondIWP,
+    PrecondMaternPrior,
     QuadratureCorrection,
     TaylorCorrection,
     affine_filter,
+    aggregate_sigma_sqr,
     gaussian_filter,
     gaussian_filter_adaptive,
     iterated_smoother,
     marginal_loglik,
+    posthoc_mle_sigma_sqr,
     prepare_observations,
+    rescale_sqr_seq,
     rts_smoother,
     taylor_mode_initialization,
 )
@@ -378,6 +384,201 @@ def _marginal_loglik() -> Outputs:
     }
 
 
+# ---------------------------------------------------------------------------
+# Added 2026-10-14 (see README.md). Matern scenarios use length_scale=1.0, where
+# the library's length-scale convention and the textbook one coincide. Their
+# outputs are kept compact: no per-step predictions or backward conditionals
+# unless the scenario is about them.
+# ---------------------------------------------------------------------------
+
+
+def _compact_outputs(res) -> Outputs:
+    """Filtered and smoothed marginals, evidence and diffusion of a fixed-grid run."""
+    m_s, P_s_sqr = rts_smoother(res)
+    return {
+        "m": res.m,
+        "P": cov(res.P_sqr),
+        "log_likelihood": res.log_likelihood,
+        "sigma_sqr": res.sigma_sqr,
+        "m_smooth": m_s,
+        "P_smooth": cov(P_s_sqr),
+    }
+
+
+def _adaptive_outputs(res) -> Outputs:
+    """Save-time marginals, evidence, step counts and the accepted steps."""
+    steps = res.steps
+    n = int(steps.count)
+    return {
+        "m": res.m,
+        "P": cov(res.P_sqr),
+        "log_likelihood": res.log_likelihood,
+        "n_accepted": res.n_accepted,
+        "n_rejected": res.n_rejected,
+        "h": steps.h[:n],
+        "sigma_sqr": steps.sigma_sqr[:n],
+    }
+
+
+def _adaptive_variant(**options) -> Callable[[], Outputs]:
+    """The logistic problem of ``adaptive_smoother`` with another error control."""
+
+    def run() -> Outputs:
+        prior = IWP(q=2, d=1)
+        m_0, P_0_sqr, measure = _logistic_setup(prior)
+        res = gaussian_filter_adaptive(
+            m_0,
+            P_0_sqr,
+            prior,
+            measure,
+            np.linspace(*LOGISTIC.tspan, 6),
+            atol=1e-6,
+            rtol=1e-4,
+            record_steps=256,
+            **options,
+        )
+        return _adaptive_outputs(res)
+
+    return run
+
+
+def _adaptive_diagonal() -> Outputs:
+    """Per-component calibration of a two-dimensional linear ODE."""
+    prior = IWP(q=2, d=2)
+    m_0, P_0_sqr = taylor_mode_initialization(LINEAR_2D.vf, LINEAR_2D.x0, q=2)
+    measure = ODEInformation(LINEAR_2D.vf, prior.E0, prior.E1)
+    res = gaussian_filter_adaptive(
+        m_0,
+        P_0_sqr,
+        prior,
+        measure,
+        np.linspace(*LINEAR_2D.tspan, 6),
+        calibration="diagonal",
+        atol=1e-6,
+        rtol=1e-4,
+        record_steps=256,
+    )
+    return _adaptive_outputs(res)
+
+
+def _ieks(n_iters: int, with_obs: bool) -> Callable[[], Outputs]:
+    """IEKS on a coarse grid through the logistic's steep rise, where passes matter.
+
+    Each pass moves the smoothed means by up to ``2e-4`` (the first) and
+    ``3e-6`` (the next two). The convergence diagnostic ``result.step`` is not
+    recorded: after the first pass it is a difference of means at the rounding
+    level.
+    """
+
+    def run() -> Outputs:
+        x0 = 0.05
+        prior = IWP(q=2, d=1)
+        m_0, P_0_sqr = taylor_mode_initialization(LOGISTIC.vf, np.array([x0]), q=2)
+        measure = ODEInformation(LOGISTIC.vf, prior.E0, prior.E1)
+        ts = _grid((0.0, 10.0))
+        obs = None
+        if with_obs:
+            t_obs = ts[5::5]
+            z = x0 * np.exp(t_obs) / (1.0 - x0 + x0 * np.exp(t_obs))
+            z = z + 0.02 * np.cos(7.0 * t_obs)
+            obs = prepare_observations(
+                [Measurement(np.eye(1), z[:, None], t_obs, noise=1e-3)], prior.E0, ts
+            )
+        res = iterated_smoother(
+            m_0,
+            P_0_sqr,
+            prior,
+            measure,
+            ts,
+            linearization="taylor",
+            n_iters=n_iters,
+            obs_model=obs,
+        )
+        out = {
+            "m": res.m,
+            "P": cov(res.P_sqr),
+            "m_filt": res.filter.m,
+            "log_likelihood": res.filter.log_likelihood,
+        }
+        if with_obs:
+            out["log_likelihood_obs"] = res.filter.log_likelihood_obs
+        return out
+
+    return run
+
+
+def _precond_matern_dynamic() -> Outputs:
+    prior = PrecondMaternPrior(q=2, d=1, length_scale=1.0)
+    m_0, P_0_sqr, measure = _logistic_setup(prior)
+    res = gaussian_filter(m_0, P_0_sqr, prior, measure, _grid(LOGISTIC.tspan))
+    return _filter_outputs(res)
+
+
+def _blackbox_dynamic() -> Outputs:
+    """The logistic ODE residual as a black box (Jacobian by autodiff)."""
+    prior = IWP(q=2, d=1)
+    m_0, P_0_sqr, _ = _logistic_setup(prior)
+
+    def residual(state, *, t):
+        return state[1:2] - LOGISTIC.vf(state[:1], t=t)
+
+    measure = BlackBoxMeasurement(residual, state_dim=3, obs_dim=1)
+    res = gaussian_filter(m_0, P_0_sqr, prior, measure, _grid(LOGISTIC.tspan))
+    return _compact_outputs(res)
+
+
+def _posthoc_rescale() -> Outputs:
+    """Runs without calibration, rescaled by the global and the running MLE.
+
+    The joint run rescales its state block only (``prior=``).
+    """
+    prior = IWP(q=2, d=1)
+    m_0, P_0_sqr, measure = _logistic_setup(prior)
+    res = gaussian_filter(
+        m_0, P_0_sqr, prior, measure, _grid(LOGISTIC.tspan), calibration="none"
+    )
+    sigma_sqr = posthoc_mle_sigma_sqr(res.mz, res.Pz_sqr)
+    running = aggregate_sigma_sqr(res.sigma_sqr, kind="running")
+    _, P_s_sqr = rts_smoother(res)
+
+    joint = JointPrior(IWP(q=2, d=1), MaternPrior(q=1, d=1, length_scale=1.0))
+    m_0, P_0_sqr, measure = _hidden_setup(joint)
+    joint_res = gaussian_filter(
+        m_0, P_0_sqr, joint, measure, _grid((0.0, 2.0)), calibration="none"
+    )
+    joint_sigma_sqr = posthoc_mle_sigma_sqr(joint_res.mz, joint_res.Pz_sqr)
+    return {
+        "sigma_sqr": sigma_sqr,
+        "P": cov(rescale_sqr_seq(res.P_sqr, sigma_sqr)),
+        "P_smooth": cov(rescale_sqr_seq(P_s_sqr, sigma_sqr)),
+        "sigma_sqr_running": running,
+        "P_running": cov(rescale_sqr_seq(res.P_sqr[1:], running)),
+        "joint_sigma_sqr": joint_sigma_sqr,
+        "joint_P": cov(rescale_sqr_seq(joint_res.P_sqr, joint_sigma_sqr, prior=joint)),
+    }
+
+
+def _non_autonomous() -> Outputs:
+    """``x' = cos(t) x`` from the exact initial derivatives of ``exp(sin t)``."""
+
+    def vf(x, *, t):
+        return np.cos(t) * x
+
+    def solution(t):
+        return np.exp(np.sin(t))
+
+    derivatives, f = [], solution
+    for _ in range(4):
+        derivatives.append(f(0.0))
+        f = jax.grad(f)
+    prior = IWP(q=3, d=1)
+    measure = ODEInformation(vf, prior.E0, prior.E1)
+    res = gaussian_filter(
+        np.array(derivatives), np.zeros((4, 4)), prior, measure, _grid((0.0, 5.0))
+    )
+    return _compact_outputs(res)
+
+
 SCENARIOS: dict[str, Callable[[], Outputs]] = {
     **{
         f"logistic_{cal}_ek1": _logistic(cal, "ek1")
@@ -405,6 +606,18 @@ SCENARIOS: dict[str, Callable[[], Outputs]] = {
     "ipls": _ipls,
     "affine_filter": _affine_filter,
     "marginal_loglik": _marginal_loglik,
+    "adaptive_running_mean": _adaptive_variant(sigma_in_error="running_mean"),
+    "adaptive_p_controller": _adaptive_variant(controller=PController(order=2)),
+    "adaptive_diagonal": _adaptive_diagonal,
+    **{
+        f"ieks_{n}{suffix}": _ieks(n, with_obs)
+        for n in (0, 1, 3)
+        for suffix, with_obs in (("", False), ("_obs", True))
+    },
+    "precond_matern_dynamic": _precond_matern_dynamic,
+    "blackbox_dynamic": _blackbox_dynamic,
+    "posthoc_rescale": _posthoc_rescale,
+    "non_autonomous": _non_autonomous,
 }
 
 

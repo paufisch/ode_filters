@@ -108,6 +108,22 @@ def test_autocorrelation_of_an_alternating_sequence():
     assert_close(rho[:, 0], np.array([-0.99, 0.98]), rtol=1e-12)
 
 
+def test_autocorrelation_ignores_a_constant_offset():
+    """A biased but white residual is uncorrelated in time: the mean is removed.
+
+    Without demeaning, the offset ``3`` alone would give an autocorrelation of
+    about ``9 / (9 + 1) = 0.9`` at every lag.
+    """
+    n = 4000
+    v = np.array([3.0, -0.5]) + jax.random.normal(jax.random.PRNGKey(2), (n, 2))
+    rho = residual_autocorrelation(v, max_lag=3)
+    assert rho.shape == (3, 2)
+    assert bool(np.all(np.abs(rho) < 4.0 / np.sqrt(n)))
+    # The offset changes nothing: the statistic is that of the centred sequence.
+    centred = residual_autocorrelation(v - v.mean(axis=0), max_lag=3)
+    assert_close(rho, centred, rtol=1e-12)
+
+
 def test_observation_predictive_is_the_pushforward():
     keys = jax.random.split(jax.random.PRNGKey(1), 3)
     m = jax.random.normal(keys[0], (4, 3))

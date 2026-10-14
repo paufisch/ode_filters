@@ -25,6 +25,7 @@ from ode_filters import (
     ODEInformation,
     PrecondIWP,
     gaussian_filter,
+    interpolate,
     prepare_observations,
     rts_smoother,
 )
@@ -215,6 +216,144 @@ def test_hidden_input_with_non_diagonal_xi_matches_dense_kalman(calibration):
     assert res.log_likelihood_obs is not None
     assert_close(res.log_likelihood_obs, ref.log_likelihood_obs, rtol=RTOL)
     assert_close(res.sigma_sqr, ref.sigma_sqr, rtol=RTOL)
+    m_s, P_s_sqr = rts_smoother(res)
+    assert_close(m_s, ref.m_smooth, rtol=RTOL)
+    assert_close(cov(P_s_sqr), ref.P_smooth, rtol=RTOL)
+
+
+def _bridge(prior, ref, ts, n, tau):
+    """Dense filtered and smoothed marginals at ``ts[n] + tau`` (moment form).
+
+    The prior bridges node ``n`` and node ``n + 1`` with the diffusion of step
+    ``n`` (``ref.sigma_sqr[n]``): predict from the filtered state to the query
+    time, then condition on the smoothed state at the next node through the
+    joint Gaussian of the two.
+    """
+    h = ts[n + 1] - ts[n]
+    s = ref.sigma_sqr[n]
+    A1, Q1 = prior.A(tau), s * prior.Q(tau)
+    A2, Q2 = prior.A(h - tau), s * prior.Q(h - tau)
+    m_t = A1 @ ref.m[n]
+    P_t = A1 @ ref.P[n] @ A1.T + Q1
+    m_ahead = A2 @ m_t
+    P_ahead = A2 @ P_t @ A2.T + Q2
+    G = P_t @ A2.T @ np.linalg.inv(P_ahead)
+    m_s = m_t + G @ (ref.m_smooth[n + 1] - m_ahead)
+    P_s = P_t + G @ (ref.P_smooth[n + 1] - P_ahead) @ G.T
+    return m_t, P_t, m_s, P_s
+
+
+def test_interpolation_under_dynamic_calibration_matches_the_dense_bridge():
+    """Between nodes, each step's own diffusion bridges it (not a neighbour's).
+
+    The per-step diffusions of this run span five orders of magnitude and
+    change by up to a factor of 100 from one step to the next. The query times
+    are off the midpoints, where bridging forward over ``tau`` and back over
+    ``h - tau`` would not tell the two sub-steps apart.
+    """
+    prior = IWP(q=2, d=2)
+    measure = ODEInformation(_vf, prior.E0, prior.E1).with_noise(R_ODE)
+    D = prior.E0.shape[1]
+    m0 = np.zeros(D).at[:2].set(np.array([1.0, 0.0]))
+    P0 = _spd(jax.random.PRNGKey(5), D)
+    ts = np.linspace(*TSPAN, N + 1)
+    res = gaussian_filter(m0, _upper_chol(P0), prior, measure, ts)
+    ref = dense_kalman(
+        m0, P0, _steps(prior, prior.E1 - L @ prior.E0, ts), calibration="dynamic"
+    )
+    assert_close(res.sigma_sqr, ref.sigma_sqr, rtol=RTOL)
+
+    h = ts[1] - ts[0]
+    queries = [(n, frac * h) for n in (0, 2, 9, 17, N - 1) for frac in (0.17, 0.83)]
+    expected = [_bridge(prior, ref, ts, n, tau) for n, tau in queries]
+    tq = np.array([ts[n] + tau for n, tau in queries])
+    filtered = interpolate(res, prior, tq, smoothed=False)
+    smoothed = interpolate(res, prior, tq)
+    assert_close(filtered.m, np.stack([e[0] for e in expected]), rtol=RTOL)
+    assert_close(cov(filtered.P_sqr), np.stack([e[1] for e in expected]), rtol=RTOL)
+    assert_close(smoothed.m, np.stack([e[2] for e in expected]), rtol=RTOL)
+    assert_close(cov(smoothed.P_sqr), np.stack([e[3] for e in expected]), rtol=RTOL)
+
+
+@pytest.mark.parametrize("calibration", ["none", "dynamic"])
+def test_sensors_with_different_noises_and_times_match_dense_kalman(calibration):
+    """Three sensors, each with its own noise, rows and times, partly coinciding.
+
+    At each step the oracle conditions on the rows of the sensors that have
+    data then, with their block of the noise covariance (sensor ``b``'s two rows
+    are correlated).
+    """
+    prior = IWP(q=2, d=2)
+    measure = ODEInformation(_vf, prior.E0, prior.E1).with_noise(R_ODE)
+    D = prior.E0.shape[1]
+    m0 = np.zeros(D).at[:2].set(np.array([1.0, 0.0]))
+    P0 = _spd(jax.random.PRNGKey(6), D)
+    ts = np.linspace(*TSPAN, N + 1)
+    R_b = np.array([[0.04, 0.01], [0.01, 0.09]])
+    # (A on x, noise covariance, the nodes with data)
+    sensors = [
+        (np.array([[1.0, 0.0]]), np.array([[0.0025]]), np.arange(3, N + 1, 3)),
+        (np.array([[0.0, 1.0], [1.0, 1.0]]), R_b, np.arange(2, N + 1, 4)),
+        (np.array([[0.5, -1.0]]), np.array([[0.3]]), np.array([5, 15, N])),
+    ]
+    keys = jax.random.split(jax.random.PRNGKey(7), len(sensors))
+    data = [
+        jax.random.normal(key, (nodes.shape[0], A.shape[0]))
+        for key, (A, _, nodes) in zip(keys, sensors, strict=True)
+    ]
+    obs_model = prepare_observations(
+        [
+            Measurement(A, z, ts[nodes], noise=R)
+            for (A, R, nodes), z in zip(sensors, data, strict=True)
+        ],
+        prior.E0,
+        ts,
+    )
+
+    res = gaussian_filter(
+        m0,
+        _upper_chol(P0),
+        prior,
+        measure,
+        ts,
+        calibration=calibration,
+        obs_model=obs_model,
+    )
+    H = prior.E1 - L @ prior.E0
+    A_step, Q_step = _transition(prior, ts[1] - ts[0])
+    steps = []
+    for node in range(1, N + 1):
+        rows, offsets, noises = [], [], []
+        for (A, R, nodes), z in zip(sensors, data, strict=True):
+            hit = np.flatnonzero(nodes == node)
+            if hit.shape[0]:
+                rows.append(A @ prior.E0)
+                offsets.append(-z[int(hit[0])])
+                noises.append(R)
+        observed = {}
+        if rows:
+            observed = dict(
+                H_obs=np.concatenate(rows),
+                c_obs=np.concatenate(offsets),
+                R_obs=jax.scipy.linalg.block_diag(*noises),
+            )
+        steps.append(
+            DenseStep(
+                A=A_step,
+                Q=Q_step,
+                H=H,
+                c=np.zeros(2),
+                R=R_ODE * np.eye(2),
+                **observed,
+            )
+        )
+    ref = dense_kalman(m0, P0, steps, calibration=calibration)
+
+    assert_close(res.m, ref.m, rtol=RTOL)
+    assert_close(cov(res.P_sqr), ref.P, rtol=RTOL)
+    assert_close(res.log_likelihood, ref.log_likelihood, rtol=RTOL)
+    assert res.log_likelihood_obs is not None
+    assert_close(res.log_likelihood_obs, ref.log_likelihood_obs, rtol=RTOL)
     m_s, P_s_sqr = rts_smoother(res)
     assert_close(m_s, ref.m_smooth, rtol=RTOL)
     assert_close(cov(P_s_sqr), ref.P_smooth, rtol=RTOL)
