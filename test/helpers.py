@@ -168,6 +168,18 @@ def _gauss_logpdf_zero_mean_residual(r: Array, S: Array) -> Array:
     return -0.5 * (k * np.log(2 * np.pi) + logdet + r @ np.linalg.solve(S, r))
 
 
+def _joseph(P: Array, K: Array, H: Array, R: Array | None) -> Array:
+    """Joseph-form covariance update ``(I - K H) P (I - K H).T + K R K.T``.
+
+    The short form ``P - K S K.T`` is not symmetric in floating point. Under a
+    per-step diffusion that spans orders of magnitude the asymmetry compounds
+    over the steps: at ``q = 3`` it cost the oracle seven digits.
+    """
+    I_KH = np.eye(P.shape[0]) - K @ H
+    P = I_KH @ P @ I_KH.T
+    return P if R is None else P + K @ R @ K.T
+
+
 def dense_kalman(
     m0: Array,
     P0: Array,
@@ -211,13 +223,14 @@ def dense_kalman(
         Q = scale_noise(step.Q, sigma_sqr) if calibration == "dynamic" else step.Q
         P_pred = A @ P @ A.T + Q
 
-        G = P @ A.T @ np.linalg.pinv(P_pred)
+        # A solve, not pinv: pinv's SVD cutoff costs the smoother ~1e-11.
+        G = np.linalg.solve(P_pred, A @ P).T
         backward.append((G, m - G @ m_pred, P - G @ P_pred @ G.T))
 
         S = H @ P_pred @ H.T + (0.0 if step.R is None else step.R)
         K = P_pred @ H.T @ np.linalg.inv(S)
         m = m_pred - K @ r_pred
-        P = P_pred - K @ S @ K.T
+        P = _joseph(P_pred, K, H, step.R)
         ll = ll + _gauss_logpdf_zero_mean_residual(r_pred, S)
 
         if step.H_obs is not None:
@@ -225,7 +238,7 @@ def dense_kalman(
             S_obs = step.H_obs @ P @ step.H_obs.T + step.R_obs
             K_obs = P @ step.H_obs.T @ np.linalg.inv(S_obs)
             m = m - K_obs @ r_obs
-            P = P - K_obs @ S_obs @ K_obs.T
+            P = _joseph(P, K_obs, step.H_obs, step.R_obs)
             ll_obs = ll_obs + _gauss_logpdf_zero_mean_residual(r_obs, S_obs)
 
         ms.append(m)

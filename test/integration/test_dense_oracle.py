@@ -38,8 +38,10 @@ N = 24
 OBS_EVERY = 4
 OBS_NOISE = 0.05**2
 R_ODE = 1e-4
-# The moment-form oracle (inverses, slogdet) is the less accurate side.
-RTOL = 1e-7
+# Round-off on both sides. The moment-form oracle is the less accurate one and
+# needs its Joseph-form update: with the short form ``P - K S K.T``, a dynamic
+# diffusion at q = 3 (IWP and PrecondIWP alike) cost it seven digits.
+RTOL = 1e-12
 
 
 def _vf(x, *, t):
@@ -97,6 +99,7 @@ def _steps(prior, measure_H, ts, obs=None, H_obs=None):
 
 PLAIN_PRIORS = {
     "iwp": lambda: IWP(q=2, d=2),
+    "iwp_q3": lambda: IWP(q=3, d=2),
     "precond_iwp": lambda: PrecondIWP(q=3, d=2),
     "matern": lambda: MaternPrior(q=2, d=2, length_scale=2.0),
 }
