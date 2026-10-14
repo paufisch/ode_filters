@@ -266,7 +266,7 @@ AXES = {
 }
 CASES = [Case()] + [Case(**{axis: v}) for axis, values in AXES.items() for v in values]
 # The heaviest drivers, whose transformations also have dedicated tests
-# (test_adaptive_solve, test_grad_safety, test_iterated), run as slow tests.
+# (test_adaptive, test_grad_safety, test_iterated), run as slow tests.
 SLOW_DRIVERS = ("adaptive", "iterated")
 
 

@@ -4,7 +4,7 @@ The adaptive solver lands exactly on every ``save_at`` time, and external
 observations (built with :func:`prepare_observations`, aligned to ``save_at``)
 are assimilated at those times. These end-to-end tests check that a precise
 observation at its time visibly shapes the filtered posterior. The solver-level
-observation tests are the ``test_obs_model_*`` tests in ``test_adaptive_solve.py``.
+observation tests are the ``test_obs_model_*`` tests in ``test_adaptive.py``.
 """
 
 from __future__ import annotations
