@@ -76,6 +76,11 @@ fixes below come on top.
 - Tooling: ruff's docstring rules (Google convention) and an ASCII-only check
   for the package source; ruff also lints the notebooks; a `slow` marker for
   the MCMC runs of the example scripts; a float32 smoke test.
+- Tests: a consistency battery that runs every prior, correction, calibration
+  policy, driver and output under `jit`, `vmap` and `grad` (checked against
+  finite differences), with a float32 tier compared against float64; a
+  linear test problem driven by a hidden input, with its closed-form solution;
+  value checks in place of many shape- or finiteness-only assertions.
 
 ### Changed
 
