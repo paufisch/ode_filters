@@ -9,8 +9,9 @@ vector has the dimension of the ODE solution, Bosch et al. 2022, Sec. 3) is
 
 the standard deviation the step's calibrated process noise adds to each
 solution component, weighted by the tolerances. A step is accepted when
-``err <= 1``; the controller proposes the next step size either way. The last
-step of each save interval is shortened to land on the save time.
+``err <= 1``; the controller proposes the next step size either way, capped at
+``max_step`` if one is given. The last step of each save interval is shortened
+to land on the save time.
 
 The solve is a ``jax.lax.scan`` over the save times whose body is a
 checkpointed while-loop (``equinox.internal.while_loop``), so it is ``jit``-,
@@ -30,6 +31,7 @@ from typing import Literal, NamedTuple
 import equinox.internal as eqxi
 import jax
 import jax.numpy as np
+import numpy as onp
 from jax import Array
 from jax.typing import ArrayLike
 
@@ -54,6 +56,20 @@ _NO_PREVIOUS_ERROR = -1.0
 def _landing_tolerance(target: Array) -> Array:
     """How close to a save time counts as having reached it."""
     return 1e-10 * np.abs(target) + 1e-12
+
+
+def _check_max_step(max_step: ArrayLike | None) -> None:
+    """Raise unless ``max_step`` is ``None`` or a positive scalar (where concrete)."""
+    if max_step is None:
+        return
+    if onp.ndim(max_step) != 0:
+        raise ValueError(f"max_step must be a scalar, got shape {onp.shape(max_step)}.")
+    try:
+        value = float(onp.asarray(max_step))
+    except jax.errors.TracerArrayConversionError:
+        return  # traced (e.g. a jit argument): trusted, like a traced save_at
+    if not value > 0.0:
+        raise ValueError(f"max_step must be > 0, got {value!r}.")
 
 
 class _Carry(NamedTuple):
@@ -107,6 +123,7 @@ def gaussian_filter_adaptive(
     atol: float = 1e-4,
     rtol: float = 1e-2,
     h_init: float | None = None,
+    max_step: float | None = None,
     controller: StepSizeController | None = None,
     sigma_in_error: SigmaInError = "per_step",
     max_steps: int = 4096,
@@ -132,6 +149,13 @@ def gaussian_filter_adaptive(
         atol: Absolute tolerance of the local-error estimate.
         rtol: Relative tolerance of the local-error estimate.
         h_init: First trial step; defaults to ``(save_at[-1] - save_at[0]) / 100``.
+        max_step: Upper bound on every step, the first trial step included;
+            ``None`` (default) leaves the next save time as the only bound. A
+            loose tolerance can step over a feature much shorter than its
+            steps, such as a brief pulse in a forcing term, without the error
+            estimate seeing it; a ``max_step`` shorter than the feature
+            resolves it. There is no lower bound: a solve that needs too many
+            steps reports ``success=False`` (see ``max_steps``).
         controller: Step-size controller; defaults to
             ``PIController(order=prior.q)``. Its ``propose`` runs inside the
             traced loop, so a custom controller must use ``jax.numpy``.
@@ -157,9 +181,10 @@ def gaussian_filter_adaptive(
         ``m_pred``, ``P_pred_sqr`` and ``sigma_sqr`` are ``None``.
 
     Raises:
-        ValueError: For an invalid ``save_at``, ``sigma_in_error`` or
-            ``record_steps``, an ``obs_model`` of another length, or a
-            calibration the prior does not support.
+        ValueError: For an invalid ``save_at``, ``sigma_in_error``,
+            ``record_steps`` or ``max_step`` (not a positive scalar), an
+            ``obs_model`` of another length, or a calibration the prior does not
+            support.
     """
     save_at = check_grid(save_at)
     calibration = as_calibration(calibration)
@@ -170,6 +195,7 @@ def gaussian_filter_adaptive(
         )
     if record_steps < 0:
         raise ValueError(f"record_steps must be >= 0, got {record_steps!r}.")
+    _check_max_step(max_step)
     if obs_model is not None:
         check_obs_model(obs_model, save_at.shape[0] - 1)
     if controller is None:
@@ -184,6 +210,10 @@ def gaussian_filter_adaptive(
     D = x_0.m.shape[0]
     span = save_at[-1] - save_at[0]
     h_0 = span / 100.0 if h_init is None else np.asarray(h_init, dtype=float)
+
+    def bounded(h: Array) -> Array:
+        return h if max_step is None else np.minimum(h, max_step)
+
     # The innovation carried between intervals needs its static shape only.
     k = information.linearize(x_0.m, t=save_at[0]).H.shape[0]
     identity = Conditional(np.eye(D), np.zeros(D), np.zeros((D, D)))
@@ -201,7 +231,7 @@ def gaussian_filter_adaptive(
     init = _Carry(
         t=save_at[0],
         x=x_0,
-        h=h_0,
+        h=bounded(h_0),
         log_likelihood=np.array(0.0),
         err_prev=np.array(_NO_PREVIOUS_ERROR),
         innovation=Gaussian(np.zeros(k), np.zeros((k, k))),
@@ -258,8 +288,10 @@ def gaussian_filter_adaptive(
         return _Carry(
             t=np.where(accept, t_next, c.t),
             x=keep(out.filtered, c.x),
-            h=controller.propose(
-                h, err, np.where(accept, c.err_prev, _NO_PREVIOUS_ERROR)
+            h=bounded(
+                controller.propose(
+                    h, err, np.where(accept, c.err_prev, _NO_PREVIOUS_ERROR)
+                )
             ),
             log_likelihood=np.where(
                 accept, c.log_likelihood + out.log_likelihood, c.log_likelihood

@@ -63,9 +63,10 @@ The internal Python-loop driver `sqr_adaptive_loop` is removed;
   `gaussian_filter` on the grid `[t_0, *result.steps.t[:count]]`, which
   repeats the same steps.
 - `sigma_in_error="running_mean"` is an argument of `gaussian_filter_adaptive`.
-- The loop's `h_min` and `h_max` have no counterpart. Steps never cross a save
-  time, and a solve that would need more than `max_steps` steps in one save
-  interval stops with `result.success = False` (it never raises under `jit`).
+- The loop's `h_max` is `gaussian_filter_adaptive(..., max_step=)`. Its
+  `h_min` has no counterpart: steps never cross a save time, and a solve that
+  would need more than `max_steps` steps in one save interval stops with
+  `result.success = False` (it never raises under `jit`).
 
 The calibration strings `"none"`, `"dynamic"`, `"diagonal"` and
 `"diagonal_ekf0"` are still accepted; they stand for `NoCalibration()`,

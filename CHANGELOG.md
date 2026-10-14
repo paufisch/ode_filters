@@ -76,6 +76,10 @@ fixes below come on top.
 - Tooling: ruff's docstring rules (Google convention) and an ASCII-only check
   for the package source; ruff also lints the notebooks; a `slow` marker for
   the MCMC runs of the example scripts; a float32 smoke test.
+- `gaussian_filter_adaptive(..., max_step=)` caps every step, the first one
+  included, so a loose tolerance cannot step over a short feature such as a
+  brief pulse; `None` (default) bounds the steps by the save times only. It
+  takes over the `h_max` of the removed Python loop.
 
 ### Changed
 
