@@ -1,16 +1,36 @@
 """Tests for IOUPPrior (integrated Ornstein-Uhlenbeck / probabilistic exp. integrator)."""
 
+from math import factorial
+
 import jax.numpy as np
 import numpy as onp
 import pytest
+import scipy.linalg
 from jax.scipy.linalg import expm
 
 from ode_filters import IOUPPrior, ODEInformation, gaussian_filter
 from ode_filters.priors import IWP, taylor_mode_initialization
+from test.helpers import assert_close
 
 
 def _is_upper_triangular(M, atol=1e-9):
     return bool(np.allclose(np.tril(M, k=-1), 0.0, atol=atol))
+
+
+def _ioup_sde(q, d, rate):
+    """Drift ``F`` and dispersion ``G`` of IOUP, built here from its definition.
+
+    Derivative-major state ``[Y, Y', ..., Y^(q)]``: ``dY^(i) = Y^(i+1) dt`` for
+    ``i < q`` and ``dY^(q) = R Y^(q) dt + dW`` with the ``d x d`` rate ``R``.
+    """
+    rate = onp.asarray(rate, dtype=float)
+    R = rate * onp.eye(d) if rate.ndim == 0 else rate
+    R = onp.diag(R) if R.ndim == 1 else R
+    F = onp.kron(onp.eye(q + 1, k=1), onp.eye(d))
+    F[q * d :, q * d :] = R
+    G = onp.zeros(((q + 1) * d, d))
+    G[q * d :, :] = onp.eye(d)
+    return F, G
 
 
 def _vanloan_Q(F, G, h):
@@ -99,11 +119,32 @@ class TestIOUPProperties:
         h = 0.15
         Q_sqr = prior.Q_sqr(h)
         assert _is_upper_triangular(Q_sqr)
-        Q_ref = _vanloan_Q(*prior._drift_and_dispersion(), h)
+        Q_ref = _vanloan_Q(*_ioup_sde(2, d, rate), h)
         rel = onp.linalg.norm(onp.asarray(Q_sqr.T @ Q_sqr) - Q_ref) / onp.linalg.norm(
             Q_ref
         )
         assert rel < 1e-9
+
+
+@pytest.mark.parametrize("q", [1, 2, 3])
+def test_matrix_rate_is_the_drift_of_the_top_derivative(q):
+    """The top-derivative column of ``A(h)`` against SciPy's ``expm(L h)``.
+
+    ``L`` is not symmetric, so a transposed rate fails. The ``k``-fold
+    integrals of ``e^{L s}`` fill the blocks above: block ``(q - k, q)`` is
+    ``L^-k (e^{L h} - sum_{m < k} (L h)^m / m!)``.
+    """
+    L = onp.array([[-2.0, 1.0], [0.0, -3.0]])
+    h, d = 0.3, 2
+    A = onp.asarray(IOUPPrior(q=q, d=d, rate=L).A(h))
+    E = scipy.linalg.expm(L * h)
+    assert_close(A[q * d :, q * d :], E, rtol=1e-12)
+    L_inv = onp.linalg.inv(L)
+    for k in range(1, q + 1):
+        taylor = sum(onp.linalg.matrix_power(L * h, m) / factorial(m) for m in range(k))
+        expected = onp.linalg.matrix_power(L_inv, k) @ (E - taylor)
+        row = (q - k) * d
+        assert_close(A[row : row + d, q * d :], expected, rtol=1e-10)
 
 
 class TestIOUPEqualsIWP:

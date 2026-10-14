@@ -30,7 +30,7 @@ The prior encodes what you assume about the solution before seeing the ODE.
 | Prior | Assumes | Use when |
 | --- | --- | --- |
 | **`IWP(q, d)`** | a `q`-times integrated Wiener process (polynomial-like smoothness) | the default — almost always start here |
-| **`MaternPrior`** | Matern smoothness with a length scale | you have a characteristic correlation length / want stationary behaviour |
+| **`MaternPrior`** | a stationary Matern process of smoothness `nu = q + 1/2` with the textbook length scale `l` (for `q = 1` the correlation at lag `tau` is `(1 + sqrt(3) tau / l) exp(-sqrt(3) tau / l)`) | you have a characteristic correlation length / want stationary behaviour |
 | **`IOUPPrior(q, d, rate)`** | like `IWP`, but the highest derivative decays towards zero at `rate` instead of drifting freely | the ODE has a known linear part — pass it as `rate` and the solver becomes a probabilistic *exponential integrator* |
 | **`JointPrior(prior_x, prior_u)`** | a state block **and** a hidden block | joint state–parameter or latent-force inference (`*WithHidden` models) |
 

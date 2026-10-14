@@ -118,6 +118,13 @@ fixes below come on top.
   controller passed to `gaussian_filter_adaptive` must be traceable.
 - `TransformedMeasurement` uses autodiff exactly when no `sigma_jacobian` is
   given.
+- **Changes results:** `MaternPrior` and `PrecondMaternPrior` use the textbook
+  length scale `l` (Rasmussen & Williams 2006, eq. 4.14): the rate of the SDE is
+  `sqrt(2q+1) / l`, where it was `sqrt((2q+1) / l)`, so the old `length_scale`
+  acted as the square of the usual one. Pass `length_scale=sqrt(l_old)` to
+  reproduce an earlier result; `length_scale=1` is unchanged. The priors are
+  now tested against independent oracles (the textbook kernels, and Van Loan's
+  block exponential of each prior's SDE).
 - Docs: the home page and README lead with inference; wider layout, home-page
   cards, API pages grouped by topic; tutorials compile with
   `equinox.filter_jit`; the "Calibration modes" notebook explains what
