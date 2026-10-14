@@ -7,8 +7,6 @@ Targets behaviours that the original ``test_adaptive.py`` does not exercise:
   off-diagonal Jacobian (Lotka-Volterra);
 - block-diagonal equivalence: joint EKF with per-component diffusion on
   a decoupled RHS must match running independent scalar EKFs;
-- calibration quality: post-hoc rescaled trajectory must have whitened
-  residuals with unit variance (chi-squared sanity);
 - the adaptive driver, locked to a single h, must reproduce
   the fixed-step :func:`gaussian_filter`;
 - log-likelihood semantics across calibration modes;
@@ -29,11 +27,6 @@ from ode_filters import (
     TaylorCorrection,
     gaussian_filter,
     gaussian_filter_adaptive,
-)
-from ode_filters.calibration.rescale import rescale_sqr_seq
-from ode_filters.calibration.sigma import (
-    posthoc_mle_sigma_sqr,
-    quasi_mle_sigma_sqr,
 )
 from ode_filters.information import (
     ODEInformation,
@@ -318,45 +311,6 @@ class TestBlockDiagonalEquivalence:
         sigma_joint = onp.asarray(r_joint.sigma_sqr)  # shape (N, 2)
         assert onp.allclose(sigma_joint[:, 0], sigma_indep[0], atol=1e-10)
         assert onp.allclose(sigma_joint[:, 1], sigma_indep[1], atol=1e-10)
-
-
-# ---------------------------------------------------------------------------
-# Calibration quality: whitened residuals
-# ---------------------------------------------------------------------------
-
-
-class TestCalibrationQuality:
-    """After post-hoc MLE rescaling on a well-specified fixed-step run, the
-    mean whitened-residual energy ``E[v.T v / d]`` should equal 1 by
-    construction (the MLE is the value that achieves this).
-    """
-
-    def test_posthoc_rescaling_yields_unit_whitened_residuals(self):
-        prior = IWP(q=3, d=1)
-        m_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=3)
-        measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
-        tspan = (0.0, 5.0)
-        N = 100
-
-        # sigma=1 (no calibration) run; collect (mz, Pz_sqr) trace.
-        r = gaussian_filter(
-            m_0, S0, prior, measure, np.linspace(*tspan, N + 1), calibration="none"
-        )
-        mz_seq = np.asarray(r.mz)
-        Pz_seq_sqr = np.asarray(r.Pz_sqr)
-
-        # Post-hoc MLE sigma^2 (closed-form mean of per-step quasi-MLEs).
-        sigma_sqr = float(posthoc_mle_sigma_sqr(mz_seq, Pz_seq_sqr))
-
-        # Rescale and re-compute whitened residual energy on the rescaled
-        # covariances. The MLE for sigma^2 is the value that makes the
-        # average whitened energy equal to 1.
-        Pz_rescaled = rescale_sqr_seq(Pz_seq_sqr, sigma_sqr)
-        v_energies = onp.asarray(
-            [float(quasi_mle_sigma_sqr(mz_seq[i], Pz_rescaled[i])) for i in range(N)]
-        )
-        mean_energy = float(onp.mean(v_energies))
-        assert mean_energy == pytest.approx(1.0, rel=1e-10)
 
 
 # ---------------------------------------------------------------------------

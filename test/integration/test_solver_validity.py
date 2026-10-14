@@ -1,4 +1,8 @@
-"""Tests verifying ODE solver accuracy against known solutions and references."""
+"""Tests verifying ODE solver accuracy against known solutions and references.
+
+Convergence orders are checked in ``test_convergence_order.py``, the size of
+the posterior uncertainty in ``test_uncertainty_calibration.py``.
+"""
 
 import jax
 import jax.numpy as np
@@ -194,73 +198,7 @@ class TestAnalyticalSolutions:
 
 
 # ---------------------------------------------------------------------------
-# Category 2: Convergence Order
-# ---------------------------------------------------------------------------
-
-
-class TestConvergenceOrder:
-    """Test that global error decreases at the expected rate with refinement."""
-
-    @pytest.mark.parametrize("solver", SOLVERS)
-    def test_convergence_order_filter(self, solver):
-        """Verify convergence order on exponential decay (filter)."""
-        x0 = np.array([1.0])
-        tspan = (0.0, 2.0)
-        q = 3
-        Ns = [50, 100, 200, 400]
-
-        errors = []
-        for N in Ns:
-            ts, m_filter, _, _, _ = solver(_vf_exp_decay, x0, tspan=tspan, N=N, q=q)
-            y_exact = np.exp(-ts)[:, None]
-            max_err = float(np.max(np.abs(m_filter - y_exact)))
-            errors.append(max_err)
-
-        # Fit log(error) ~ slope * log(1/N)
-        log_N = np.log(np.array([float(n) for n in Ns]))
-        log_err = np.log(np.array(errors))
-
-        # Linear regression: log_err = slope * log_N + intercept
-        slope = float(np.polyfit(log_N, log_err, 1)[0])
-
-        # The EK1 filter converges at global order ~q to q+1; for q=3 the
-        # empirical slope is ~-3.9 (errors 3e-8 -> 8e-12 over N=50..400 in
-        # float64). Require at least order ~3 so the test pins near-theoretical
-        # order rather than merely catching catastrophic regressions.
-        assert slope < -3.0, (
-            f"Filter convergence slope {slope:.2f}, expected <~ -3.9 (>= order 3) "
-            f"for q={q}"
-        )
-
-    @pytest.mark.parametrize("solver", SOLVERS)
-    def test_convergence_order_smoother(self, solver):
-        """Verify smoother converges at least as fast as the filter."""
-        x0 = np.array([1.0])
-        tspan = (0.0, 2.0)
-        q = 3
-        Ns = [50, 100, 200, 400]
-
-        errors = []
-        for N in Ns:
-            ts, _, _, m_smooth, _ = solver(_vf_exp_decay, x0, tspan=tspan, N=N, q=q)
-            y_exact = np.exp(-ts)[:, None]
-            max_err = float(np.max(np.abs(m_smooth - y_exact)))
-            errors.append(max_err)
-
-        log_N = np.log(np.array([float(n) for n in Ns]))
-        log_err = np.log(np.array(errors))
-        slope = float(np.polyfit(log_N, log_err, 1)[0])
-
-        # The smoother converges at least as fast as the filter; for q=3 the
-        # empirical slope is ~-4.0. Require at least order ~3.
-        assert slope < -3.0, (
-            f"Smoother convergence slope {slope:.2f}, expected <~ -4.0 (>= order 3) "
-            f"for q={q}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Category 3: Reference Solver Comparison
+# Category 2: Reference Solver Comparison
 # ---------------------------------------------------------------------------
 
 
@@ -328,7 +266,7 @@ class TestReferenceSolverComparison:
 
 
 # ---------------------------------------------------------------------------
-# Category 4: Probabilistic Properties
+# Category 3: Probabilistic Properties
 # ---------------------------------------------------------------------------
 
 
@@ -375,25 +313,3 @@ class TestProbabilisticProperties:
         assert var_fine < var_coarse, (
             f"Fine variance ({var_fine:.2e}) >= coarse variance ({var_coarse:.2e})"
         )
-
-    @pytest.mark.parametrize("solver", SOLVERS)
-    def test_uncertainty_covers_truth(self, solver):
-        """True solution should fall within 3-sigma band for most time steps."""
-        x0 = np.array([1.0])
-        tspan = (0.0, 5.0)
-        N = 100
-
-        ts, _, _, m_smooth, P_smooth_sqr = solver(
-            _vf_exp_decay, x0, tspan=tspan, N=N, q=3
-        )
-        y_exact = np.exp(-ts)[:, None]
-
-        # Posterior std: the marginal covariance is F.T @ F with the factor F of
-        # shape [N+1, D, d], so each variance is a column's sum of squares.
-        std = np.sqrt(np.sum(P_smooth_sqr**2, axis=-2))  # [N+1, d]
-
-        residual = np.abs(m_smooth - y_exact)
-        within_3sigma = residual < 3.0 * std
-
-        coverage = float(np.mean(within_3sigma))
-        assert coverage > 0.90, f"3-sigma coverage {coverage:.1%}, expected > 90%"
