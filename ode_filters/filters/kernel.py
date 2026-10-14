@@ -23,7 +23,7 @@ everything it returns is in the original coordinates.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import NamedTuple, Protocol
+from typing import NamedTuple, Protocol, runtime_checkable
 
 import jax.numpy as np
 from jax import Array
@@ -75,6 +75,7 @@ class StepOutput(NamedTuple):
     log_likelihood_obs: Array | None = None
 
 
+@runtime_checkable
 class Information(Protocol):
     """What a step conditions on, and how it is linearized."""
 

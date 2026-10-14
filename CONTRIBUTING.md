@@ -138,11 +138,12 @@ array types like `Float[Array, "n n"]` -- are validated on each call:
 ODE_FILTERS_TYPECHECK=1 uv run pytest
 ```
 
-It is off by default because a few negative-path tests intentionally pass
-invalid inputs (to assert the library's own `ValueError`s), which the runtime
-checker rejects earlier with a `TypeCheckError`. Use it locally to check new
-code. Migrating annotations from plain `Array` to jaxtyping shapes -- and
-reconciling those tests -- is an ongoing, incremental effort; new code is
+The suite passes with it. Tests that pass wrongly typed input on purpose (to
+assert the library's own error message) carry the marker
+`@pytest.mark.wrong_input_types` and are skipped in this mode, because the
+runtime checker rejects their input first; mark new tests of that kind too. It
+is off by default because it slows the suite down. Migrating annotations from
+plain `Array` to jaxtyping shapes is an ongoing, incremental effort; new code is
 encouraged to use jaxtyping types.
 
 ## Quick reference

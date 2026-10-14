@@ -148,5 +148,10 @@ class JointPrior(BasePrior):
         return self.prior_x.xi
 
     @property
+    def xi_state_diagonal(self) -> bool | None:
+        """Whether the state prior's ``Xi`` was diagonal at construction."""
+        return self.prior_x.xi_state_diagonal
+
+    @property
     def _state_block(self) -> tuple[int, int, int]:
         return self.prior_x.state_dim, self.prior_x.d, self.prior_x.q

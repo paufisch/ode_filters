@@ -5,6 +5,8 @@ probnum_venv/*
 *.svg
 !docs/assets/*.svg
 *.npz
+# The recorded solver outputs the reference tests compare against.
+!test/integration/reference/reference_outputs.npz
 *.pyc
 
 #image folders

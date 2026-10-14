@@ -80,6 +80,7 @@ class TestBlackBoxMeasurementConstruction:
         model = BlackBoxMeasurement(g_func, state_dim=4, obs_dim=2, noise=noise_matrix)
         assert np.allclose(model.R, noise_matrix)
 
+    @pytest.mark.wrong_input_types
     def test_rejects_non_callable_g_func(self):
         """Test that non-callable g_func raises error."""
         with pytest.raises(TypeError, match="must be callable"):
@@ -278,6 +279,7 @@ class TestTransformedMeasurementConstruction:
         model = TransformedMeasurement(base, sigma, sigma_jacobian=sigma_jacobian)
         assert model.sigma_jacobian is sigma_jacobian
 
+    @pytest.mark.wrong_input_types
     def test_rejects_non_callable_sigma(self):
         """Test that non-callable sigma raises error."""
 
@@ -633,6 +635,7 @@ class TestBlackBoxMeasurementInSolvers:
     """BlackBoxMeasurement used to raise AttributeError ('ode_dim') in every
     solver, although the docs present it as a drop-in measurement model."""
 
+    @pytest.mark.wrong_input_types
     def test_ode_dim_defaults_to_obs_dim_and_validates(self):
         model = BlackBoxMeasurement(lambda s, *, t: s[:2], state_dim=4, obs_dim=2)
         assert model.ode_dim == 2
@@ -661,14 +664,14 @@ class TestBlackBoxMeasurementInSolvers:
             obs_dim=1,
         )
         reference = ODEInformation(vf, prior.E0, prior.E1)
-        mu_0, P0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
+        m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
         save_at = np.linspace(0.0, 2.0, 5)
 
         def run(measure):
             if adaptive:
-                return gaussian_filter_adaptive(mu_0, P0_sqr, prior, measure, save_at)
+                return gaussian_filter_adaptive(m_0, P_0_sqr, prior, measure, save_at)
             return gaussian_filter(
-                mu_0, P0_sqr, prior, measure, np.linspace(0.0, 2.0, 21)
+                m_0, P_0_sqr, prior, measure, np.linspace(0.0, 2.0, 21)
             )
 
         got, want = run(black_box), run(reference)

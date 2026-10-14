@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import equinox as eqx
 import jax
 import jax.numpy as np
 import numpy as onp
@@ -117,6 +118,7 @@ def test_string_shorthands(name, expected):
     assert as_calibration(expected) is expected
 
 
+@pytest.mark.wrong_input_types
 def test_invalid_specifications_raise():
     with pytest.raises(ValueError, match="calibration must be"):
         as_calibration("dynamc")
@@ -137,9 +139,26 @@ def test_diagonal_policy_requires_a_diagonal_state_xi():
     DiagonalCalibration().validate(joint)
 
 
-def test_diagonal_validation_trusts_a_traced_xi():
+def test_diagonal_validation_holds_under_jit():
+    """Under jit Xi is traced; the flag recorded at construction still counts."""
+    coupled = IWP(q=1, d=2, Xi=np.array([[1.0, 0.5], [0.5, 1.0]]))
+    assert coupled.xi_diagonal is False
+    with pytest.raises(ValueError, match="diagonal"):
+        eqx.filter_jit(DiagonalCalibration().validate)(coupled)
+    eqx.filter_jit(DiagonalCalibration().validate)(IWP(q=1, d=2))  # diagonal: fine
+    # For a joint prior only the state block counts, also under jit.
+    joint = JointPrior(
+        IWP(q=2, d=1), IWP(q=1, d=2, Xi=np.array([[1.0, 0.5], [0.5, 1.0]]))
+    )
+    assert joint.xi_state_diagonal is True
+    eqx.filter_jit(DiagonalCalibration().validate)(joint)
+
+
+def test_diagonal_validation_trusts_a_prior_built_from_a_traced_xi():
     def check(scale):
-        DiagonalCalibration().validate(IWP(q=1, d=2, Xi=scale * np.ones((2, 2))))
+        prior = IWP(q=1, d=2, Xi=scale * np.ones((2, 2)))
+        assert prior.xi_diagonal is None  # unknown
+        DiagonalCalibration().validate(prior)
         return scale
 
     jax.jit(check)(1.0)  # does not raise: the traced Xi cannot be inspected

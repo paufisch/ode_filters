@@ -171,23 +171,23 @@ def test_singular_innovation_covariance_is_a_separate_unhandled_degeneracy():
 def _setup():
     prior = IWP(q=3, d=1)
     measure = ODEInformation(logistic, prior.E0, prior.E1)
-    mu_0, P0_sqr = taylor_mode_initialization(logistic, np.array([0.1]), q=3)
-    return prior, measure, mu_0, P0_sqr
+    m_0, P_0_sqr = taylor_mode_initialization(logistic, np.array([0.1]), q=3)
+    return prior, measure, m_0, P_0_sqr
 
 
 def test_taylor_mode_initialization_is_exactly_singular():
     """Guard the premise: the trigger is a genuinely zero initial factor."""
-    _, _, _, P0_sqr = _setup()
-    assert onp.allclose(P0_sqr, 0.0)
-    assert int(onp.linalg.matrix_rank(onp.asarray(P0_sqr))) == 0
+    _, _, _, P_0_sqr = _setup()
+    assert onp.allclose(P_0_sqr, 0.0)
+    assert int(onp.linalg.matrix_rank(onp.asarray(P_0_sqr))) == 0
 
 
 def test_first_backward_conditional_is_exactly_zero():
     """And that it propagates into a rank-0 backward conditional at step 0."""
-    prior, measure, mu_0, P0_sqr = _setup()
+    prior, measure, m_0, P_0_sqr = _setup()
     res = gaussian_filter(
-        mu_0,
-        P0_sqr,
+        m_0,
+        P_0_sqr,
         prior,
         measure,
         np.linspace(*TSPAN, N_STEPS + 1),
@@ -198,10 +198,10 @@ def test_first_backward_conditional_is_exactly_zero():
     assert not onp.allclose(res.P_back_sqr[1], 0.0)  # only the first step
 
 
-def _smoothed(mu, prior, measure, P0_sqr):
+def _smoothed(mu, prior, measure, P_0_sqr):
     res = gaussian_filter(
         mu,
-        P0_sqr,
+        P_0_sqr,
         prior,
         measure,
         np.linspace(*TSPAN, N_STEPS + 1),
@@ -212,36 +212,36 @@ def _smoothed(mu, prior, measure, P0_sqr):
 
 
 def test_smoothed_covariance_gradient_is_finite_from_a_singular_start():
-    prior, measure, mu_0, P0_sqr = _setup()
+    prior, measure, m_0, P_0_sqr = _setup()
 
     def cov_sum(mu):
-        _, P_sqr = _smoothed(mu, prior, measure, P0_sqr)
+        _, P_sqr = _smoothed(mu, prior, measure, P_0_sqr)
         return np.sum(np.einsum("kij,kil->kjl", P_sqr, P_sqr))
 
-    assert bool(np.all(np.isfinite(jax.grad(cov_sum)(mu_0))))
+    assert bool(np.all(np.isfinite(jax.grad(cov_sum)(m_0))))
 
 
 def test_smoothed_mean_gradient_is_not_poisoned_by_the_covariance_branch():
     """The mean does not depend on the degenerate factor, and must not inherit its NaN."""
-    prior, measure, mu_0, P0_sqr = _setup()
+    prior, measure, m_0, P_0_sqr = _setup()
 
     def mean_out(mu):
-        m, _ = _smoothed(mu, prior, measure, P0_sqr)
+        m, _ = _smoothed(mu, prior, measure, P_0_sqr)
         return m[-1, 0]
 
-    assert bool(np.all(np.isfinite(jax.grad(mean_out)(mu_0))))
+    assert bool(np.all(np.isfinite(jax.grad(mean_out)(m_0))))
 
 
 def test_smoothed_covariance_gradient_matches_finite_differences():
     """Finiteness is not enough -- the derivative has to be the right one."""
-    prior, measure, mu_0, P0_sqr = _setup()
+    prior, measure, m_0, P_0_sqr = _setup()
 
     def cov_sum(mu):
-        _, P_sqr = _smoothed(mu, prior, measure, P0_sqr)
+        _, P_sqr = _smoothed(mu, prior, measure, P_0_sqr)
         return np.sum(np.einsum("kij,kil->kjl", P_sqr, P_sqr))
 
-    ad = jax.grad(cov_sum)(mu_0)
-    fd = _central_diff(cov_sum, mu_0)
+    ad = jax.grad(cov_sum)(m_0)
+    fd = _central_diff(cov_sum, m_0)
     # The trailing components are ~1e-8 against an O(1) objective, where central
     # differences are dominated by cancellation; compare on the shared scale.
     assert onp.allclose(ad, fd, rtol=5e-3, atol=1e-10)
@@ -249,13 +249,13 @@ def test_smoothed_covariance_gradient_matches_finite_differences():
 
 def test_values_are_unchanged_and_continuous_in_a_regularizing_jitter():
     """The zero-factor result is the limit of the jittered one, so no value moved."""
-    prior, measure, mu_0, P0_sqr = _setup()
+    prior, measure, m_0, P_0_sqr = _setup()
 
     def cov_sum(P0):
-        _, P_sqr = _smoothed(mu_0, prior, measure, P0)
+        _, P_sqr = _smoothed(m_0, prior, measure, P0)
         return float(np.sum(np.einsum("kij,kil->kjl", P_sqr, P_sqr)))
 
-    exact = cov_sum(P0_sqr)
-    errs = [abs(exact - cov_sum(P0_sqr + j * np.eye(4))) for j in (1e-5, 1e-7)]
+    exact = cov_sum(P_0_sqr)
+    errs = [abs(exact - cov_sum(P_0_sqr + j * np.eye(4))) for j in (1e-5, 1e-7)]
     assert errs[1] < errs[0]  # converges as the jitter shrinks
     assert errs[1] < 1e-8

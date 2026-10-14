@@ -1,8 +1,7 @@
 """Regression tests for block-aware diffusion calibration.
 
-Implements the verification checklist from the calibration bugfix plan
-(2026-05-20): calibration must be driven only by the ODE-defect residual,
-and for joint priors sigma must scale only the state block of Q(h).
+Calibration must be driven only by the ODE-defect residual, and for joint
+priors sigma must scale only the state block of Q(h).
 
 Tests:
 
@@ -69,10 +68,10 @@ def _vf_hidden_linear(x, u, *, t):
 
 
 def _run_dynamic_fixed(prior, measure, x0, tspan, N):
-    mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_sir, x0, prior.q)
+    m_0, P_0_sqr = taylor_mode_initialization(_vf_sir, x0, prior.q)
     return gaussian_filter(
-        mu_0,
-        Sigma_0_sqr,
+        m_0,
+        P_0_sqr,
         prior,
         measure,
         np.linspace(*tspan, N + 1),
@@ -135,14 +134,14 @@ class TestConservationInvariance:
         prior = IWP(q=2, d=3)
         h = 0.1
         Q_h_sqr = np.linalg.cholesky(prior.Q(h)).T
-        mu_0, _ = taylor_mode_initialization(_vf_sir, x0, prior.q)
+        m_0, _ = taylor_mode_initialization(_vf_sir, x0, prior.q)
 
         m_no_cons = _sir_measure(prior, with_conservation=False)
         # Wrong conservation: claim S - I = 1 (false at t > 0).
         wrong = Conservation(np.array([[1.0, -1.0, 0.0]]), np.array([1.0]))
         m_wrong = ODEInformation(_vf_sir, prior.E0, prior.E1, constraints=[wrong])
 
-        m_pred = prior.A(h) @ mu_0 + prior.b(h)
+        m_pred = prior.A(h) @ m_0 + prior.b(h)
         Ha, ca = m_no_cons.linearize(m_pred, t=h)
         Hb, cb = m_wrong.linearize(m_pred, t=h)
 
@@ -168,12 +167,12 @@ class TestConservationInvariance:
 
         m_a = _sir_measure(prior, with_conservation=False)
         m_b = _sir_measure(prior, with_conservation=True)
-        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_sir, x0, prior.q)
+        m_0, P_0_sqr = taylor_mode_initialization(_vf_sir, x0, prior.q)
 
         res_a, res_b = (
             gaussian_filter_adaptive(
-                mu_0,
-                Sigma_0_sqr,
+                m_0,
+                P_0_sqr,
                 prior,
                 m,
                 np.array(tspan),
@@ -185,7 +184,7 @@ class TestConservationInvariance:
         )
 
         # First-step h identical (controller decision uses identical err with
-        # identical mu_0, Sigma_0_sqr).
+        # identical m_0, P_0_sqr).
         assert float(res_a.steps.h[0]) == pytest.approx(
             float(res_b.steps.h[0]), rel=1e-12
         )
@@ -213,12 +212,12 @@ def _joint_setup():
 
     # Initial state: x0 = [1.0, 0.5]; u0 = 0.7. Zero higher derivatives.
     D = joint.E0.shape[1]
-    mu_0 = np.zeros(D)
-    mu_0 = mu_0.at[0].set(1.0).at[1].set(0.5)
+    m_0 = np.zeros(D)
+    m_0 = m_0.at[0].set(1.0).at[1].set(0.5)
     # input block starts at D_x = (q_x+1)*d_x = 3*2 = 6.
-    mu_0 = mu_0.at[6].set(0.7)
-    Sigma_0_sqr = 1e-6 * np.eye(D)
-    return joint, measure, mu_0, Sigma_0_sqr
+    m_0 = m_0.at[6].set(0.7)
+    P_0_sqr = 1e-6 * np.eye(D)
+    return joint, measure, m_0, P_0_sqr
 
 
 class TestJointPriorStateOnlyScaling:
@@ -301,14 +300,14 @@ class TestJointPriorStateOnlyScaling:
 
     def test_fixed_step_dynamic_with_joint_prior_runs(self):
         """JointPrior + dynamic calibration must not crash on prior.xi access."""
-        joint, measure, mu_0, Sigma_0_sqr = _joint_setup()
+        joint, measure, m_0, P_0_sqr = _joint_setup()
         tspan = (0.0, 1.0)
         N = 10
         # The pre-fix code accessed prior.xi unconditionally; JointPrior has
         # no xi, so this would have failed at line 248 before the fix.
         result = gaussian_filter(
-            mu_0,
-            Sigma_0_sqr,
+            m_0,
+            P_0_sqr,
             joint,
             measure,
             np.linspace(*tspan, N + 1),
@@ -330,11 +329,11 @@ class TestJointPriorDiagonalCalibration:
 
     @pytest.mark.parametrize("mode", ["diagonal", "diagonal_ekf0"])
     def test_fixed_step_runs_and_shapes_correct(self, mode):
-        joint, measure, mu_0, Sigma_0_sqr = _joint_setup()
+        joint, measure, m_0, P_0_sqr = _joint_setup()
         N = 5
         result = gaussian_filter(
-            mu_0,
-            Sigma_0_sqr,
+            m_0,
+            P_0_sqr,
             joint,
             measure,
             np.linspace(0.0, 1.0, N + 1),
@@ -349,10 +348,10 @@ class TestJointPriorDiagonalCalibration:
 
     @pytest.mark.parametrize("mode", ["diagonal", "diagonal_ekf0"])
     def test_adaptive_runs_and_shapes_correct(self, mode):
-        joint, measure, mu_0, Sigma_0_sqr = _joint_setup()
+        joint, measure, m_0, P_0_sqr = _joint_setup()
         result = gaussian_filter_adaptive(
-            mu_0,
-            Sigma_0_sqr,
+            m_0,
+            P_0_sqr,
             joint,
             measure,
             np.array([0.0, 1.0]),
@@ -443,13 +442,13 @@ class TestPureODEBitIdentity:
         x0 = np.array([0.1])
         prior = IWP(q=2, d=1)
         measure = ODEInformation(_vf_logistic, prior.E0, prior.E1)
-        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_logistic, x0, prior.q)
+        m_0, P_0_sqr = taylor_mode_initialization(_vf_logistic, x0, prior.q)
         tspan = (0.0, 5.0)
         N = 30
 
         result = gaussian_filter(
-            mu_0,
-            Sigma_0_sqr,
+            m_0,
+            P_0_sqr,
             prior,
             measure,
             np.linspace(*tspan, N + 1),

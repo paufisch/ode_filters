@@ -40,6 +40,8 @@ from jax import Array
 from ..calibration.policies import Calibration, CalibrationMode
 from ..filters.fixed_grid import gaussian_filter
 from ..information import BaseODEInformation, ObsModel
+from ..linearization import Correction
+from ..priors import BasePrior
 from .evidence import conditional_loglik, fenrir_loglik
 from .parameters import unwrap
 
@@ -68,11 +70,11 @@ class InferenceProblem(NamedTuple):
     """
 
     build: Callable[[Any], tuple[Array, Array, BaseODEInformation]]
-    prior: Any
+    prior: BasePrior
     ts: Array
     calibration: Calibration | CalibrationMode = "none"
-    correction: Any = None
-    prior_fn: Callable[[Any], Any] | None = None
+    correction: Correction | None = None
+    prior_fn: Callable[[Any], BasePrior] | None = None
 
 
 _CHANNELS = ("obs", "ode", "both", "fenrir", "dalton")

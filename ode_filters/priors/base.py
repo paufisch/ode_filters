@@ -9,6 +9,7 @@ from typing import NamedTuple
 import equinox as eqx
 import jax
 import jax.numpy as np
+import numpy as onp
 from jax import Array
 from jax.typing import ArrayLike
 
@@ -63,6 +64,15 @@ def component_matrix(Xi: ArrayLike | None, d: int) -> Array:
     return xi
 
 
+def diagonal_flag(xi: Array) -> bool | None:
+    """Whether ``xi`` is diagonal; ``None`` when it is traced and cannot be read."""
+    try:
+        x = onp.asarray(xi)
+    except jax.errors.TracerArrayConversionError:
+        return None
+    return bool(onp.allclose(x - onp.diag(onp.diag(x)), 0.0))
+
+
 def _selector(q: int, d: int, k: int) -> Array:
     """Selector of the ``k``-th derivative of a derivative-major state."""
     return np.kron(np.eye(q + 1)[k : k + 1], np.eye(d))
@@ -89,11 +99,16 @@ class BasePrior(eqx.Module):
         xi: Component-correlation matrix of the driving noise, shape ``[d, d]``.
             It sets the scale of the prior uncertainty (together with the
             calibrated ``sigma^2``).
+        xi_diagonal: Whether ``xi`` was diagonal when the prior was built
+            (``None`` if it was built from a traced ``Xi``). Static, so the
+            per-component calibration can check it under ``jit``, where ``xi``
+            itself is traced.
     """
 
     q: eqx.AbstractVar[int]
     d: eqx.AbstractVar[int]
     xi: eqx.AbstractVar[Array]
+    xi_diagonal: bool | None = eqx.field(static=True, default=None, kw_only=True)
 
     @property
     def state_dim(self) -> int:
@@ -163,6 +178,11 @@ class BasePrior(eqx.Module):
     def xi_state(self) -> Array:
         """``Xi`` of the state block (per-component calibration needs it diagonal)."""
         return self.xi
+
+    @property
+    def xi_state_diagonal(self) -> bool | None:
+        """Whether ``xi_state`` was diagonal at construction (``None``: unknown)."""
+        return self.xi_diagonal
 
     @property
     def _state_block(self) -> tuple[int, int, int]:

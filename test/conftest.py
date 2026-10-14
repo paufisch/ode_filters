@@ -16,6 +16,7 @@ if os.environ.get("ODE_FILTERS_TYPECHECK") == "1":
     install_import_hook("ode_filters", "beartype.beartype")
 
 import jax
+import pytest
 from hypothesis import settings
 
 # Hypothesis profiles: "dev" (default) keeps local runs quick, "ci" runs more
@@ -29,3 +30,17 @@ settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 # This allows tests to use float64 without truncation warnings
 # See: https://jax.readthedocs.io/en/latest/notebooks/Common_Gotchas_in_JAX.html#double-64bit-precision
 jax.config.update("jax_enable_x64", True)
+
+
+def pytest_collection_modifyitems(config, items):
+    """Under runtime type checking, skip the tests of wrongly typed input.
+
+    The checker rejects such input before the library's own validation runs,
+    so these tests cannot see the error they check for.
+    """
+    if os.environ.get("ODE_FILTERS_TYPECHECK") != "1":
+        return
+    skip = pytest.mark.skip(reason="the runtime type checker rejects the input first")
+    for item in items:
+        if "wrong_input_types" in item.keywords:
+            item.add_marker(skip)

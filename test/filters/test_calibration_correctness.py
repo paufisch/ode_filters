@@ -51,11 +51,11 @@ from ode_filters.priors import (
 # ---------------------------------------------------------------------------
 
 
-def _adaptive(mu_0, S0, prior, measure, tspan, **kwargs):
+def _adaptive(m_0, S0, prior, measure, tspan, **kwargs):
     """An adaptive solve over ``tspan`` recording its accepted steps."""
     kwargs.pop("h_min", None)  # the solver has no minimum step
     return gaussian_filter_adaptive(
-        mu_0,
+        m_0,
         S0,
         prior,
         measure,
@@ -104,14 +104,14 @@ class TestConvergenceOrderFixedStep:
         x0 = np.array([0.1])
         tspan = (0.0, 2.0)
         prior = IWP(q=q, d=1)
-        mu_0, S0 = taylor_mode_initialization(logistic_vf, x0, q=q)
+        m_0, S0 = taylor_mode_initialization(logistic_vf, x0, q=q)
         measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
         x_true = float(logistic_analytic(tspan[1], x0=float(x0[0])))
 
         Ns = [16, 32, 64, 128]
         errs = []
         for N in Ns:
-            r = gaussian_filter(mu_0, S0, prior, measure, np.linspace(*tspan, N + 1))
+            r = gaussian_filter(m_0, S0, prior, measure, np.linspace(*tspan, N + 1))
             x_pred = float((prior.E0 @ r.m[-1])[0])
             errs.append(abs(x_pred - x_true))
 
@@ -135,14 +135,14 @@ class TestConvergenceOrderFixedStep:
         x0 = np.array([0.1])
         tspan = (0.0, 5.0)
         prior = IWP(q=3, d=1)
-        mu_0, S0 = taylor_mode_initialization(logistic_vf, x0, q=3)
+        m_0, S0 = taylor_mode_initialization(logistic_vf, x0, q=3)
         measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
         x_true = float(logistic_analytic(tspan[1], x0=float(x0[0])))
 
         rtols = [1e-1, 1e-3, 1e-5]
         errs = []
         for rtol in rtols:
-            r = _adaptive(mu_0, S0, prior, measure, tspan, atol=rtol * 1e-2, rtol=rtol)
+            r = _adaptive(m_0, S0, prior, measure, tspan, atol=rtol * 1e-2, rtol=rtol)
             errs.append(abs(float((prior.E0 @ r.m[-1])[0]) - x_true))
         # Two-orders-of-magnitude rtol reduction should reduce error by at
         # least one order of magnitude (PI controller has overheads).
@@ -166,15 +166,15 @@ class TestDiagonalModesOffDiagonalJacobian:
 
     def _setup(self, q=3):
         prior = IWP(q=q, d=2)
-        mu_0, S0 = taylor_mode_initialization(lotka_volterra_vf, self.x0, q=q)
+        m_0, S0 = taylor_mode_initialization(lotka_volterra_vf, self.x0, q=q)
         measure = ODEInformation(lotka_volterra_vf, prior.E0, prior.E1)
-        return prior, mu_0, S0, measure
+        return prior, m_0, S0, measure
 
     def _reference_endpoint(self):
         """Reference trajectory via a tight-tolerance run."""
-        prior, mu_0, S0, measure = self._setup(q=4)
+        prior, m_0, S0, measure = self._setup(q=4)
         r = _adaptive(
-            mu_0,
+            m_0,
             S0,
             prior,
             measure,
@@ -187,10 +187,10 @@ class TestDiagonalModesOffDiagonalJacobian:
 
     def test_both_diagonal_modes_run_and_agree_with_reference(self):
         ref = self._reference_endpoint()
-        prior, mu_0, S0, measure = self._setup()
+        prior, m_0, S0, measure = self._setup()
         for mode in ("diagonal", "diagonal_ekf0"):
             r = _adaptive(
-                mu_0,
+                m_0,
                 S0,
                 prior,
                 measure,
@@ -210,9 +210,9 @@ class TestDiagonalModesOffDiagonalJacobian:
         problems with off-diagonal ``J_f``. This test documents that
         difference: at loose tolerance the per-step sigma estimates are
         not identical."""
-        prior, mu_0, S0, measure = self._setup()
+        prior, m_0, S0, measure = self._setup()
         r1 = _adaptive(
-            mu_0,
+            m_0,
             S0,
             prior,
             measure,
@@ -222,7 +222,7 @@ class TestDiagonalModesOffDiagonalJacobian:
             calibration="diagonal",
         )
         r2 = _adaptive(
-            mu_0,
+            m_0,
             S0,
             prior,
             measure,
@@ -333,14 +333,14 @@ class TestCalibrationQuality:
 
     def test_posthoc_rescaling_yields_unit_whitened_residuals(self):
         prior = IWP(q=3, d=1)
-        mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=3)
+        m_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=3)
         measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
         tspan = (0.0, 5.0)
         N = 100
 
         # sigma=1 (no calibration) run; collect (mz, Pz_sqr) trace.
         r = gaussian_filter(
-            mu_0, S0, prior, measure, np.linspace(*tspan, N + 1), calibration="none"
+            m_0, S0, prior, measure, np.linspace(*tspan, N + 1), calibration="none"
         )
         mz_seq = np.asarray(r.mz)
         Pz_seq_sqr = np.asarray(r.Pz_sqr)
@@ -372,7 +372,7 @@ class TestAdaptiveEqualsFixedStep:
 
     def test_locked_controller_reproduces_fixed_step(self):
         prior = IWP(q=2, d=1)
-        mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
+        m_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
         measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
         # Pick a span/N pair where h is exactly representable in fp64 so
         # the adaptive loop terminates cleanly at the last step rather than
@@ -387,7 +387,7 @@ class TestAdaptiveEqualsFixedStep:
         )
 
         r_adapt = _adaptive(
-            mu_0,
+            m_0,
             S0,
             prior,
             measure,
@@ -398,7 +398,7 @@ class TestAdaptiveEqualsFixedStep:
             controller=controller,
             sigma_in_error="per_step",
         )
-        r_fixed = gaussian_filter(mu_0, S0, prior, measure, np.linspace(*tspan, N + 1))
+        r_fixed = gaussian_filter(m_0, S0, prior, measure, np.linspace(*tspan, N + 1))
 
         assert int(r_adapt.steps.count) == N
         assert np.allclose(r_adapt.m[-1], r_fixed.m[-1], atol=1e-10)
@@ -421,16 +421,16 @@ class TestLogLikelihoodSemantics:
 
     def _setup(self):
         prior = IWP(q=2, d=1)
-        mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
+        m_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
         measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
-        return prior, mu_0, S0, measure
+        return prior, m_0, S0, measure
 
     def test_dynamic_log_likelihood_is_sum_of_per_step_calibrated(self):
         """Re-derive log_likelihood independently from the stored
         (mz, Pz_sqr) sequence and verify it matches the loop's report."""
-        prior, mu_0, S0, measure = self._setup()
+        prior, m_0, S0, measure = self._setup()
         tspan, N = (0.0, 5.0), 40
-        r = gaussian_filter(mu_0, S0, prior, measure, np.linspace(*tspan, N + 1))
+        r = gaussian_filter(m_0, S0, prior, measure, np.linspace(*tspan, N + 1))
         mz_seq, Pz_seq_sqr, ll = r.mz, r.Pz_sqr, r.log_likelihood
 
         ll_recomputed = 0.0
@@ -456,18 +456,18 @@ class TestAdaptiveBoundaryRoundoff:
 
     def _setup(self):
         prior = IWP(q=2, d=1)
-        mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
+        m_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
         measure = ODEInformation(logistic_vf, prior.E0, prior.E1)
-        return prior, mu_0, S0, measure
+        return prior, m_0, S0, measure
 
     def test_non_fp_exact_h_terminates_cleanly(self):
         """h = 0.1 is not exactly representable; ten 0.1-steps land on 1.0."""
-        prior, mu_0, S0, measure = self._setup()
+        prior, m_0, S0, measure = self._setup()
         controller = PController(
             order=prior.q, safety=1.0, alpha=1.0, min_factor=1.0, max_factor=1.0
         )
         r = gaussian_filter_adaptive(
-            mu_0,
+            m_0,
             S0,
             prior,
             measure,
@@ -482,9 +482,9 @@ class TestAdaptiveBoundaryRoundoff:
 
     def test_an_unreachable_tolerance_fails_without_raising(self):
         """The jittable solver cannot raise: it reports the failure."""
-        prior, mu_0, S0, measure = self._setup()
+        prior, m_0, S0, measure = self._setup()
         r = gaussian_filter_adaptive(
-            mu_0,
+            m_0,
             S0,
             prior,
             measure,
@@ -517,12 +517,12 @@ class TestPreconditionedDiagonalMatchesNonPreconditioned:
 
         prior_p = PrecondMaternPrior(q=2, d=1, length_scale=1.0)
         prior_n = MaternPrior(q=2, d=1, length_scale=1.0)
-        mu_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
+        m_0, S0 = taylor_mode_initialization(logistic_vf, np.array([0.1]), q=2)
         m_p = ODEInformation(logistic_vf, prior_p.E0, prior_p.E1)
         m_n = ODEInformation(logistic_vf, prior_n.E0, prior_n.E1)
 
         r_p = gaussian_filter(
-            mu_0,
+            m_0,
             S0,
             prior_p,
             m_p,
@@ -530,7 +530,7 @@ class TestPreconditionedDiagonalMatchesNonPreconditioned:
             calibration="diagonal_ekf0",
         )
         r_n = gaussian_filter(
-            mu_0,
+            m_0,
             S0,
             prior_n,
             m_n,
@@ -557,10 +557,10 @@ def test_diagonal_ekf0_uses_the_measurement_selector_for_second_order_odes(
     measure = SecondOrderODEInformation(
         lambda x, v, *, t: -x, prior.E0, prior.E1, prior.E2
     )
-    mu_0 = np.array([1.0, 0.0, -1.0, 0.0])
+    m_0 = np.array([1.0, 0.0, -1.0, 0.0])
     tspan, N = (0.0, 3.0), 60
     res = gaussian_filter(
-        mu_0,
+        m_0,
         np.zeros((4, 4)),
         prior,
         measure,

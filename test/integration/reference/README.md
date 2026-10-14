@@ -11,7 +11,11 @@ scenarios changed, by how much, and why.
 ## Changes
 
 - 2026-10-13: first recording (library state of release 0.7.3 plus the October
-  correctness fixes).
+  correctness fixes). Against release 0.7.3 itself only
+  `second_order_diagonal_ekf0` differs: `sigma_sqr` is about 300 times smaller,
+  because `"diagonal_ekf0"` now takes the EK0 Jacobian from the model's
+  left-hand-side selector (`E2` for a second-order ODE) instead of the prior's
+  `E1` (CHANGELOG, Fixed).
 - 2026-10-13, restructure onto one step kernel. Everything else agreed with the
   first recording to better than `1e-9` (relative to each array's scale),
   including the preconditioned scenarios, which now run as a change of variables

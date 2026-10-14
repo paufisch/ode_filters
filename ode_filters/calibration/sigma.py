@@ -1,16 +1,16 @@
 """Diffusion-scale estimators for probabilistic ODE filters.
 
-All estimators consume the predicted-observation marginal ``(m_z, P_z_sqr)``
+All estimators consume the predicted-observation marginal ``(mz, Pz_sqr)``
 in the same square-root convention as the rest of the library:
-``S = P_z_sqr.T @ P_z_sqr``. The whitened residual is
+``S = Pz_sqr.T @ Pz_sqr``. The whitened residual is
 
-    v = P_z_sqr^{-T} @ m_z,    v.T @ v == m_z.T @ S^{-1} @ m_z.
+    v = Pz_sqr^{-T} @ mz,    v.T @ v == mz.T @ S^{-1} @ mz.
 
 Two conventions for the residual covariance ``S`` correspond to two
 different generative-model assumptions:
 
 - ``S = H Q(h) H.T`` (process-noise only). The implicit model is
-  ``m_z ~ N(0, sigma^2 H Q(h) H.T)``, i.e. the residual is treated as if
+  ``mz ~ N(0, sigma^2 H Q(h) H.T)``, i.e. the residual is treated as if
   it arose purely from the current step's process noise scaled by
   ``sigma^2``. This is the Bosch-Tronarp-Hennig 2021 per-step quasi-MLE
   (Eq. 32). The estimate is meant to be baked into the current step's
@@ -37,19 +37,19 @@ from jax import Array
 from jax.typing import ArrayLike
 
 
-def quasi_mle_sigma_sqr(m_z: Array, P_z_sqr: Array) -> Array:
+def quasi_mle_sigma_sqr(mz: Array, Pz_sqr: Array) -> Array:
     """Per-step quasi-MLE of the scalar diffusion sigma^2 (Bosch et al. 2021).
 
     Computes
 
-        sigma_hat^2 = (1 / d) * m_z.T @ S^{-1} @ m_z
+        sigma_hat^2 = (1 / d) * mz.T @ S^{-1} @ mz
 
-    where ``d = m_z.shape[0]`` and ``S = P_z_sqr.T @ P_z_sqr`` is a
+    where ``d = mz.shape[0]`` and ``S = Pz_sqr.T @ Pz_sqr`` is a
     *noise-free* predicted-observation covariance under the implicit
     assumption that ``S`` scales linearly with ``sigma^2``. Which ``S`` is
     "correct" depends on the calibration mode -- see the module docstring.
 
-    **``P_z_sqr`` must exclude any measurement noise R.** The estimator
+    **``Pz_sqr`` must exclude any measurement noise R.** The estimator
     treats ``S`` as scaling linearly with ``sigma^2``; adding ``R`` into the
     denominator inflates it by a constant and biases ``sigma_hat^2`` down.
     For pure ODE-information filtering (``measure.noise_sqr`` returns zero
@@ -59,15 +59,15 @@ def quasi_mle_sigma_sqr(m_z: Array, P_z_sqr: Array) -> Array:
     builds ``H Q H.T`` directly and never sees ``R``).
 
     Args:
-        m_z: Predicted observation mean (a.k.a. ODE residual mean), shape ``[d]``.
-        P_z_sqr: Square-root of the *noise-free* predicted observation
+        mz: Predicted observation mean (a.k.a. ODE residual mean), shape ``[d]``.
+        Pz_sqr: Square-root of the *noise-free* predicted observation
             covariance, shape ``[d, d]`` (upper-triangular).
 
     Returns:
         Scalar JAX array containing the per-step quasi-MLE of sigma^2.
     """
-    v = jax.scipy.linalg.solve_triangular(P_z_sqr.T, m_z, lower=True)
-    d = m_z.shape[0]
+    v = jax.scipy.linalg.solve_triangular(Pz_sqr.T, mz, lower=True)
+    d = mz.shape[0]
     return (v @ v) / d
 
 
@@ -82,7 +82,7 @@ def _sqr_HQH(H: Array, Q_sqr: Array) -> Array:
     return R
 
 
-def quasi_mle_sigma_sqr_from_Q(m_z: Array, H: Array, Q_sqr: Array) -> Array:
+def quasi_mle_sigma_sqr_from_Q(mz: Array, H: Array, Q_sqr: Array) -> Array:
     """Per-step quasi-MLE of sigma^2 in the *dynamic-diffusion* convention.
 
     Uses ``S = H Q(h) H.T`` -- i.e. only the current step's process-noise
@@ -93,7 +93,7 @@ def quasi_mle_sigma_sqr_from_Q(m_z: Array, H: Array, Q_sqr: Array) -> Array:
     own previously-applied scaling.
 
     Args:
-        m_z: Predicted observation mean (residual), shape ``[d]``.
+        mz: Predicted observation mean (residual), shape ``[d]``.
         H: Linearised observation Jacobian, shape ``[d, n]``.
         Q_sqr: Square-root of the per-step process noise, shape ``[n, n]``.
 
@@ -101,7 +101,7 @@ def quasi_mle_sigma_sqr_from_Q(m_z: Array, H: Array, Q_sqr: Array) -> Array:
         Scalar JAX array containing ``sigma_hat^2``.
     """
     Pz_Q_sqr = _sqr_HQH(H, Q_sqr)
-    return quasi_mle_sigma_sqr(m_z, Pz_Q_sqr)
+    return quasi_mle_sigma_sqr(mz, Pz_Q_sqr)
 
 
 def posthoc_mle_sigma_sqr(mz_seq: ArrayLike, Pz_seq_sqr: ArrayLike) -> Array:
@@ -109,7 +109,7 @@ def posthoc_mle_sigma_sqr(mz_seq: ArrayLike, Pz_seq_sqr: ArrayLike) -> Array:
 
     Computes
 
-        sigma_hat^2 = (1 / (N * d)) * sum_n m_z^{(n)} . T @ S_n^{-1} @ m_z^{(n)}
+        sigma_hat^2 = (1 / (N * d)) * sum_n mz^{(n)} . T @ S_n^{-1} @ mz^{(n)}
 
     which is the joint MLE under a constant sigma assumption. Equivalent to the
     mean of ``quasi_mle_sigma_sqr`` applied step-by-step.

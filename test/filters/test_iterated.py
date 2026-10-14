@@ -231,6 +231,7 @@ def test_jit_vmap_and_grad():
         ({"linearization": "newton"}, "linearization"),
     ],
 )
+@pytest.mark.wrong_input_types
 def test_invalid_arguments_raise(kwargs, match):
     prior, measure, m_0, P_0_sqr = _logistic()
     with pytest.raises(ValueError, match=match):

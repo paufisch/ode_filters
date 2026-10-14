@@ -34,15 +34,15 @@ def _logistic_problem(x0_val=0.5, theta=1.0):
 
     x0 = np.array([x0_val])
     prior = IWP(q=2, d=1)
-    mu_0, S0_sqr = taylor_mode_initialization(vf, x0, q=2)
+    m_0, S0_sqr = taylor_mode_initialization(vf, x0, q=2)
     measure = ODEInformation(vf, prior.E0, prior.E1)
-    return prior, measure, mu_0, S0_sqr
+    return prior, measure, m_0, S0_sqr
 
 
 def test_accuracy_vs_analytic_logistic():
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    prior, measure, m_0, S0_sqr = _logistic_problem()
     res = gaussian_filter_adaptive(
-        mu_0, S0_sqr, prior, measure, SAVE_AT, atol=1e-8, rtol=1e-8
+        m_0, S0_sqr, prior, measure, SAVE_AT, atol=1e-8, rtol=1e-8
     )
     x_true = 1.0 / (1.0 + np.exp(-SAVE_AT))  # x0 = 0.5
     assert np.max(np.abs(res.m[:, 0] - x_true)) < 1e-6
@@ -50,19 +50,19 @@ def test_accuracy_vs_analytic_logistic():
 
 
 def test_grid_shapes_and_initial_state():
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
-    res = gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    prior, measure, m_0, S0_sqr = _logistic_problem()
+    res = gaussian_filter_adaptive(m_0, S0_sqr, prior, measure, SAVE_AT)
     assert res.t.shape == SAVE_AT.shape
-    assert res.m.shape == (SAVE_AT.shape[0], mu_0.shape[0])
-    assert res.P_sqr.shape == (SAVE_AT.shape[0], mu_0.shape[0], mu_0.shape[0])
+    assert res.m.shape == (SAVE_AT.shape[0], m_0.shape[0])
+    assert res.P_sqr.shape == (SAVE_AT.shape[0], m_0.shape[0], m_0.shape[0])
     assert np.allclose(res.t, SAVE_AT)
-    assert np.allclose(res.m[0], mu_0)  # save_at[0] returns the initial state
+    assert np.allclose(res.m[0], m_0)  # save_at[0] returns the initial state
     assert np.allclose(res.P_sqr[0], S0_sqr)
 
 
 def test_jit_matches_eager():
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
-    args = (mu_0, S0_sqr, prior, measure, SAVE_AT)
+    prior, measure, m_0, S0_sqr = _logistic_problem()
+    args = (m_0, S0_sqr, prior, measure, SAVE_AT)
     eager = gaussian_filter_adaptive(*args)
     jitted = eqx.filter_jit(gaussian_filter_adaptive)(*args)
     assert np.allclose(eager.m, jitted.m, atol=1e-10)
@@ -78,8 +78,8 @@ def test_vmap_over_initial_conditions():
     measure = ODEInformation(vf, prior.E0, prior.E1)
 
     def solve(x0):
-        mu_0, S0_sqr = taylor_mode_initialization(vf, x0, q=2)
-        return gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, SAVE_AT).m[-1, 0]
+        m_0, S0_sqr = taylor_mode_initialization(vf, x0, q=2)
+        return gaussian_filter_adaptive(m_0, S0_sqr, prior, measure, SAVE_AT).m[-1, 0]
 
     x0_batch = np.array([[0.3], [0.5], [0.7]])
     out = jax.vmap(solve)(x0_batch)
@@ -97,10 +97,10 @@ def test_reverse_grad_matches_finite_difference():
             return theta * x * (1.0 - x)
 
         x0 = np.array([0.5])
-        mu_0, S0_sqr = taylor_mode_initialization(vf, x0, q=2)
+        m_0, S0_sqr = taylor_mode_initialization(vf, x0, q=2)
         measure = ODEInformation(vf, prior.E0, prior.E1)
         res = gaussian_filter_adaptive(
-            mu_0, S0_sqr, prior, measure, save_at, atol=1e-7, rtol=1e-7
+            m_0, S0_sqr, prior, measure, save_at, atol=1e-7, rtol=1e-7
         )
         return res.m[-1, 0]
 
@@ -114,9 +114,9 @@ def test_reverse_grad_matches_finite_difference():
 
 @pytest.mark.parametrize("calibration", ["dynamic", "none", "diagonal_ekf0"])
 def test_calibration_modes_run(calibration):
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    prior, measure, m_0, S0_sqr = _logistic_problem()
     res = gaussian_filter_adaptive(
-        mu_0, S0_sqr, prior, measure, SAVE_AT, calibration=calibration
+        m_0, S0_sqr, prior, measure, SAVE_AT, calibration=calibration
     )
     x_true = 1.0 / (1.0 + np.exp(-SAVE_AT))
     assert np.max(np.abs(res.m[:, 0] - x_true)) < 1e-2
@@ -127,13 +127,13 @@ def test_obs_model_matches_fixed_grid_obs_scan():
     """Adaptive solve with observations agrees with the trusted fixed-grid
     dynamic obs-scan loop on the same grid (difference = adaptive vs fixed ODE
     discretisation between save points)."""
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    prior, measure, m_0, S0_sqr = _logistic_problem()
     save_at = np.linspace(0.0, 2.0, 9)  # save_at[4] == 1.0
     meas = Measurement(np.eye(1), np.array([[0.55]]), np.array([1.0]), noise=1e-3)
     obs = prepare_observations([meas], prior.E0, save_at)
 
     ad = gaussian_filter_adaptive(
-        mu_0,
+        m_0,
         S0_sqr,
         prior,
         measure,
@@ -144,7 +144,7 @@ def test_obs_model_matches_fixed_grid_obs_scan():
         calibration="none",
     )
     fx = gaussian_filter(
-        mu_0, S0_sqr, prior, measure, save_at, obs_model=obs, calibration="none"
+        m_0, S0_sqr, prior, measure, save_at, obs_model=obs, calibration="none"
     )
     assert np.max(np.abs(ad.m[:, 0] - fx.m[:, 0])) < 5e-3
 
@@ -154,13 +154,13 @@ def test_adaptive_surfaces_obs_innovation_matching_fixed_grid():
     agrees with the trusted fixed-grid obs-scan loop on the same grid (difference
     = adaptive vs fixed ODE discretisation), and the ODE-defect innovation
     (mz / Pz_sqr) is surfaced with the right shape."""
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    prior, measure, m_0, S0_sqr = _logistic_problem()
     save_at = np.linspace(0.0, 2.0, 9)  # save_at[4] == 1.0 (obs time)
     meas = Measurement(np.eye(1), np.array([[0.55]]), np.array([1.0]), noise=1e-3)
     obs = prepare_observations([meas], prior.E0, save_at)
 
     ad = gaussian_filter_adaptive(
-        mu_0,
+        m_0,
         S0_sqr,
         prior,
         measure,
@@ -171,7 +171,7 @@ def test_adaptive_surfaces_obs_innovation_matching_fixed_grid():
         calibration="none",
     )
     fx = gaussian_filter(
-        mu_0, S0_sqr, prior, measure, save_at, obs_model=obs, calibration="none"
+        m_0, S0_sqr, prior, measure, save_at, obs_model=obs, calibration="none"
     )
     mz_obs_fx, Pz_obs_fx = fx.mz_obs, fx.Pz_obs_sqr
     assert ad.mz_obs.shape == mz_obs_fx.shape == (8, 1)
@@ -186,8 +186,8 @@ def test_adaptive_surfaces_obs_innovation_matching_fixed_grid():
 def test_adaptive_no_obs_surfaces_ode_innovation_only():
     """Without an obs_model the ODE-defect innovation is surfaced and the
     observation channel stays None (no observations to innovate against)."""
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
-    res = gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    prior, measure, m_0, S0_sqr = _logistic_problem()
+    res = gaussian_filter_adaptive(m_0, S0_sqr, prior, measure, SAVE_AT)
     assert res.mz.shape == (SAVE_AT.shape[0] - 1, 1)
     assert res.Pz_sqr.shape == (SAVE_AT.shape[0] - 1, 1, 1)
     assert res.mz_obs is None and res.Pz_obs_sqr is None
@@ -195,15 +195,15 @@ def test_adaptive_no_obs_surfaces_ode_innovation_only():
 
 def test_obs_model_assimilation_pulls_state():
     """A precise observation at a save time pulls the filtered state toward it."""
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    prior, measure, m_0, S0_sqr = _logistic_problem()
     save_at = np.linspace(0.0, 2.0, 5)  # save_at[2] == 1.0; free x(1.0) ~ 0.731
     free = gaussian_filter_adaptive(
-        mu_0, S0_sqr, prior, measure, save_at, atol=1e-2, rtol=1e-2, calibration="none"
+        m_0, S0_sqr, prior, measure, save_at, atol=1e-2, rtol=1e-2, calibration="none"
     )
     meas = Measurement(np.eye(1), np.array([[0.55]]), np.array([1.0]), noise=1e-8)
     obs = prepare_observations([meas], prior.E0, save_at)
     pulled = gaussian_filter_adaptive(
-        mu_0,
+        m_0,
         S0_sqr,
         prior,
         measure,
@@ -226,10 +226,10 @@ def test_obs_model_grad_matches_finite_difference():
         def vf(x, *, t):
             return theta * x * (1.0 - x)
 
-        mu_0, S0_sqr = taylor_mode_initialization(vf, np.array([0.5]), q=2)
+        m_0, S0_sqr = taylor_mode_initialization(vf, np.array([0.5]), q=2)
         measure = ODEInformation(vf, prior.E0, prior.E1)
         res = gaussian_filter_adaptive(
-            mu_0,
+            m_0,
             S0_sqr,
             prior,
             measure,
@@ -250,14 +250,14 @@ def test_obs_model_grad_matches_finite_difference():
 
 
 def test_obs_model_wrong_length_raises():
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    prior, measure, m_0, S0_sqr = _logistic_problem()
     save_at = np.linspace(0.0, 2.0, 5)
     meas = Measurement(np.eye(1), np.array([[0.55]]), np.array([1.0]), noise=1e-3)
     # obs_model built against a DIFFERENT grid length -> mismatch
     obs_wrong = prepare_observations([meas], prior.E0, np.linspace(0.0, 2.0, 9))
     with pytest.raises(ValueError, match="steps but the grid has"):
         gaussian_filter_adaptive(
-            mu_0, S0_sqr, prior, measure, save_at, obs_model=obs_wrong
+            m_0, S0_sqr, prior, measure, save_at, obs_model=obs_wrong
         )
 
 
@@ -270,14 +270,14 @@ def _blowup_problem(x0_val=1.0):
 
     x0 = np.array([x0_val])
     prior = IWP(q=2, d=1)
-    mu_0, S0_sqr = taylor_mode_initialization(vf, x0, q=2)
+    m_0, S0_sqr = taylor_mode_initialization(vf, x0, q=2)
     measure = ODEInformation(vf, prior.E0, prior.E1)
-    return prior, measure, mu_0, S0_sqr
+    return prior, measure, m_0, S0_sqr
 
 
 def test_success_flag_true_on_normal_solve():
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
-    res = gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    prior, measure, m_0, S0_sqr = _logistic_problem()
+    res = gaussian_filter_adaptive(m_0, S0_sqr, prior, measure, SAVE_AT)
     assert bool(res.success)
     assert np.all(np.isfinite(res.m))
 
@@ -286,9 +286,9 @@ def test_blowup_fails_gracefully_without_nan():
     """A finite-time blow-up must not silently emit NaN: the guard rejects the
     non-finite error, the solver shrinks h, and on exhaustion it reports
     success=False while leaving the output finite (the last accepted state)."""
-    prior, measure, mu_0, S0_sqr = _blowup_problem(x0_val=1.0)
+    prior, measure, m_0, S0_sqr = _blowup_problem(x0_val=1.0)
     save_at = np.linspace(0.0, 2.0, 5)  # blow-up at t=1.0 is inside the grid
-    res = gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, save_at, max_steps=200)
+    res = gaussian_filter_adaptive(m_0, S0_sqr, prior, measure, save_at, max_steps=200)
     assert not bool(res.success)
     # Crucially, no NaN leaks into the returned arrays.
     assert np.all(np.isfinite(res.m))
@@ -300,10 +300,10 @@ def test_blowup_failure_is_jittable():
 
     ``max_steps`` bounds the checkpointed while-loop and so must be static.
     """
-    prior, measure, mu_0, S0_sqr = _blowup_problem(x0_val=1.0)
+    prior, measure, m_0, S0_sqr = _blowup_problem(x0_val=1.0)
     save_at = np.linspace(0.0, 2.0, 5)
     f = eqx.filter_jit(gaussian_filter_adaptive)
-    res = f(mu_0, S0_sqr, prior, measure, save_at, max_steps=200)
+    res = f(m_0, S0_sqr, prior, measure, save_at, max_steps=200)
     assert not bool(res.success)
     assert np.all(np.isfinite(res.m))
 
@@ -311,8 +311,8 @@ def test_blowup_failure_is_jittable():
 def test_gaussian_filter_adaptive_surfaces_success():
     from ode_filters import gaussian_filter_adaptive
 
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
-    res = gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    prior, measure, m_0, S0_sqr = _logistic_problem()
+    res = gaussian_filter_adaptive(m_0, S0_sqr, prior, measure, SAVE_AT)
     assert res.success is not None
     assert bool(res.success)
 
@@ -327,11 +327,11 @@ def test_smoother_matches_fixed_grid_rts_one_step_per_interval():
     must reproduce the fixed-grid RTS smoother exactly (same steps, same math)."""
     from ode_filters import gaussian_filter, gaussian_filter_adaptive, rts_smoother
 
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    prior, measure, m_0, S0_sqr = _logistic_problem()
     save = np.linspace(0.0, 2.0, 9)  # 8 intervals of 0.25 == fixed grid N=8
 
     res_fixed = gaussian_filter(
-        mu_0,
+        m_0,
         S0_sqr,
         prior,
         measure,
@@ -343,7 +343,7 @@ def test_smoother_matches_fixed_grid_rts_one_step_per_interval():
     # h_init == interval width + loose tolerances => exactly one accepted step
     # per interval, so the adaptive grid coincides with the fixed grid.
     res_ad = gaussian_filter_adaptive(
-        mu_0,
+        m_0,
         S0_sqr,
         prior,
         measure,
@@ -369,10 +369,10 @@ def test_smoother_matches_analytic_when_substepping():
     matches the analytic logistic solution at the save grid."""
     from ode_filters import gaussian_filter_adaptive, rts_smoother
 
-    prior, measure, mu_0, S0_sqr = _logistic_problem()  # x0=0.5
+    prior, measure, m_0, S0_sqr = _logistic_problem()  # x0=0.5
     save = np.linspace(0.0, 2.0, 6)
     res = gaussian_filter_adaptive(
-        mu_0, S0_sqr, prior, measure, save, smoother=True, atol=1e-9, rtol=1e-9
+        m_0, S0_sqr, prior, measure, save, smoother=True, atol=1e-9, rtol=1e-9
     )
     assert bool(res.success)
     ms, _ = rts_smoother(res)
@@ -384,9 +384,9 @@ def test_smoother_last_equals_filtered_last():
     """RTS property: the last smoothed state equals the last filtered state."""
     from ode_filters import gaussian_filter_adaptive, rts_smoother
 
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    prior, measure, m_0, S0_sqr = _logistic_problem()
     res = gaussian_filter_adaptive(
-        mu_0, S0_sqr, prior, measure, SAVE_AT, smoother=True, atol=1e-7, rtol=1e-7
+        m_0, S0_sqr, prior, measure, SAVE_AT, smoother=True, atol=1e-7, rtol=1e-7
     )
     ms, Ps = rts_smoother(res)
     assert np.allclose(ms[-1], res.m[-1], atol=1e-8)
@@ -397,9 +397,9 @@ def test_smoother_reduces_uncertainty():
     """Smoothing must not increase the marginal variance at interior save points."""
     from ode_filters import gaussian_filter_adaptive, rts_smoother
 
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    prior, measure, m_0, S0_sqr = _logistic_problem()
     res = gaussian_filter_adaptive(
-        mu_0,
+        m_0,
         S0_sqr,
         prior,
         measure,
@@ -420,12 +420,12 @@ def test_smoother_filtered_means_match_filtering_only_run():
     """smoother=True must not change the filtered solution (only add a backward pass)."""
     from ode_filters import gaussian_filter_adaptive
 
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    prior, measure, m_0, S0_sqr = _logistic_problem()
     filt = gaussian_filter_adaptive(
-        mu_0, S0_sqr, prior, measure, SAVE_AT, atol=1e-7, rtol=1e-7
+        m_0, S0_sqr, prior, measure, SAVE_AT, atol=1e-7, rtol=1e-7
     )
     smoo = gaussian_filter_adaptive(
-        mu_0, S0_sqr, prior, measure, SAVE_AT, smoother=True, atol=1e-7, rtol=1e-7
+        m_0, S0_sqr, prior, measure, SAVE_AT, smoother=True, atol=1e-7, rtol=1e-7
     )
     assert np.allclose(filt.m, smoo.m, atol=1e-10)
     assert np.allclose(filt.P_sqr, smoo.P_sqr, atol=1e-10)
@@ -435,13 +435,13 @@ def test_smoother_filtered_means_match_filtering_only_run():
 def test_smoother_with_observations_matches_the_fixed_grid_smoother():
     """One step per save interval: the adaptive smoother with data is the
     fixed-grid smoother with data."""
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    prior, measure, m_0, S0_sqr = _logistic_problem()
     meas = Measurement(
         np.eye(1), np.array([[0.55]]), np.array([SAVE_AT[2]]), noise=1e-3
     )
     obs = prepare_observations([meas], prior.E0, SAVE_AT)
     ad = gaussian_filter_adaptive(
-        mu_0,
+        m_0,
         S0_sqr,
         prior,
         measure,
@@ -455,7 +455,7 @@ def test_smoother_with_observations_matches_the_fixed_grid_smoother():
     )
     assert np.all(ad.n_accepted == 1)
     fx = gaussian_filter(
-        mu_0, S0_sqr, prior, measure, SAVE_AT, obs_model=obs, calibration="none"
+        m_0, S0_sqr, prior, measure, SAVE_AT, obs_model=obs, calibration="none"
     )
     assert np.allclose(rts_smoother(ad).m, rts_smoother(fx).m, atol=1e-10)
 
@@ -481,20 +481,21 @@ def test_preconditioned_priors_match_their_plain_versions(prior):
         if isinstance(prior, PrecondIWP)
         else MaternPrior(q=2, d=1, length_scale=1.0)
     )
-    _, measure, mu_0, S0_sqr = _logistic_problem()
-    a = gaussian_filter_adaptive(mu_0, S0_sqr, plain, measure, SAVE_AT, smoother=True)
-    b = gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, SAVE_AT, smoother=True)
+    _, measure, m_0, S0_sqr = _logistic_problem()
+    a = gaussian_filter_adaptive(m_0, S0_sqr, plain, measure, SAVE_AT, smoother=True)
+    b = gaussian_filter_adaptive(m_0, S0_sqr, prior, measure, SAVE_AT, smoother=True)
     assert np.allclose(b.m, a.m, rtol=1e-8, atol=1e-12)
     assert np.allclose(rts_smoother(b).m, rts_smoother(a).m, rtol=1e-8, atol=1e-12)
     assert np.all(b.n_accepted == a.n_accepted)
 
 
+@pytest.mark.wrong_input_types
 def test_adaptive_solve_rejects_unknown_calibration():
     """A misspelled mode used to fall through to "none" on the adaptive path."""
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    prior, measure, m_0, S0_sqr = _logistic_problem()
     with pytest.raises(ValueError, match="calibration must be"):
         gaussian_filter_adaptive(
-            mu_0, S0_sqr, prior, measure, SAVE_AT, calibration="diagnoal"
+            m_0, S0_sqr, prior, measure, SAVE_AT, calibration="diagnoal"
         )
 
 
@@ -523,12 +524,12 @@ class _HalvingController:
 def test_adaptive_solve_calls_the_controllers_propose():
     """gaussian_filter_adaptive used to read private PI coefficients and run its
     own copy of the PI law, so a custom ``propose`` was silently ignored."""
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
+    prior, measure, m_0, S0_sqr = _logistic_problem()
     controller = _HalvingController()
     assert isinstance(controller, StepSizeController)
-    default = gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    default = gaussian_filter_adaptive(m_0, S0_sqr, prior, measure, SAVE_AT)
     halving = gaussian_filter_adaptive(
-        mu_0, S0_sqr, prior, measure, SAVE_AT, controller=controller, max_steps=32
+        m_0, S0_sqr, prior, measure, SAVE_AT, controller=controller, max_steps=32
     )
     assert bool(default.success)
     # Halving every step cannot reach the first save time in 32 steps.
@@ -537,10 +538,10 @@ def test_adaptive_solve_calls_the_controllers_propose():
 
 def test_adaptive_solve_with_explicit_default_controller_is_unchanged():
     """Passing the default controller explicitly gives the default result."""
-    prior, measure, mu_0, S0_sqr = _logistic_problem()
-    default = gaussian_filter_adaptive(mu_0, S0_sqr, prior, measure, SAVE_AT)
+    prior, measure, m_0, S0_sqr = _logistic_problem()
+    default = gaussian_filter_adaptive(m_0, S0_sqr, prior, measure, SAVE_AT)
     explicit = gaussian_filter_adaptive(
-        mu_0, S0_sqr, prior, measure, SAVE_AT, controller=PIController(order=2)
+        m_0, S0_sqr, prior, measure, SAVE_AT, controller=PIController(order=2)
     )
     assert np.array_equal(default.m, explicit.m)
 
@@ -553,7 +554,7 @@ def test_adaptive_solve_runs_joint_prior():
         return -x
 
     measure = ODEInformationWithHidden(vf, joint.E0_x, joint.E1, joint.E0_hidden)
-    mu_0 = np.array([1.0, -1.0, 1.0, 0.0, 0.0])
-    res = gaussian_filter_adaptive(mu_0, np.zeros((5, 5)), joint, measure, SAVE_AT)
+    m_0 = np.array([1.0, -1.0, 1.0, 0.0, 0.0])
+    res = gaussian_filter_adaptive(m_0, np.zeros((5, 5)), joint, measure, SAVE_AT)
     assert bool(res.success)
     assert np.allclose(res.m[:, 0], np.exp(-SAVE_AT), atol=1e-3)

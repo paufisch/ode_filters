@@ -24,7 +24,13 @@ from jax.typing import ArrayLike
 
 from ..gaussian.algebra import _cholesky_upper
 from ._lti import QUAD_NODES, _gauss_legendre, _sqr_noise_via_quadrature
-from .base import BasePrior, Transition, check_order_and_dimension, component_matrix
+from .base import (
+    BasePrior,
+    Transition,
+    check_order_and_dimension,
+    component_matrix,
+    diagonal_flag,
+)
 from .iwp import _iwp_T_diag
 
 
@@ -97,6 +103,7 @@ class MaternPrior(BasePrior):
         _gauss_legendre(n_quad, q)  # validates n_quad
         self.q, self.d, self.n_quad = q, d, n_quad
         self.xi = component_matrix(Xi, d)
+        self.xi_diagonal = diagonal_flag(self.xi)
         self.length_scale = np.asarray(length_scale, dtype=float)
 
     def _normalized(self) -> tuple[Array, Array, Array]:

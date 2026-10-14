@@ -42,9 +42,9 @@ def _problem_and_data():
 
         measure = ODEInformation(vf, e0, e1)
         # theta-independent diffuse init: x0 known, derivatives loosely prior'd.
-        mu_0 = np.array([X0, 0.0, 0.0])
+        m_0 = np.array([X0, 0.0, 0.0])
         sigma_0_sqr = np.diag(np.array([1e-2, 1.0, 1.0]))  # sqrt of the covariance
-        return mu_0, sigma_0_sqr, measure
+        return m_0, sigma_0_sqr, measure
 
     problem = InferenceProblem(
         build=build, prior=prior, ts=np.linspace(*TSPAN, N + 1), calibration="none"
@@ -188,8 +188,8 @@ def test_prior_fn_fits_prior_hyperparameters():
     hyper = problem._replace(prior=None, prior_fn=prior_fn)
 
     def build(theta):
-        mu_0, Sigma_0_sqr, measure = problem.build(theta)
-        return mu_0, Sigma_0_sqr, measure
+        m_0, P_0_sqr, measure = problem.build(theta)
+        return m_0, P_0_sqr, measure
 
     hyper = hyper._replace(build=build)
     theta = {"lam": np.array(LAM_TRUE), "log_sigma": np.array(0.0)}

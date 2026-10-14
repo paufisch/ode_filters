@@ -149,13 +149,14 @@ class DiagonalCalibration(Calibration):
 
     def validate(self, prior) -> None:
         """Reject a prior whose state block of ``Xi`` is not diagonal."""
-        # A traced Xi (a differentiated hyperparameter) cannot be checked; the
-        # caller's invariant is trusted there.
         try:
             xi = onp.asarray(prior.xi_state)
+            diagonal = bool(onp.allclose(xi - onp.diag(onp.diag(xi)), 0.0))
         except jax.errors.TracerArrayConversionError:
-            return
-        if not onp.allclose(xi - onp.diag(onp.diag(xi)), 0.0):
+            # Under jit Xi is traced: use what the prior recorded when it was
+            # built. None (built from a traced Xi, or a custom prior) is trusted.
+            diagonal = getattr(prior, "xi_state_diagonal", None)
+        if diagonal is False:
             raise ValueError(
                 "DiagonalCalibration requires the state block of Xi to be diagonal "
                 "(prior.xi_state; for a joint prior, the state prior's Xi)."

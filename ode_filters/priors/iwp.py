@@ -12,7 +12,13 @@ from jax import Array
 from jax.typing import ArrayLike
 
 from ..gaussian.algebra import _cholesky_upper
-from .base import BasePrior, Transition, check_order_and_dimension, component_matrix
+from .base import (
+    BasePrior,
+    Transition,
+    check_order_and_dimension,
+    component_matrix,
+    diagonal_flag,
+)
 
 
 @functools.lru_cache
@@ -88,6 +94,7 @@ class IWP(BasePrior):
         check_order_and_dimension(q, d)
         self.q, self.d = q, d
         self.xi = component_matrix(Xi, d)
+        self.xi_diagonal = diagonal_flag(self.xi)
 
     def A(self, h: ArrayLike) -> Array:
         """Transition matrix ``kron(A_scalar(h), I_d)``."""

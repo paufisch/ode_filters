@@ -1,10 +1,7 @@
 """Tests for sequential observation assimilation via ``gaussian_filter``.
 
 These exercise the public ``gaussian_filter(obs_model=...)`` path, which folds
-in external observations on top of the ODE-information update. (Cross-checks of
-the historical for-loop/scan/sequential ``sqr_loop*`` variants against each
-other were dropped when those variants were consolidated into
-``gaussian_filter``; the remaining behavioural coverage lives here.)
+in external observations on top of the ODE-information update.
 """
 
 import jax.numpy as np
@@ -44,7 +41,7 @@ class TestSeqWithObservations:
         d = 1
 
         prior = IWP(q=q, d=d, Xi=0.5 * np.eye(d))
-        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_logistic, x0, q)
+        m_0, P_0_sqr = taylor_mode_initialization(_vf_logistic, x0, q)
         measure = ODEInformation(_vf_logistic, prior.E0, prior.E1)
 
         ts = np.linspace(tspan[0], tspan[1], N + 1)
@@ -55,8 +52,8 @@ class TestSeqWithObservations:
         obs_model = prepare_observations([observation], prior.E0, ts)
 
         result = gaussian_filter(
-            mu_0,
-            Sigma_0_sqr,
+            m_0,
+            P_0_sqr,
             prior,
             measure,
             np.linspace(*tspan, N + 1),
@@ -84,20 +81,20 @@ class TestSeqWithObservations:
         d = 1
 
         prior = IWP(q=q, d=d, Xi=0.5 * np.eye(d))
-        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_logistic, x0, q)
+        m_0, P_0_sqr = taylor_mode_initialization(_vf_logistic, x0, q)
         measure = ODEInformation(_vf_logistic, prior.E0, prior.E1)
 
         result_default = gaussian_filter(
-            mu_0,
-            Sigma_0_sqr,
+            m_0,
+            P_0_sqr,
             prior,
             measure,
             np.linspace(*tspan, N + 1),
             calibration="none",
         )
         result_none = gaussian_filter(
-            mu_0,
-            Sigma_0_sqr,
+            m_0,
+            P_0_sqr,
             prior,
             measure,
             np.linspace(*tspan, N + 1),
@@ -118,7 +115,7 @@ class TestSeqWithObservations:
         d = 1
 
         prior = IWP(q=q, d=d, Xi=0.5 * np.eye(d))
-        mu_0, Sigma_0_sqr = taylor_mode_initialization(_vf_logistic, x0, q)
+        m_0, P_0_sqr = taylor_mode_initialization(_vf_logistic, x0, q)
         measure = ODEInformation(_vf_logistic, prior.E0, prior.E1)
 
         # True solution at some grid points
@@ -131,16 +128,16 @@ class TestSeqWithObservations:
         obs_model = prepare_observations([observation], prior.E0, ts)
 
         result_no_obs = gaussian_filter(
-            mu_0,
-            Sigma_0_sqr,
+            m_0,
+            P_0_sqr,
             prior,
             measure,
             np.linspace(*tspan, N + 1),
             calibration="none",
         )
         result_obs = gaussian_filter(
-            mu_0,
-            Sigma_0_sqr,
+            m_0,
+            P_0_sqr,
             prior,
             measure,
             np.linspace(*tspan, N + 1),

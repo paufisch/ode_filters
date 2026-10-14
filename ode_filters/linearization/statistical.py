@@ -203,7 +203,7 @@ def slr_linearize(
     m_lin: Array,
     P_lin_sqr: Array,
     *,
-    t: ArrayLike = 0.0,
+    t: ArrayLike,
     rule: QuadratureRule = "gauss_hermite",
     n_nodes: int = 4,
 ) -> SLRModel:
@@ -282,7 +282,7 @@ def check_arg_projection(
     measure: MeasurementModel,
     state: ArrayLike,
     *,
-    t: ArrayLike = 0.0,
+    t: ArrayLike,
     offsets: ArrayLike | None = None,
     atol: float = 1e-10,
 ) -> None:

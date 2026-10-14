@@ -52,11 +52,10 @@ class FilterResult(NamedTuple):
         log_likelihood: ODE-information evidence,
             ``sum_n log p(z_n | z_<n, y_<n)``, with the ODE residuals ``z``
             observed as zero, taken after the diffusion calibration (so not
-            comparable across calibration policies). On the adaptive path it
-            also contains the data evidence.
+            comparable across calibration policies).
         log_likelihood_obs: Data evidence, ``sum_n log p(y_n | z_<=n, y_<n)``:
             each observation conditioned on the ODE information up to its own
-            time only (``None`` without data, and on the adaptive path). The sum
+            time only (``None`` without data). The sum
             with ``log_likelihood`` is ``log p(Z, Y)``; it is not the
             conditional evidence ``log p(Y | Z)``, which also conditions on
             later ODE information (see ``fenrir_loglik``).
