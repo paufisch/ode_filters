@@ -46,7 +46,7 @@ repos:
         files: ^ode_filters/.*\.py$
       # Static type checking. Run through `uv` (rather than a pinned mirror) so
       # the pyright version is single-sourced from the locked dev dependencies.
-      # Checks the whole `ode_filters` package per [tool.pyright] -- hence
+      # Checks `ode_filters` and `benchmarks` per [tool.pyright] -- hence
       # pass_filenames: false; `types: [python]` only triggers it on .py changes.
       - id: pyright
         name: pyright
