@@ -76,6 +76,13 @@ fixes below come on top.
 - Tooling: ruff's docstring rules (Google convention) and an ASCII-only check
   for the package source; ruff also lints the notebooks; a `slow` marker for
   the MCMC runs of the example scripts; a float32 smoke test.
+- Tests of the solvers' statistical claims and convergence, modelled on
+  probdiffeq, ProbNumDiffEq.jl and Diffrax: two-sided calibration bands for the
+  dynamic, diagonal and post-hoc calibrations; an exact chi-square calibration
+  check on data drawn from the prior (`BasePrior.sample`); a convergence-order
+  matrix (q = 1..6, four priors, EK0 and EK1, filter and smoother); stiff van
+  der Pol against SciPy's Radau, a DETEST subset, a 20-dimensional linear
+  system against `expm`; and agreement with probdiffeq 0.8 on a fixed grid.
 
 ### Changed
 
@@ -206,6 +213,13 @@ fixes below come on top.
   were 5-9 orders of magnitude looser than the measured errors. The solvers are
   now also checked against recorded reference outputs and a dense Kalman
   oracle.
+- Tests: the dense Kalman oracle updated covariances in the short form
+  `P - K S K.T` and smoothed with `pinv`, which cost it seven digits under a
+  dynamic diffusion at q = 3 (the solvers were right throughout); with the
+  Joseph form it agrees with them to 1e-12 instead of 1e-7. The remaining
+  coverage test passed for any band wider than the error (the posterior was
+  ~6e6 times wider), and the post-hoc "unit whitened residuals" test held by
+  construction; both are replaced by the calibration checks above.
 
 ## [0.7.3] - 2026-10-04
 
