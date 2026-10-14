@@ -69,8 +69,8 @@ class TestIOUPShapes:
 
     def test_E0_E1(self):
         prior = IOUPPrior(q=2, d=1, rate=-1.0)
-        assert prior.E0.shape == (1, 3)
-        assert prior.E1.shape == (1, 3)
+        assert np.array_equal(prior.E0, np.array([[1.0, 0.0, 0.0]]))
+        assert np.array_equal(prior.E1, np.array([[0.0, 1.0, 0.0]]))
 
 
 class TestIOUPProperties:

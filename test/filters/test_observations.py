@@ -65,6 +65,12 @@ def test_hidden_parameter_is_identified(calibration):
     assert abs(lam_hat - LAM_TRUE) < 4 * lam_std + 0.02
 
 
+def _innovation_loglik(mz, Pz_sqr):
+    """``sum_n log N(mz_n; 0, Pz_n)`` of scalar innovations."""
+    variance = cov(Pz_sqr)[:, 0, 0]
+    return np.sum(-0.5 * (np.log(2 * np.pi * variance) + mz[:, 0] ** 2 / variance))
+
+
 def test_result_layout_and_likelihoods():
     ts, joint, measure, obs_model, m_0, P_0_sqr = _decay_setup()
     res = gaussian_filter(m_0, P_0_sqr, joint, measure, ts, obs_model=obs_model)
@@ -74,7 +80,10 @@ def test_result_layout_and_likelihoods():
     assert res.sigma_sqr.shape == (N,)
     assert res.mz_obs.shape == (N, 1)
     assert res.Pz_obs_sqr.shape == (N, 1, 1)
-    assert np.isfinite(res.log_likelihood) and np.isfinite(res.log_likelihood_obs)
+    # Every step has data, so each evidence is the density of its innovations.
+    assert_close(res.log_likelihood, _innovation_loglik(res.mz, res.Pz_sqr), rtol=1e-12)
+    expected = _innovation_loglik(res.mz_obs, res.Pz_obs_sqr)
+    assert_close(res.log_likelihood_obs, expected, rtol=1e-12)
 
 
 def test_without_data_the_observation_fields_are_none():
@@ -183,4 +192,6 @@ def test_adaptive_path_reports_the_data_evidence_separately():
     without = gaussian_filter_adaptive(m_0, P_0_sqr, prior, measure, save_at)
     assert with_data.log_likelihood_obs is not None
     assert without.log_likelihood_obs is None
-    assert np.isfinite(with_data.log_likelihood_obs)
+    # Data at every save time: the evidence is the density of its innovations.
+    expected = _innovation_loglik(with_data.mz_obs, with_data.Pz_obs_sqr)
+    assert_close(with_data.log_likelihood_obs, expected, rtol=1e-12)

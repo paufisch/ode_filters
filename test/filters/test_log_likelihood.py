@@ -7,6 +7,7 @@ import pytest
 from ode_filters import gaussian_filter
 from ode_filters.information import ODEInformation
 from ode_filters.priors import IWP, PrecondIWP, taylor_mode_initialization
+from test.helpers import assert_grad_matches_fd
 
 
 def _vf(x, *, t):
@@ -24,6 +25,17 @@ def _manual_log_likelihood(mz_seq, Pz_seq_sqr):
         obs_dim = mz.shape[0]
         ll += -0.5 * (obs_dim * np.log(2 * np.pi) + log_det + maha)
     return ll
+
+
+def _assert_grad_of_the_initial_factor(lml_fn, P_0_sqr):
+    """Zero at the zero factor of a Taylor-mode start; finite differences elsewhere.
+
+    ``P_0 = P_0_sqr.T @ P_0_sqr`` is quadratic in the factor, so its derivative
+    vanishes at a zero factor whatever the objective.
+    """
+    assert np.array_equal(jax.grad(lml_fn)(P_0_sqr), np.zeros_like(P_0_sqr))
+    direction = 0.1 * np.triu(np.ones_like(P_0_sqr))
+    assert_grad_matches_fd(lambda s: lml_fn(P_0_sqr + s * direction), np.array(0.5))
 
 
 # ---------------------------------------------------------------------------
@@ -113,8 +125,7 @@ class TestLogLikelihoodDifferentiable:
             )
             return result.log_likelihood
 
-        grad_val = jax.grad(lml_fn)(P_0_sqr)
-        assert np.all(np.isfinite(grad_val))
+        _assert_grad_of_the_initial_factor(lml_fn, P_0_sqr)
 
     def test_fixed_grid_preconditioned_grad(self):
         prior = PrecondIWP(q=self.q, d=self.d)
@@ -132,5 +143,4 @@ class TestLogLikelihoodDifferentiable:
             )
             return result.log_likelihood
 
-        grad_val = jax.grad(lml_fn)(P_0_sqr)
-        assert np.all(np.isfinite(grad_val))
+        _assert_grad_of_the_initial_factor(lml_fn, P_0_sqr)

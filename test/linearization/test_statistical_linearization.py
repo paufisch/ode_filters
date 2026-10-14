@@ -31,6 +31,7 @@ from ode_filters.linearization.statistical import (
     slr_linearize,
 )
 from ode_filters.priors import IWP
+from test.helpers import assert_grad_matches_fd_vector
 
 A_LIN, EPS = -0.7, 0.35
 
@@ -280,8 +281,8 @@ def test_jit_and_grad_safe():
         model = slr_linearize(measure, mu, P_sqr, t=0.3, n_nodes=4)
         return np.sum(model.H) + np.sum(model.c) + np.sum(model.Omega_sqr**2)
 
-    assert onp.isfinite(float(jax.jit(total)(m)))
-    assert bool(np.all(np.isfinite(jax.grad(total)(m))))
+    assert float(jax.jit(total)(m)) == pytest.approx(float(total(m)), rel=1e-13)
+    assert_grad_matches_fd_vector(total, m, rtol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -332,11 +333,20 @@ def test_check_arg_projection_catches_a_bad_declaration():
 
 
 def test_check_arg_projection_accepts_full_rank_projection():
-    """Nothing to check when the projection already spans the state."""
-    measure = BlackBoxMeasurement(
-        lambda state, *, t: np.array([state[0] ** 3]), state_dim=2, obs_dim=1
-    )
-    check_arg_projection(measure, np.array([0.3, -0.4]), t=0.0)  # returns, no raise
+    """Nothing to check when the projection already spans the state.
+
+    The residual is nonlinear in both coordinates, so any perturbation would
+    change its Jacobian; the check must return before evaluating it at all.
+    """
+    calls = []
+
+    def g(state, *, t):
+        calls.append(state)
+        return np.array([state[0] ** 3 + state[1] ** 2])
+
+    measure = BlackBoxMeasurement(g, state_dim=2, obs_dim=1)
+    assert check_arg_projection(measure, np.array([0.3, -0.4]), t=0.0) is None
+    assert calls == []
 
 
 def test_falls_back_to_full_state_without_E_args():

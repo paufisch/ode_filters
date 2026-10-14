@@ -35,6 +35,7 @@ from ode_filters.information import (
 )
 from ode_filters.linearization.statistical import slr_linearize
 from ode_filters.priors import IWP, PrecondIWP, taylor_mode_initialization
+from test.helpers import assert_grad_matches_fd_vector, cov
 
 TSPAN = (0.0, 1.5)
 N_STEPS = 24
@@ -274,17 +275,30 @@ def test_solves_a_nonlinear_ode_accurately():
 
 
 def test_reaches_through_the_filter_step():
+    """The step predicts with the prior and then applies the correction itself."""
     prior, measure = _prior_and_measure(cubic)
+    x = Gaussian(np.array([0.7, -0.2, 0.1, 0.0]), 0.3 * np.eye(4))
     out = filter_step(
-        Gaussian(np.array([0.7, -0.2, 0.1, 0.0]), 0.3 * np.eye(4)),
+        x,
         prior.transition(0.1),
         OnlineInformation(measure, QuadratureCorrection(n_nodes=4)),
         t=0.2,
         calibration=NoCalibration(),
         scale_noise=prior.apply_state_sigma_sqr,
     )
-    assert bool(np.all(np.isfinite(out.filtered.m)))
-    assert bool(np.all(np.isfinite(out.innovation.m)))
+    A, Q_sqr = prior.A(0.1), prior.Q_sqr(0.1)
+    assert onp.allclose(out.predicted.m, A @ x.m, rtol=1e-13)
+    P_pred = A @ cov(x.P_sqr) @ A.T + cov(Q_sqr)
+    assert onp.allclose(cov(out.predicted.P_sqr), P_pred, rtol=1e-12, atol=1e-15)
+    expected = _correct(
+        QuadratureCorrection(n_nodes=4),
+        measure,
+        out.predicted.m,
+        out.predicted.P_sqr,
+        t=0.2,
+    )
+    assert onp.allclose(out.filtered.m, expected.m, rtol=1e-12)
+    assert onp.allclose(out.innovation.m, expected.mz, rtol=1e-12)
 
 
 def test_works_with_the_observation_path():
@@ -305,8 +319,16 @@ def test_works_with_the_observation_path():
         correction=QuadratureCorrection(n_nodes=4),
         obs_model=obs_model,
     )
+    # The data evidence is the density of the data innovations of the steps
+    # with data.
+    assert obs_model is not None
     assert res.log_likelihood_obs is not None
-    assert bool(np.all(np.isfinite(res.m)))
+    assert res.mz_obs is not None and res.Pz_obs_sqr is not None
+    has_data = obs_model.mask[:, 0]
+    variance = cov(res.Pz_obs_sqr)[:, 0, 0]
+    logpdf = -0.5 * (np.log(2 * np.pi * variance) + res.mz_obs[:, 0] ** 2 / variance)
+    expected = np.sum(np.where(has_data, logpdf, 0.0))
+    assert float(res.log_likelihood_obs) == pytest.approx(float(expected), rel=1e-12)
 
 
 def test_works_on_the_preconditioned_path():
@@ -349,8 +371,12 @@ def test_jit_and_grad_safe():
             correction=QuadratureCorrection(n_nodes=4),
         ).m[-1, 0]
 
-    assert onp.isfinite(float(jax.jit(terminal)(m_0)))
-    assert bool(np.all(np.isfinite(jax.grad(terminal)(m_0))))
+    assert float(jax.jit(terminal)(m_0)) == pytest.approx(
+        float(terminal(m_0)), rel=1e-12
+    )
+    # A step's ODE residual is ~1e-7 here, and the calibrated diffusion is
+    # quadratic in it, so the output curves on that scale: a small step.
+    assert_grad_matches_fd_vector(terminal, m_0, eps=1e-8, rtol=1e-4)
 
 
 def test_cubature_scales_to_a_multidimensional_ode():
@@ -365,16 +391,15 @@ def test_cubature_scales_to_a_multidimensional_ode():
     assert measure.E_args.shape == (2, prior.E0.shape[1])
     m_0, P_0_sqr = taylor_mode_initialization(lotka_volterra, np.array([1.0, 1.0]), q=q)
 
-    for corr in (
-        QuadratureCorrection(rule="cubature"),
-        QuadratureCorrection(n_nodes=3),
-    ):
-        res = gaussian_filter(
-            m_0,
-            P_0_sqr,
-            prior,
-            measure,
-            np.linspace(*(0.0, 1.0), 30 + 1),
-            correction=corr,
-        )
-        assert bool(np.all(np.isfinite(res.m)))
+    def solve(correction):
+        ts = np.linspace(0.0, 1.0, 30 + 1)
+        return gaussian_filter(
+            m_0, P_0_sqr, prior, measure, ts, correction=correction
+        ).m
+
+    cubature = solve(QuadratureCorrection(rule="cubature"))
+    hermite = solve(QuadratureCorrection(n_nodes=3))
+    # Both rules are exact for the expected Jacobian of a quadratic field, and
+    # in a pure ODE solve the predictive spread (the Jensen gap to EK1) is tiny.
+    assert onp.allclose(cubature, hermite, rtol=1e-10, atol=1e-12)
+    assert onp.allclose(cubature, solve(TaylorCorrection()), rtol=1e-8, atol=1e-10)

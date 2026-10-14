@@ -30,19 +30,9 @@ import pytest
 
 from ode_filters import IWP, JointPrior, MaternPrior, PrecondIWP
 from ode_filters.priors import PrecondMaternPrior
+from test.helpers import assert_grad_matches_fd_vector
 
 H = 0.1
-
-
-def _central_difference(f, x, eps=1e-6):
-    x = onp.asarray(x, dtype=float)
-    out = onp.zeros_like(x)
-    for i in range(x.size):
-        lo, hi = x.copy(), x.copy()
-        lo[i] -= eps
-        hi[i] += eps
-        out[i] = (float(f(np.asarray(hi))) - float(f(np.asarray(lo)))) / (2 * eps)
-    return out
 
 
 # `Q_sqr` is the step-size-dependent factor every filter step consumes, so it is
@@ -85,18 +75,15 @@ CASES = [
 
 @pytest.mark.parametrize("name, fn, x0", CASES, ids=[c[0] for c in CASES])
 def test_prior_constructs_under_jit(name, fn, x0):
-    """Construction from traced hyperparameters must not raise."""
+    """Construction from traced hyperparameters must not raise, nor change it."""
     value = jax.jit(fn)(np.asarray(x0))
-    assert onp.isfinite(float(value))
+    assert float(value) == pytest.approx(float(fn(np.asarray(x0))), rel=1e-12)
 
 
 @pytest.mark.parametrize("name, fn, x0", CASES, ids=[c[0] for c in CASES])
 def test_prior_grad_matches_finite_difference(name, fn, x0):
     """And every hyperparameter must actually receive a gradient."""
     grad = onp.asarray(jax.jit(jax.grad(fn))(np.asarray(x0)))
-    expected = _central_difference(fn, x0)
-
-    assert onp.all(onp.isfinite(grad))
     # A frozen (cast) hyperparameter shows up as an exactly-zero entry.
     assert onp.all(onp.abs(grad) > 0.0), f"{name}: some hyperparameter has no gradient"
-    onp.testing.assert_allclose(grad, expected, rtol=1e-5, atol=1e-8)
+    assert_grad_matches_fd_vector(fn, np.asarray(x0), eps=1e-6, rtol=1e-5, atol=1e-8)

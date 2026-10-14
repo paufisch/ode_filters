@@ -126,6 +126,10 @@ def test_observation_predictive_is_the_pushforward():
 
 def test_posterior_predictive_of_a_filter_result():
     result = _filter_on_simulated_data(noise_std=0.1, assumed_std=0.1)
-    predictive = observation_predictive(rts_smoother(result), PRIOR.E0)
+    smoothed = rts_smoother(result)
+    predictive = observation_predictive(smoothed, PRIOR.E0)
     assert predictive.m.shape == (N + 1, 1)
     assert predictive.P_sqr.shape == (N + 1, 1, 1)
+    # Without noise, the pushforward through E0: the first state component.
+    assert_close(predictive.m, smoothed.m[:, :1], rtol=1e-14)
+    assert_close(cov(predictive.P_sqr), cov(smoothed.P_sqr)[:, :1, :1], rtol=1e-12)

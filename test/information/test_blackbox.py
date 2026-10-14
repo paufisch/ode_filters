@@ -317,20 +317,25 @@ class TestTransformedMeasurementMethods:
         state = np.array([1.0, 1.0, 0.5, 0.5])
         result = transformed_model.g(state, t=0.0)
 
-        # Should return ODE residual for transformed state
-        assert result.shape == (2,)
+        # The ODE residual x' - (-x) at the transformed state [softplus(x), x'].
+        expected = 0.5 + jax.nn.softplus(1.0) * np.ones(2)
+        assert np.allclose(result, expected, rtol=1e-14)
 
     def test_jacobian_g_with_chain_rule(self, transformed_model):
         """Test Jacobian computation includes chain rule."""
         state = np.array([1.0, 1.0, 0.5, 0.5])
         jacobian = transformed_model.jacobian_g(state, t=0.0)
 
-        assert jacobian.shape == (2, 4)
+        # d/dx softplus(x) = sigmoid(x) on the x columns, one on the x' columns.
+        s = float(jax.nn.sigmoid(1.0))
+        expected = np.array([[s, 0.0, 1.0, 0.0], [0.0, s, 0.0, 1.0]])
+        assert np.allclose(jacobian, expected, rtol=1e-14)
 
     def test_noise_sqr(self, transformed_model):
         """noise_sqr delegates to the base model."""
         R = transformed_model.noise_sqr(t=0.0)
-        assert R.shape == (2, 2)
+        assert np.array_equal(R, transformed_model.base.noise_sqr(t=0.0))
+        assert np.allclose(R, np.zeros((2, 2)), atol=1e-12)  # noise-free rows
 
     def test_linearize(self, transformed_model):
         """Test linearize method."""
@@ -348,7 +353,8 @@ class TestTransformedMeasurementMethods:
     def test_R_property(self, transformed_model):
         """Test R property delegates to base model."""
         R = transformed_model.R
-        assert R.shape == (2, 2)
+        assert np.array_equal(R, transformed_model.base.R)
+        assert np.array_equal(R, np.zeros((2, 2)))
 
     def test_R_setter(self, transformed_model):
         """Test R setter modifies base model."""
@@ -435,7 +441,8 @@ class TestTransformedMeasurementMethods:
         state = np.array([1.0, 1.0, 0.5, 0.5])
         jacobian = model.jacobian_g(state, t=0.0)
 
-        assert jacobian.shape == (2, 4)
+        # The base Jacobian E1 + E0 of x' + x, times the given 2 I.
+        assert np.allclose(jacobian, 2.0 * (E1 + E0), rtol=1e-14)
 
 
 # =============================================================================
@@ -526,11 +533,16 @@ class TestSecondOrderODEInformation:
         )
         model = SecondOrderODEInformation(vf, E0, E1, E2, constraints=[conservation])
 
+        # x = (0.5, 0.5), x'' = -x and x1 + x2 = 1: both rows are satisfied.
         state = np.array([0.5, 0.5, 0.0, 0.0, -0.5, -0.5])
         result = model.g(state, t=0.0)
+        assert np.allclose(result, np.zeros(3), atol=1e-15)
 
-        # ODE (2) + conservation (1) = 3
-        assert result.shape == (3,)
+        # Off the solution: the ODE rows are x'' + x, the conservation row
+        # x1 + x2 - 1.
+        state = np.array([1.0, 0.5, 0.0, 0.0, 0.25, -1.0])
+        result = model.g(state, t=0.0)
+        assert np.allclose(result, np.array([1.25, -0.5, 0.5]), rtol=1e-14)
 
     def test_multidimensional(self):
         """Test with multi-dimensional state."""
@@ -544,7 +556,8 @@ class TestSecondOrderODEInformation:
         state = np.ones(6)
         result = model.g(state, t=0.0)
 
-        assert result.shape == (2,)
+        # x'' - (-x - 0.1 x') = 1 + 1 + 0.1 per component.
+        assert np.allclose(result, 2.1 * np.ones(2), rtol=1e-14)
 
 
 # =============================================================================
@@ -572,11 +585,12 @@ class TestSecondOrderFactoryFunctions:
         assert len(model.constraints) == 1
         assert isinstance(model.constraints[0], Conservation)
 
+        # The conservation row is linear in x, so its Jacobian row is A @ E0.
         state = np.array([0.5, 0.5, 0.0, 0.0, -0.5, -0.5])
         result = model.g(state, t=0.0)
-
-        # ODE (2) + conservation (1) = 3
-        assert result.shape == (3,)
+        assert np.allclose(result, np.zeros(3), atol=1e-15)
+        jacobian = model.jacobian_g(state, t=0.0)
+        assert np.allclose(jacobian[2], (A @ E0)[0], rtol=1e-15)
 
 
 # =============================================================================
