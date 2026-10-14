@@ -363,7 +363,6 @@ def test_max_step_under_jit_and_vmap_matches_eager():
     assert int(np.sum(eager[0].n_accepted)) >= 50  # 5 / 0.1: the cap binds
 
 
-@pytest.mark.wrong_input_types  # a traced max_step is not a float
 def test_a_traced_max_step_is_accepted():
     prior, m_0, P_0_sqr, measure = _problem(logistic, [0.5])
 
@@ -401,7 +400,6 @@ def test_a_non_positive_max_step_raises(max_step):
         gaussian_filter_adaptive(m_0, P_0_sqr, prior, measure, SAVE, max_step=max_step)
 
 
-@pytest.mark.wrong_input_types
 def test_a_non_scalar_max_step_raises():
     prior, m_0, P_0_sqr, measure = _problem(logistic, [0.5])
     with pytest.raises(ValueError, match="max_step must be a scalar"):

@@ -94,8 +94,8 @@ def _local_error(
     sigma_sqr: Array,
     m_pred: Array,
     E0: Array,
-    atol: float,
-    rtol: float,
+    atol: ArrayLike,
+    rtol: ArrayLike,
 ) -> Array:
     """Tolerance-weighted RMS norm of the step's local error estimate."""
     s = transition.T_diag
@@ -120,10 +120,10 @@ def gaussian_filter_adaptive(
     correction: Correction | None = None,
     calibration: Calibration | CalibrationMode = "dynamic",
     obs_model: ObsModel | None = None,
-    atol: float = 1e-4,
-    rtol: float = 1e-2,
-    h_init: float | None = None,
-    max_step: float | None = None,
+    atol: ArrayLike = 1e-4,
+    rtol: ArrayLike = 1e-2,
+    h_init: ArrayLike | None = None,
+    max_step: ArrayLike | None = None,
     controller: StepSizeController | None = None,
     sigma_in_error: SigmaInError = "per_step",
     max_steps: int = 4096,

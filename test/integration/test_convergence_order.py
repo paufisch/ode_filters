@@ -162,7 +162,7 @@ def _error_fn(prior_name: str, order: int, q: int):
 
     @jax.jit
     def errors(h, n):
-        ts = h * np.arange(n_max + 1)
+        ts = h * np.arange(n_max + 1, dtype=float)
         res = gaussian_filter(m_0, P_0_sqr, prior, measure, ts, correction=correction)
         truth = LINEAR_2D.solution(ts)
         err_filter = np.max(np.abs(E0 @ res.m[n] - truth[n]))

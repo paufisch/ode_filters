@@ -55,6 +55,9 @@ from test.helpers import LOTKA_VOLTERRA
 probdiffeq = pytest.importorskip("probdiffeq")
 from probdiffeq import ivpsolve, ivpsolvers, taylor  # noqa: E402
 
+# probdiffeq's own code needs JAX's standard dtype promotion.
+pytestmark = pytest.mark.standard_promotion
+
 Q = 3
 TS = np.linspace(0.0, 5.0, 101)
 TOLERANCE = {"none": 1e-11, "dynamic": 1e-9}
@@ -88,7 +91,7 @@ def _probdiffeq(strategy: str, calibration: str):
 
 def _relative(a, b):
     """Largest difference relative to the scale of each state entry over time."""
-    return float(np.max(np.abs(a - b) / np.max(np.abs(b), axis=0)))
+    return float(np.max(np.abs(a - b) / np.max(np.abs(b), axis=0, keepdims=True)))
 
 
 @pytest.mark.parametrize("prior_type", [IWP, PrecondIWP])
