@@ -64,3 +64,5 @@ CLAUDE.md
 .claude/*
 
 benchmarks/*.png
+# Output of benchmarks/work_precision.py (machine-specific timings)
+benchmarks/results/

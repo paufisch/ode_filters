@@ -1588,6 +1588,7 @@ benchmarks = [
     { name = "diffrax" },
     { name = "matplotlib" },
     { name = "probdiffeq" },
+    { name = "tueplots" },
 ]
 examples = [
     { name = "matplotlib" },
@@ -1644,6 +1645,7 @@ requires-dist = [
     { name = "optax", marker = "extra == 'inference'", specifier = ">=0.2.0" },
     { name = "probdiffeq", marker = "extra == 'benchmarks'", specifier = ">=0.8.0,<0.9" },
     { name = "scipy", marker = "extra == 'inference'", specifier = ">=1.13" },
+    { name = "tueplots", marker = "extra == 'benchmarks'", specifier = ">=0.2.5" },
 ]
 provides-extras = ["examples", "inference", "benchmarks"]
 

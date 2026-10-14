@@ -124,6 +124,16 @@ fixes below come on top.
   calibration does; the adaptive-steps guide is a short executed page; figures
   use `tueplots` with Paul Tol's bright palette as SVG. The docs build fails
   when a notebook cell raises.
+- Benchmarks: `benchmarks/work_precision.py` writes next to itself, to
+  `benchmarks/results/` (`--out-dir` to change), instead of into the working
+  directory: PDF and SVG figures in the docs' `tueplots` style with one
+  factorized legend, and a JSON with every number and the run's metadata
+  (versions, git commit, CPU, load average). The timing compiles first, then
+  interleaves all configurations over repeated rounds and reports the median
+  and interquartile range. `--quick` is a smoke run of under a minute,
+  `--repeats` sets the number of rounds, `--replot` redraws from the JSON.
+  `tueplots` joins the `benchmarks` extra, and pyright now checks
+  `benchmarks/`.
 
 ### Removed
 

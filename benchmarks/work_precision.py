@@ -6,21 +6,34 @@ is noisy and phase-sensitive on oscillatory problems), comparing ode_filters to
 probdiffeq and Diffrax. To keep the comparison apples-to-apples it produces
 **two** diagrams, each holding the stepping strategy fixed across *all* solvers:
 
-- ``work_precision.png`` -- **all adaptive** (the headline). Every solver sweeps
-  its tolerance and runs its own step-size controller:
+- ``work_precision.{pdf,svg}`` -- **all adaptive** (the headline). Every solver
+  sweeps its tolerance and runs its own step-size controller:
   ``ode_filters`` EK1 / EK0 (``gaussian_filter_adaptive``, PI controller),
   ``probdiffeq`` ts1 / ts0 (``solve_adaptive_save_at``), and **Diffrax**
   Tsit5 (PID controller). This is what a user actually runs, and it lets the
   probabilistic solvers use the adaptive stepping they ship with. The solution is
   scored on a common dense save grid (via each solver's dense output, so the save
   points do not force extra steps).
-- ``work_precision_fixed.png`` -- **all fixed grid**. Every solver runs on the
-  same uniform grid (``N`` sweep), including Diffrax Tsit5 forced onto a constant
-  step (``ConstantStepSize``); the RMSE is over that native grid.
+- ``work_precision_fixed.{pdf,svg}`` -- **all fixed grid**. Every solver runs on
+  the same uniform grid (``N`` sweep), including Diffrax Tsit5 forced onto a
+  constant step (``ConstantStepSize``); the RMSE is over that native grid.
 
 Mixing the two (fixed-grid probabilistic vs adaptive classical) conflates the
 probabilistic-vs-classical axis with the fixed-vs-adaptive axis, so we keep them
-in separate figures.
+in separate figures. Next to the figures, ``work_precision.json`` holds every
+number (error, runtime median and interquartile range, the per-repeat runtimes,
+step counts) and the metadata of the run (package versions, git commit, CPU,
+load average, date).
+
+Timing. Every configuration is compiled and run once first (that call also
+gives the error and the step counts). The timing then runs in ``--repeats``
+rounds; each round visits *all* configurations -- every problem, solver and
+setting -- in a fresh random order, and times one warm-up call plus
+``CALLS_PER_REPEAT`` calls of each (``block_until_ready``), keeping the median
+of those calls. Interleaving the configurations this way makes a slow drift in
+the machine load hit all of them equally instead of biasing whichever ran last.
+The figures show the median over the rounds, with the interquartile range as a
+horizontal bar.
 
 NOTE: this script enables ``jax_enable_x64`` itself. Standalone scripts do not
 see ``conftest.py`` (which is what turns on float64 for the test suite); in float32
@@ -38,21 +51,47 @@ cross-library comparison, so it lives in the docs --
 here.
 
 Run with: ``uv run --extra benchmarks python benchmarks/work_precision.py``
+(``--help`` lists the options; ``--quick`` is a smoke run of well under a minute).
 """
+
+# pyright runs in the dev environment (pre-commit, CI), which lacks the
+# `benchmarks` extra: there Diffrax, matplotlib and tueplots are unresolved and
+# type as unknown, while the ode_filters, JAX and probdiffeq calls stay checked.
+# pyright: reportMissingImports=false
 
 from __future__ import annotations
 
+import argparse
+import datetime
+import gc
+import importlib.metadata
+import json
+import logging
+import math
+import os
+import platform
+import random
+import subprocess
+import sys
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from functools import partial
+from pathlib import Path
+from typing import Any
 
 import diffrax
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib import ticker
+from matplotlib.lines import Line2D
 from probdiffeq import ivpsolve, ivpsolvers, taylor
+from tueplots import bundles, cycler
+from tueplots.constants.color import palettes
 
+import ode_filters
 from ode_filters.filters import gaussian_filter, gaussian_filter_adaptive
 from ode_filters.information import ODEInformation
 from ode_filters.linearization import TaylorCorrection
@@ -64,15 +103,41 @@ from ode_filters.priors import IWP, taylor_mode_initialization
 # -- producing spurious "error increases with runtime" work-precision curves.
 jax.config.update("jax_enable_x64", True)
 
+DEFAULT_OUT_DIR = Path(__file__).resolve().parent / "results"
+RESULTS_NAME = "work_precision.json"
+FIGURE_STEMS = {"adaptive": "work_precision", "fixed": "work_precision_fixed"}
+
 Q = 3  # smoothness order for the probabilistic solvers (matched across them)
 N_EVAL = 100  # save points for the adaptive trajectory-RMSE evaluation grid
+REFERENCE_RTOL, REFERENCE_ATOL = 1e-12, 1e-14
+
+TOLS = (1e-3, 1e-5, 1e-7, 1e-9)
+N_VALUES = (80, 160, 320, 640, 1280)
+REPEATS = 20
+# --quick: a smoke run (CI) that exercises every solver, problem and output.
+QUICK_TOLS = (1e-5, 1e-8)
+QUICK_N_VALUES = (160, 640)
+QUICK_REPEATS = 3
+
+CALLS_PER_REPEAT = 5  # timed calls per configuration and round (median kept)
+SEED = 0  # of the per-round random order of the configurations
+# A probabilistic solver at too-coarse a grid / loose a tolerance diverges; we
+# plot only the convergent branch (finite error below this threshold).
+CONVERGED_BELOW = 1.0
+NOT_REPORTED = -1  # step count a solver does not expose
+
+# A run returns (trajectory [K, d], accepted steps, rejected steps).
+Out = tuple[jax.Array, jax.Array, jax.Array]
+Run = Callable[[], Out]
+AdaptiveRun = Callable[[jax.Array], Out]  # takes the tolerance (atol = rtol)
 
 
-@dataclass
+@dataclass(frozen=True)
 class ODEProblem:
-    name: str
+    key: str
+    title: str
     vf: Callable  # vf(x, *, t)
-    x0: jnp.ndarray
+    x0: jax.Array
     tspan: tuple[float, float]
     dim: int
 
@@ -93,18 +158,34 @@ def _problems() -> list[ODEProblem]:
         return jnp.array([z[1], mu * (1 - z[0] ** 2) * z[1] - z[0]])
 
     return [
-        ODEProblem("Logistic (1D)", logistic, jnp.array([0.01]), (0.0, 10.0), 1),
+        ODEProblem("logistic", "Logistic", logistic, jnp.array([0.01]), (0.0, 10.0), 1),
         ODEProblem(
-            "Lotka-Volterra (2D)",
+            "lotka_volterra",
+            "Lotka-Volterra",
             lotka_volterra,
             jnp.array([10.0, 5.0]),
             (0.0, 10.0),
             2,
         ),
         ODEProblem(
-            "Van der Pol (2D)", van_der_pol, jnp.array([2.0, 0.0]), (0.0, 20.0), 2
+            "van_der_pol",
+            "Van der Pol",
+            van_der_pol,
+            jnp.array([2.0, 0.0]),
+            (0.0, 20.0),
+            2,
         ),
     ]
+
+
+def fixed_grid(problem: ODEProblem, n: int) -> np.ndarray:
+    """The uniform ``n``-step grid every fixed-grid solver runs on."""
+    return np.linspace(problem.tspan[0], problem.tspan[1], n + 1)
+
+
+def dense_grid(problem: ODEProblem) -> np.ndarray:
+    """Common save grid for the adaptive trajectory-RMSE comparison."""
+    return np.linspace(problem.tspan[0], problem.tspan[1], N_EVAL + 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -112,11 +193,13 @@ def _problems() -> list[ODEProblem]:
 # --------------------------------------------------------------------------- #
 
 
-def _diffrax_term(problem: ODEProblem):
+def _diffrax_term(problem: ODEProblem) -> diffrax.ODETerm:
     return diffrax.ODETerm(lambda t, y, args: problem.vf(y, t=t))
 
 
-def reference_trajectory(problem: ODEProblem, ts: jnp.ndarray) -> jnp.ndarray:
+def reference_on(problem: ODEProblem, grids: Sequence[np.ndarray]) -> list[np.ndarray]:
+    """The reference solution on each grid, from one solve on their union."""
+    union = np.unique(np.concatenate(grids))
     # rtol=1e-12 (achievable in float64) keeps the reference 2-3 orders tighter
     # than the best method measured, so even the tightest sweep point is not
     # reference-limited.
@@ -127,78 +210,79 @@ def reference_trajectory(problem: ODEProblem, ts: jnp.ndarray) -> jnp.ndarray:
         t1=problem.tspan[1],
         dt0=None,
         y0=problem.x0,
-        saveat=diffrax.SaveAt(ts=ts),
-        stepsize_controller=diffrax.PIDController(rtol=1e-12, atol=1e-14),
+        saveat=diffrax.SaveAt(ts=jnp.asarray(union)),
+        stepsize_controller=diffrax.PIDController(
+            rtol=REFERENCE_RTOL, atol=REFERENCE_ATOL
+        ),
         max_steps=2_000_000,
     )
-    return sol.ys
-
-
-def _dense_grid(problem: ODEProblem) -> jnp.ndarray:
-    """Common save grid for the adaptive trajectory-RMSE comparison."""
-    return jnp.linspace(problem.tspan[0], problem.tspan[1], N_EVAL + 1)
+    ys = np.asarray(sol.ys)
+    return [ys[np.searchsorted(union, grid)] for grid in grids]
 
 
 # --------------------------------------------------------------------------- #
-# Solvers -- each `make_*` returns a no-arg callable returning the *trajectory* #
-# (the solution sampled on its evaluation grid), so the caller can score it     #
-# with a trajectory RMSE rather than a single endpoint.                         #
+# Solvers -- each returns the *trajectory* (the solution sampled on its        #
+# evaluation grid, so the caller can score it with a trajectory RMSE rather    #
+# than a single endpoint) and its accepted / rejected step counts.             #
 #                                                                              #
 # `*_fixed`    take a grid size N; the trajectory is the N+1 native grid points.#
-# `*_adaptive` take a tolerance `tol` (atol = rtol = tol) and run a controller, #
-#              saving on the common dense `_dense_grid(problem)`.               #
+# `*_adaptive` return a jitted function of the tolerance (atol = rtol = tol,   #
+#              traced, so one compilation serves the whole sweep) that runs a  #
+#              controller and saves on the common dense `dense_grid(problem)`. #
 # --------------------------------------------------------------------------- #
 
 
-def make_ode_filters_fixed(problem: ODEProblem, N: int, order: int) -> Callable:
+def _ode_filters_setup(problem: ODEProblem, order: int):
     prior = IWP(Q, problem.dim, Xi=0.5 * jnp.eye(problem.dim))
-    m_0, S0 = taylor_mode_initialization(problem.vf, problem.x0, Q)
+    m_0, P_0_sqr = taylor_mode_initialization(problem.vf, problem.x0, Q)
     measure = ODEInformation(problem.vf, prior.E0, prior.E1)
-    corr = TaylorCorrection(order=order)
-    e0 = prior.E0
+    return prior, m_0, P_0_sqr, measure, TaylorCorrection(order=order)
+
+
+def make_ode_filters_fixed(problem: ODEProblem, n: int, order: int) -> Run:
+    prior, m_0, P_0_sqr, measure, correction = _ode_filters_setup(problem, order)
+    grid = fixed_grid(problem, n)  # concrete: the transition is computed once
 
     @jax.jit
-    def run():
+    def run() -> Out:
         res = gaussian_filter(
             m_0,
-            S0,
+            P_0_sqr,
             prior,
             measure,
-            np.linspace(*problem.tspan, N + 1),
-            correction=corr,
+            grid,
+            correction=correction,
             calibration="dynamic",
         )
-        return res.m @ e0.T  # [N+1, d]
+        return res.m @ prior.E0.T, jnp.asarray(n), jnp.asarray(0)
 
     return run
 
 
-def make_ode_filters_adaptive(problem: ODEProblem, tol: float, order: int) -> Callable:
-    prior = IWP(Q, problem.dim, Xi=0.5 * jnp.eye(problem.dim))
-    m_0, S0 = taylor_mode_initialization(problem.vf, problem.x0, Q)
-    measure = ODEInformation(problem.vf, prior.E0, prior.E1)
-    corr = TaylorCorrection(order=order)
-    e0 = prior.E0
-    save_at = _dense_grid(problem)
+def make_ode_filters_adaptive(problem: ODEProblem, order: int) -> AdaptiveRun:
+    prior, m_0, P_0_sqr, measure, correction = _ode_filters_setup(problem, order)
+    save_at = dense_grid(problem)
 
     @jax.jit
-    def run():
+    def run(tol: float) -> Out:
         res = gaussian_filter_adaptive(
             m_0,
-            S0,
+            P_0_sqr,
             prior,
             measure,
             save_at,
-            correction=corr,
+            correction=correction,
             atol=tol,
             rtol=tol,
             calibration="dynamic",
             max_steps=8192,
         )
-        traj = res.m @ e0.T  # [N_EVAL+1, d]
+        assert res.success is not None
+        assert res.n_accepted is not None and res.n_rejected is not None
         # A solve that fails to reach every save time is a divergence -- emit NaN
         # so it drops out of the plotted (convergent) branch.
-        return jnp.where(res.success, traj, jnp.nan)
+        traj = jnp.where(res.success, res.m @ prior.E0.T, jnp.nan)
+        return traj, jnp.sum(res.n_accepted), jnp.sum(res.n_rejected)
 
     return run
 
@@ -222,48 +306,71 @@ def _probdiffeq_setup(problem: ODEProblem, kind: str):
     return init, solver, ssm
 
 
-def make_probdiffeq_fixed(problem: ODEProblem, N: int, kind: str) -> Callable:
-    grid = jnp.linspace(problem.tspan[0], problem.tspan[1], N + 1)
+def make_probdiffeq_fixed(problem: ODEProblem, n: int, kind: str) -> Run:
+    grid = jnp.asarray(fixed_grid(problem, n))
     init, solver, ssm = _probdiffeq_setup(problem, kind)
 
     @jax.jit
-    def solve():
-        return ivpsolve.solve_fixed_grid(init, grid=grid, solver=solver, ssm=ssm)
-
-    def run():
+    def run() -> Out:
+        sol = ivpsolve.solve_fixed_grid(init, grid=grid, solver=solver, ssm=ssm)
         # `u` is the list of Taylor coefficients per grid point; `u[0]` is the
         # state trajectory, shape [N+1, d].
-        return solve().u[0]
+        return sol.u[0], jnp.asarray(n), jnp.asarray(0)
 
     return run
 
 
-def make_probdiffeq_adaptive(problem: ODEProblem, tol: float, kind: str) -> Callable:
+def make_probdiffeq_adaptive(problem: ODEProblem, kind: str) -> AdaptiveRun:
     init, solver, ssm = _probdiffeq_setup(problem, kind)
-    adaptive = ivpsolvers.adaptive(solver, ssm=ssm, atol=tol, rtol=tol)
-    save_at = _dense_grid(problem)
+    save_at = jnp.asarray(dense_grid(problem))
     dt0 = (problem.tspan[1] - problem.tspan[0]) / 100.0
 
     @jax.jit
-    def solve():
+    def run(tol: float) -> Out:
+        adaptive = ivpsolvers.adaptive(solver, ssm=ssm, atol=tol, rtol=tol)
         # `save_at` uses the solver's dense output (interpolation), so it does not
         # force extra steps -- the runtime still reflects the natural adaptive cost.
-        return ivpsolve.solve_adaptive_save_at(
+        sol = ivpsolve.solve_adaptive_save_at(
             init, save_at=save_at, adaptive_solver=adaptive, dt0=dt0, ssm=ssm
         )
-
-    def run():
-        return solve().u[0]  # [N_EVAL+1, d]
+        # `num_steps` counts the accepted steps cumulatively; rejections are not
+        # recorded.
+        n_accepted = jnp.max(sol.num_steps).astype(int)
+        return sol.u[0], n_accepted, jnp.asarray(NOT_REPORTED)
 
     return run
 
 
-def make_diffrax_adaptive(problem: ODEProblem, tol: float) -> Callable:
+def make_diffrax_fixed(problem: ODEProblem, n: int) -> Run:
     term = _diffrax_term(problem)
-    save_at = _dense_grid(problem)
+    t0, t1 = problem.tspan
+    grid = jnp.asarray(fixed_grid(problem, n))
 
     @jax.jit
-    def run():
+    def run() -> Out:
+        sol = diffrax.diffeqsolve(
+            term,
+            diffrax.Tsit5(),
+            t0=t0,
+            t1=t1,
+            dt0=(t1 - t0) / n,
+            y0=problem.x0,
+            saveat=diffrax.SaveAt(ts=grid),
+            stepsize_controller=diffrax.ConstantStepSize(),
+            max_steps=n + 16,  # constant step lands ~N steps; small buffer for rounding
+        )
+        assert sol.ys is not None and sol.stats is not None
+        return sol.ys, sol.stats["num_accepted_steps"], sol.stats["num_rejected_steps"]
+
+    return run
+
+
+def make_diffrax_adaptive(problem: ODEProblem) -> AdaptiveRun:
+    term = _diffrax_term(problem)
+    save_at = jnp.asarray(dense_grid(problem))
+
+    @jax.jit
+    def run(tol: float) -> Out:
         sol = diffrax.diffeqsolve(
             term,
             diffrax.Tsit5(),
@@ -275,52 +382,76 @@ def make_diffrax_adaptive(problem: ODEProblem, tol: float) -> Callable:
             stepsize_controller=diffrax.PIDController(rtol=tol, atol=tol),
             max_steps=1_000_000,
         )
-        return sol.ys  # [N_EVAL+1, d]
+        assert sol.ys is not None and sol.stats is not None
+        return sol.ys, sol.stats["num_accepted_steps"], sol.stats["num_rejected_steps"]
 
     return run
 
 
-def make_diffrax_fixed(problem: ODEProblem, N: int) -> Callable:
-    term = _diffrax_term(problem)
-    t0, t1 = problem.tspan
-    grid = jnp.linspace(t0, t1, N + 1)
-    dt0 = (t1 - t0) / N
+@dataclass(frozen=True)
+class Solver:
+    library: str  # colour in the figures
+    method: str  # line style and marker in the figures
+    make_fixed: Callable[[ODEProblem, int], Run]
+    make_adaptive: Callable[[ODEProblem], AdaptiveRun]
 
-    @jax.jit
-    def run():
-        sol = diffrax.diffeqsolve(
-            term,
-            diffrax.Tsit5(),
-            t0=t0,
-            t1=t1,
-            dt0=dt0,
-            y0=problem.x0,
-            saveat=diffrax.SaveAt(ts=grid),
-            stepsize_controller=diffrax.ConstantStepSize(),
-            max_steps=N + 16,  # constant step lands ~N steps; small buffer for rounding
-        )
-        return sol.ys  # [N+1, d]
+    @property
+    def name(self) -> str:
+        return f"{self.library} {self.method}"
 
-    return run
+
+SOLVERS = (
+    Solver(
+        "ode_filters",
+        "EK1",
+        partial(make_ode_filters_fixed, order=1),
+        partial(make_ode_filters_adaptive, order=1),
+    ),
+    Solver(
+        "ode_filters",
+        "EK0",
+        partial(make_ode_filters_fixed, order=0),
+        partial(make_ode_filters_adaptive, order=0),
+    ),
+    Solver(
+        "probdiffeq",
+        "ts1",
+        partial(make_probdiffeq_fixed, kind="ts1"),
+        partial(make_probdiffeq_adaptive, kind="ts1"),
+    ),
+    Solver(
+        "probdiffeq",
+        "ts0",
+        partial(make_probdiffeq_fixed, kind="ts0"),
+        partial(make_probdiffeq_adaptive, kind="ts0"),
+    ),
+    Solver("Diffrax", "Tsit5", make_diffrax_fixed, make_diffrax_adaptive),
+)
 
 
 # --------------------------------------------------------------------------- #
-# Timing + sweep                                                              #
+# Configurations, accuracy, timing                                            #
 # --------------------------------------------------------------------------- #
 
 
-def median_time_ms(run: Callable, n_warmup: int = 2, n_runs: int = 7) -> float:
-    for _ in range(n_warmup):
-        jax.block_until_ready(run())
-    samples = []
-    for _ in range(n_runs):
-        t0 = time.perf_counter()
-        jax.block_until_ready(run())
-        samples.append(time.perf_counter() - t0)
-    return float(np.median(samples)) * 1000.0
+@dataclass
+class Config:
+    """One point of a work-precision curve: a solver on a problem at a setting."""
+
+    study: str  # "adaptive" (knob: tolerance) or "fixed" (knob: number of steps)
+    problem: ODEProblem
+    solver: Solver
+    knob: float
+    run: Run
+    reference: np.ndarray
+    error: float = math.nan
+    n_steps: int | None = None
+    n_rejected: int | None = None
+    first_call_s: float = math.nan
+    samples_ms: list[float] = field(default_factory=list)
 
 
-def rel_trmse(traj: jnp.ndarray, ref: jnp.ndarray) -> float:
+def rel_trmse(traj: np.ndarray, ref: np.ndarray) -> float:
     """Relative trajectory RMSE between a solution and the reference.
 
     Both are ``[K, d]`` (solution sampled on the evaluation grid). Averaging the
@@ -328,119 +459,445 @@ def rel_trmse(traj: jnp.ndarray, ref: jnp.ndarray) -> float:
     is robust to the phase sensitivity of oscillatory problems and is the metric
     used across the probabilistic-ODE literature.
     """
-    num = jnp.sqrt(jnp.mean(jnp.sum((traj - ref) ** 2, axis=-1)))
-    den = jnp.sqrt(jnp.mean(jnp.sum(ref**2, axis=-1)))
+    with np.errstate(over="ignore", invalid="ignore"):  # a diverged run: inf/NaN
+        num = np.sqrt(np.mean(np.sum((traj - ref) ** 2, axis=-1)))
+    den = np.sqrt(np.mean(np.sum(ref**2, axis=-1)))
     return float(num / den)
 
 
-# (label, color, marker, make(problem, knob) -> run). `make` takes a grid size N
-# for the fixed methods and a tolerance for the adaptive methods.
-FIXED_METHODS = [
-    ("ode_filters EK1", "C0", "o", lambda p, n: make_ode_filters_fixed(p, n, 1)),
-    ("ode_filters EK0", "C4", "v", lambda p, n: make_ode_filters_fixed(p, n, 0)),
-    ("probdiffeq ts1", "C1", "s", lambda p, n: make_probdiffeq_fixed(p, n, "ts1")),
-    ("probdiffeq ts0", "C2", "D", lambda p, n: make_probdiffeq_fixed(p, n, "ts0")),
-    ("Diffrax Tsit5", "C3", "^", make_diffrax_fixed),
-]
-ADAPTIVE_METHODS = [
-    ("ode_filters EK1", "C0", "o", lambda p, tol: make_ode_filters_adaptive(p, tol, 1)),
-    ("ode_filters EK0", "C4", "v", lambda p, tol: make_ode_filters_adaptive(p, tol, 0)),
-    (
-        "probdiffeq ts1",
-        "C1",
-        "s",
-        lambda p, tol: make_probdiffeq_adaptive(p, tol, "ts1"),
-    ),
-    (
-        "probdiffeq ts0",
-        "C2",
-        "D",
-        lambda p, tol: make_probdiffeq_adaptive(p, tol, "ts0"),
-    ),
-    ("Diffrax Tsit5", "C3", "^", make_diffrax_adaptive),
-]
-N_VALUES = [80, 160, 320, 640, 1280]
-TOLS = [1e-3, 1e-5, 1e-7, 1e-9]
-# A probabilistic solver at too-coarse a grid / loose a tolerance diverges; we
-# plot only the convergent branch (finite error below this threshold).
-_CONVERGED = 1.0
+def build_configs(
+    problems: Sequence[ODEProblem], tols: Sequence[float], n_values: Sequence[int]
+) -> list[Config]:
+    configs = []
+    for problem in problems:
+        grids = [dense_grid(problem)] + [fixed_grid(problem, n) for n in n_values]
+        ref_dense, *ref_fixed = reference_on(problem, grids)
+        for solver in SOLVERS:
+            adaptive = solver.make_adaptive(problem)
+            for tol in tols:
+                run = partial(adaptive, jnp.asarray(tol))
+                configs.append(Config("adaptive", problem, solver, tol, run, ref_dense))
+            for n, ref in zip(n_values, ref_fixed, strict=True):
+                run = solver.make_fixed(problem, n)
+                configs.append(Config("fixed", problem, solver, n, run, ref))
+    return configs
 
 
-def work_precision(
-    problems: list[ODEProblem],
-    methods: list,
-    sweep: list,
-    eval_grid: Callable[[ODEProblem, object], jnp.ndarray],
-    save_path: str,
-    title: str,
-) -> None:
-    """Plot trajectory-RMSE-vs-runtime for `methods`, swept over `sweep`.
+def prepare(config: Config) -> None:
+    """Compile and run once: the error and the step counts, plus a warm-up."""
+    t0 = time.perf_counter()
+    traj, n_accepted, n_rejected = jax.block_until_ready(config.run())
+    config.first_call_s = time.perf_counter() - t0
+    config.error = rel_trmse(np.asarray(traj), config.reference)
+    config.n_steps = None if int(n_accepted) < 0 else int(n_accepted)
+    config.n_rejected = None if int(n_rejected) < 0 else int(n_rejected)
+    jax.block_until_ready(config.run())
 
-    `eval_grid(problem, knob)` returns the save grid that each method's `run()`
-    samples (and on which the reference is evaluated): the native N+1 grid for the
-    fixed methods, a common dense grid for the adaptive ones.
+
+def _load_average() -> list[float] | None:
+    try:
+        return [round(x, 2) for x in os.getloadavg()]
+    except (AttributeError, OSError):  # not available on Windows
+        return None
+
+
+def time_interleaved(
+    configs: list[Config], *, repeats: int
+) -> list[list[float] | None]:
+    """Time every configuration in ``repeats`` interleaved rounds.
+
+    Each round visits all configurations in a fresh random order; per visit, one
+    warm-up call (the caches are cold after switching configurations) and
+    ``CALLS_PER_REPEAT`` timed calls, whose median is the round's sample.
+    Returns the load average after each round.
     """
-    fig, axes = plt.subplots(1, len(problems), figsize=(5 * len(problems), 4.2))
-    if len(problems) == 1:
-        axes = [axes]
+    rng = random.Random(SEED)
+    order = list(range(len(configs)))
+    loads = []
+    start = time.perf_counter()
+    for r in range(repeats):
+        rng.shuffle(order)
+        gc.collect()
+        gc.disable()  # as timeit does: no collector pauses inside the timed calls
+        try:
+            for i in order:
+                run = configs[i].run
+                jax.block_until_ready(run())
+                calls = []
+                for _ in range(CALLS_PER_REPEAT):
+                    t0 = time.perf_counter()
+                    jax.block_until_ready(run())
+                    calls.append(time.perf_counter() - t0)
+                configs[i].samples_ms.append(1e3 * float(np.median(calls)))
+        finally:
+            gc.enable()
+        loads.append(_load_average())
+        load = "n/a" if loads[-1] is None else f"{loads[-1][0]:.1f}"
+        elapsed = time.perf_counter() - start
+        print(f"  round {r + 1}/{repeats} ({elapsed:.0f} s, load {load})", flush=True)
+    return loads
 
-    for ax, problem in zip(axes, problems, strict=True):
-        print(f"\n{problem.name}")
-        # The reference depends only on the eval grid, which (per knob) is shared
-        # across methods -- compute it once per knob.
-        refs = {
-            knob: reference_trajectory(problem, eval_grid(problem, knob))
-            for knob in sweep
-        }
 
-        for name, color, marker, make in methods:
-            times, errs = [], []
-            for knob in sweep:
-                run = make(problem, knob)
-                err = rel_trmse(run(), refs[knob])
-                t = median_time_ms(run)
-                print(f"  {name:18s} {knob!s:>8s}  tRMSE={err:.2e}  t={t:8.3f} ms")
-                if np.isfinite(err) and err < _CONVERGED:  # drop diverged points
-                    times.append(t)
-                    errs.append(err)
-            if times:
-                ax.plot(times, errs, color=color, marker=marker, label=name)
+# --------------------------------------------------------------------------- #
+# Raw data and metadata                                                       #
+# --------------------------------------------------------------------------- #
 
-        ax.set(
-            xlabel="runtime (ms)",
-            ylabel="relative trajectory RMSE",
-            title=problem.name,
-            xscale="log",
-            yscale="log",
+
+def _finite_or_none(x: float) -> float | None:
+    return x if math.isfinite(x) else None
+
+
+def result_record(config: Config) -> dict[str, Any]:
+    samples = np.asarray(config.samples_ms)
+    q25, median, q75 = np.percentile(samples, [25, 50, 75])
+    converged = math.isfinite(config.error) and config.error < CONVERGED_BELOW
+    return {
+        "study": config.study,
+        "problem": config.problem.key,
+        "problem_title": config.problem.title,
+        "solver": config.solver.name,
+        "library": config.solver.library,
+        "method": config.solver.method,
+        "knob": "tol" if config.study == "adaptive" else "N",
+        "value": config.knob,
+        "error": _finite_or_none(config.error),
+        "converged": converged,
+        "time_ms_median": float(median),
+        "time_ms_q25": float(q25),
+        "time_ms_q75": float(q75),
+        "time_ms_samples": [round(s, 6) for s in config.samples_ms],
+        "n_steps": config.n_steps,
+        "n_rejected": config.n_rejected,
+        "first_call_s": round(config.first_call_s, 4),
+    }
+
+
+def _version(dist: str) -> str | None:
+    try:
+        return importlib.metadata.version(dist)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _git_state(path: Path) -> dict[str, Any]:
+    """Commit (and uncommitted changes) of the checkout ode_filters runs from."""
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(path), *args],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        ).stdout.strip()
+
+    try:
+        commit = git("rev-parse", "HEAD")
+        dirty = bool(git("status", "--porcelain", "--untracked-files=no"))
+    except (OSError, subprocess.SubprocessError):  # installed from a wheel
+        return {"commit": None, "dirty": None}
+    return {"commit": commit, "dirty": dirty}
+
+
+def _cpu_name() -> str:
+    try:
+        if sys.platform == "darwin":
+            return subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            ).stdout.strip()
+        if sys.platform.startswith("linux"):
+            for line in Path("/proc/cpuinfo").read_text().splitlines():
+                if line.startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return platform.processor() or platform.machine()
+
+
+def metadata(args: argparse.Namespace, settings: dict[str, Any]) -> dict[str, Any]:
+    dists = (
+        "jax",
+        "jaxlib",
+        "ode-filters",
+        "probdiffeq",
+        "diffrax",
+        "equinox",
+        "numpy",
+        "matplotlib",
+        "tueplots",
+    )
+    return {
+        "date": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
+        "command": [Path(sys.argv[0]).name, *sys.argv[1:]],
+        "quick": args.quick,
+        "versions": {"python": platform.python_version()}
+        | {d: _version(d) for d in dists},
+        "ode_filters_git": _git_state(Path(ode_filters.__file__).resolve().parent),
+        "platform": platform.platform(),
+        "cpu": _cpu_name(),
+        "cpu_count": os.cpu_count(),
+        "jax_backend": jax.default_backend(),
+        "jax_devices": [str(d) for d in jax.devices()],
+        "x64": bool(jax.config.read("jax_enable_x64")),
+        "settings": settings,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Figures                                                                     #
+# --------------------------------------------------------------------------- #
+
+LIBRARIES = ("ode_filters", "probdiffeq", "Diffrax")  # colour = library
+# Line style and marker = linearization order (Diffrax is classical: its own).
+METHOD_STYLE = {
+    "EK1": ("-", "o"),
+    "ts1": ("-", "o"),
+    "EK0": ("--", "v"),
+    "ts0": ("--", "v"),
+    "Tsit5": ("-", "s"),
+}
+ORDER_LEGEND = (("EK1 / ts1", "EK1"), ("EK0 / ts0", "EK0"))
+MARKER_SIZE = 3.5
+
+
+def _label_runtimes(ax: Any) -> None:
+    """Runtime ticks as plain numbers, with 1-3 or 1-2-5 steps on a narrow axis.
+
+    A log axis spanning about two decades or less would otherwise carry one or
+    two labelled ticks. The errors keep matplotlib's powers of ten.
+    """
+    lo, hi = ax.get_xlim()
+    decades = math.log10(hi / lo)
+    subs = (1.0, 2.0, 5.0) if decades < 1.2 else (1.0, 3.0) if decades < 2.3 else (1.0,)
+    ax.xaxis.set_major_locator(ticker.LogLocator(subs=subs))
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:g}"))
+    ax.xaxis.set_minor_formatter(ticker.NullFormatter())
+
+
+def set_style() -> None:
+    plt.rcParams.update(bundles.tue_ai_beamer())
+    plt.rcParams.update(cycler.cycler(color=palettes.paultol_bright))
+    # TrueType instead of Type 3 fonts in the PDF (publishers reject Type 3).
+    plt.rcParams["pdf.fonttype"] = 42
+    # Fall back to the default font quietly where Roboto Condensed is not installed.
+    logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
+
+
+def plot_study(results: list[dict[str, Any]], study: str, stem: Path) -> list[Path]:
+    """One work-precision panel per problem; error vs median runtime (IQR bars)."""
+    rows = [r for r in results if r["study"] == study]
+    problems = list(dict.fromkeys(r["problem_title"] for r in rows))
+    solvers = list(dict.fromkeys(r["solver"] for r in rows))
+    palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    color = {library: palette[i] for i, library in enumerate(LIBRARIES)}
+    neutral = palette[6]  # grey: the legend entries for style, not library
+
+    fig, axes = plt.subplots(1, len(problems), squeeze=False)
+    for ax, problem in zip(axes.flat, problems, strict=True):
+        for solver in solvers:
+            points = [
+                r
+                for r in rows
+                if r["problem_title"] == problem
+                and r["solver"] == solver
+                and r["converged"]
+            ]
+            if not points:
+                continue
+            # In sweep order: loosest tolerance / coarsest grid first.
+            points.sort(
+                key=lambda r: -r["value"] if study == "adaptive" else r["value"]
+            )
+            median = np.array([r["time_ms_median"] for r in points])
+            q25 = np.array([r["time_ms_q25"] for r in points])
+            q75 = np.array([r["time_ms_q75"] for r in points])
+            linestyle, marker = METHOD_STYLE[points[0]["method"]]
+            ax.errorbar(
+                median,
+                [r["error"] for r in points],
+                xerr=np.stack([median - q25, q75 - median]),
+                color=color[points[0]["library"]],
+                linestyle=linestyle,
+                marker=marker,
+                markersize=MARKER_SIZE,
+                elinewidth=0.6,
+                capsize=0,
+            )
+        ax.set(xscale="log", yscale="log", title=problem, xlabel="runtime (ms)")
+        _label_runtimes(ax)
+        ax.grid(which="major")
+    axes.flat[0].set_ylabel("relative trajectory RMSE")
+
+    # Factorized legend: colour = library, line style / marker = linearization
+    # order (Diffrax Tsit5 has a style of its own).
+    def handle(c: str, method: str | None = None) -> Line2D:
+        linestyle, marker = ("-", "") if method is None else METHOD_STYLE[method]
+        return Line2D(
+            [], [], color=c, linestyle=linestyle, marker=marker, markersize=MARKER_SIZE
         )
-        ax.legend(fontsize="small")
 
-    fig.suptitle(title)
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    print(f"\nsaved {save_path}")
-
-
-def main() -> None:
-    problems = _problems()
-    # Adaptive methods all save on the common dense grid; fixed methods save on
-    # their own native N+1 grid (the resolution *is* the sweep knob).
-    work_precision(
-        problems,
-        ADAPTIVE_METHODS,
-        TOLS,
-        lambda p, _tol: _dense_grid(p),
-        "benchmarks/work_precision.png",
-        "Work-precision (all adaptive): trajectory RMSE vs runtime (lower-left is better)",
+    handles = [handle(color["ode_filters"]), handle(color["probdiffeq"])]
+    handles += [handle(color["Diffrax"], "Tsit5")]
+    handles += [handle(neutral, method) for _, method in ORDER_LEGEND]
+    labels = ["ode_filters", "probdiffeq", "Diffrax Tsit5"]
+    labels += [label for label, _ in ORDER_LEGEND]
+    fig.legend(
+        handles,
+        labels,
+        loc="outside lower center",
+        ncols=len(handles),
+        frameon=False,
     )
-    work_precision(
-        problems,
-        FIXED_METHODS,
-        N_VALUES,
-        lambda p, n: jnp.linspace(p.tspan[0], p.tspan[1], n + 1),
-        "benchmarks/work_precision_fixed.png",
-        "Work-precision (all fixed-grid): trajectory RMSE vs runtime (lower-left is better)",
+
+    paths = [stem.with_suffix(".pdf"), stem.with_suffix(".svg")]
+    for path in paths:
+        fig.savefig(path)
+    plt.close(fig)
+    return paths
+
+
+def plot_all(results: list[dict[str, Any]], out_dir: Path) -> list[Path]:
+    set_style()
+    paths = []
+    for study, stem in FIGURE_STEMS.items():
+        if any(r["study"] == study for r in results):
+            paths += plot_study(results, study, out_dir / stem)
+    return paths
+
+
+# --------------------------------------------------------------------------- #
+# Main                                                                        #
+# --------------------------------------------------------------------------- #
+
+
+def print_table(results: list[dict[str, Any]]) -> None:
+    print(
+        f"\n{'study':8s} {'problem':14s} {'solver':16s} {'setting':>9s} "
+        f"{'rel. tRMSE':>10s} {'median ms':>10s} {'IQR ms':>17s} {'steps':>11s}"
     )
+    for r in sorted(results, key=lambda r: list(FIGURE_STEMS).index(r["study"])):
+        setting = f"{r['value']:.0e}" if r["knob"] == "tol" else str(r["value"])
+        error = "nan" if r["error"] is None else f"{r['error']:.2e}"
+        if not r["converged"]:
+            error += "*"
+        iqr = f"{r['time_ms_q25']:.3f}-{r['time_ms_q75']:.3f}"
+        steps = "" if r["n_steps"] is None else str(r["n_steps"])
+        if r["n_rejected"]:
+            steps += f"+{r['n_rejected']}"
+        print(
+            f"{r['study']:8s} {r['problem_title']:14s} {r['solver']:16s} "
+            f"{setting:>9s} {error:>10s} {r['time_ms_median']:10.3f} {iqr:>17s} "
+            f"{steps:>11s}"
+        )
+    print(
+        f"* diverged (error >= {CONVERGED_BELOW:g} or NaN): not plotted. "
+        "steps: accepted+rejected (probdiffeq reports accepted only)."
+    )
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Work-precision benchmark of ode_filters vs probdiffeq and Diffrax."
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=DEFAULT_OUT_DIR,
+        help=f"where the figures and {RESULTS_NAME} go (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--quick",
+        action="store_true",
+        help=(
+            "smoke run: a reduced sweep with few repeats, well under a minute; "
+            "its timings are not meant for publication"
+        ),
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=None,
+        help=(
+            f"interleaved timing rounds per configuration (default: {REPEATS}, "
+            f"{QUICK_REPEATS} with --quick)"
+        ),
+    )
+    parser.add_argument(
+        "--replot",
+        action="store_true",
+        help=f"redraw the figures from {RESULTS_NAME} in --out-dir; no benchmark run",
+    )
+    args = parser.parse_args(argv)
+    if args.repeats is not None and args.repeats < 1:
+        parser.error("--repeats must be at least 1")
+    return args
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = parse_args(argv)
+    out_dir: Path = args.out_dir.resolve()
+    results_path = out_dir / RESULTS_NAME
+    if args.replot:
+        if not results_path.is_file():
+            sys.exit(f"--replot: no {results_path}; run the benchmark first.")
+        results = json.loads(results_path.read_text())["results"]
+        for path in plot_all(results, out_dir):
+            print(f"saved {path}")
+        return
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tols = QUICK_TOLS if args.quick else TOLS
+    n_values = QUICK_N_VALUES if args.quick else N_VALUES
+    repeats = args.repeats or (QUICK_REPEATS if args.quick else REPEATS)
+    load_start = _load_average()
+    cpus = os.cpu_count() or 1
+    if load_start is not None and load_start[0] > 0.25 * cpus:
+        print(
+            f"warning: load average {load_start[0]:.1f} on {cpus} CPUs -- the "
+            "timings will be noisy; produce final figures on a quiet machine."
+        )
+    wall_start = time.perf_counter()
+
+    configs = build_configs(_problems(), tols, n_values)
+    print(f"compiling and checking {len(configs)} configurations ...", flush=True)
+    for config in configs:
+        prepare(config)
+    print(f"timing: {repeats} interleaved rounds of {len(configs)} configurations")
+    loads = time_interleaved(configs, repeats=repeats)
+
+    settings = {
+        "Q": Q,
+        "n_eval": N_EVAL,
+        "tols": list(tols),
+        "n_values": list(n_values),
+        "repeats": repeats,
+        "calls_per_repeat": CALLS_PER_REPEAT,
+        "seed": SEED,
+        "reference": (
+            f"diffrax Dopri8, rtol={REFERENCE_RTOL:g}, atol={REFERENCE_ATOL:g}"
+        ),
+        "converged_below": CONVERGED_BELOW,
+    }
+    meta = metadata(args, settings)
+    meta["load_average"] = {
+        "start": load_start,
+        "end": _load_average(),
+        "per_round": loads,
+    }
+    meta["wall_time_s"] = round(time.perf_counter() - wall_start, 1)
+    results = [result_record(c) for c in configs]
+    results_path.write_text(
+        json.dumps({"metadata": meta, "results": results}, indent=1) + "\n"
+    )
+
+    print_table(results)
+    print(f"\nsaved {results_path}")
+    for path in plot_all(results, out_dir):
+        print(f"saved {path}")
 
 
 if __name__ == "__main__":
