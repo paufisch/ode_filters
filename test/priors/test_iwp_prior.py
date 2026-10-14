@@ -74,6 +74,31 @@ def test_xi_of_the_wrong_shape_raises():
         IWP(q=1, d=2, Xi=np.eye(3))
 
 
+@pytest.mark.parametrize(
+    "Xi",
+    [
+        np.zeros((1, 1)),
+        -np.eye(1),
+        np.array([[1.0, 2.0], [2.0, 1.0]]),
+        np.array([[1.0, 0.5], [0.0, 1.0]]),
+    ],
+    ids=["zero", "negative", "indefinite", "non-symmetric"],
+)
+def test_xi_must_be_symmetric_positive_definite(Xi):
+    """A singular Xi used to give a NaN process noise without an error."""
+    with pytest.raises(ValueError, match="symmetric positive definite"):
+        IWP(q=1, d=Xi.shape[0], Xi=Xi)
+
+
+def test_a_traced_xi_is_not_checked():
+    import jax
+
+    def q_sqr_trace(scale):
+        return np.trace(IWP(q=1, d=1, Xi=scale * np.eye(1)).Q_sqr(0.1))
+
+    assert np.isfinite(jax.jit(q_sqr_trace)(2.0))
+
+
 def test_selectors_and_dimensions():
     prior = IWP(q=2, d=2)
     state = np.arange(6.0)

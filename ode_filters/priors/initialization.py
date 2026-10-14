@@ -31,8 +31,9 @@ def taylor_mode_initialization(
 
     Expands the solution through ``x0`` (and ``dx0`` for ``order=2``) with
     ``jax.experimental.jet`` and returns the state ``[x, x', ..., x^(q)]`` with
-    a zero covariance: the initial state is known exactly. The vector field is
-    evaluated at the fixed time ``t0``.
+    a zero covariance: the initial state is known exactly. Time is expanded
+    along with the state (``t' = 1``), so the derivatives of a time-dependent
+    vector field are exact too.
 
     Args:
         vf: Vector field, ``vf(x, *, t) -> dx/dt`` for ``order=1`` or
@@ -74,14 +75,15 @@ def taylor_mode_initialization(
 
     d = init_derivs[0].shape[0]
 
-    # Augmented state: [x0, dx0, ...] and augmented vector field
-    # For order k: y = [x, v1, ..., v_{k-1}], dy/dt = [v1, ..., v_{k-1}, vf(...)]
-    base_state = np.concatenate(init_derivs)
+    # Augmented autonomous system: y = [x, v1, ..., v_{k-1}, t] with
+    # dy/dt = [v1, ..., v_{k-1}, vf(..., t=t), 1], so time is expanded too.
+    t_init = np.asarray(t0, dtype=init_derivs[0].dtype).reshape(1)
+    base_state = np.concatenate([*init_derivs, t_init])
 
     def aug_vf(y):
         derivs = [y[i * d : (i + 1) * d] for i in range(order)]
-        highest_deriv = vf(*derivs, t=t0)
-        return np.concatenate([*derivs[1:], highest_deriv])
+        highest_deriv = vf(*derivs, t=y[order * d])
+        return np.concatenate([*derivs[1:], highest_deriv, np.ones_like(y[-1:])])
 
     coefficients: list[Array] = [init_derivs[0]]
     series_terms: list[Array] = []
@@ -133,8 +135,8 @@ def joint_taylor_initialization(
         P_0 = [[S_x + J S_u J.T, J S_u], [S_u J.T, S_u]].
 
     ``J`` is exact for an input that enters the vector field additively and a
-    linearization otherwise. As in ``taylor_mode_initialization``, the vector
-    field is evaluated at the fixed time ``t0``.
+    linearization otherwise. As in ``taylor_mode_initialization``, time is
+    expanded along with the state.
 
     Args:
         vf: Vector field with the hidden-input signature, ``vf(x, u, *, t)``

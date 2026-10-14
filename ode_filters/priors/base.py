@@ -57,10 +57,21 @@ def check_order_and_dimension(q: int, d: int) -> None:
 
 
 def component_matrix(Xi: ArrayLike | None, d: int) -> Array:
-    """The component-correlation matrix ``Xi``: the identity by default."""
+    """The component-correlation matrix ``Xi``: the identity by default.
+
+    A concrete ``Xi`` must be symmetric positive definite (its Cholesky factor
+    enters the process noise; a singular one gave NaN). A traced ``Xi`` (a
+    differentiated hyperparameter) cannot be checked and is trusted.
+    """
     xi = np.eye(d) if Xi is None else np.asarray(Xi, dtype=float)
     if xi.shape != (d, d):
         raise ValueError(f"Xi must have shape ({d}, {d}), got {xi.shape}.")
+    try:
+        x = onp.asarray(xi)
+    except jax.errors.TracerArrayConversionError:
+        return xi
+    if not onp.allclose(x, x.T) or onp.linalg.eigvalsh(0.5 * (x + x.T)).min() <= 0:
+        raise ValueError("Xi must be symmetric positive definite.")
     return xi
 
 

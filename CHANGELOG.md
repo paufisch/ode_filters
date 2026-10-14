@@ -169,6 +169,13 @@ fixes below come on top.
 
 ### Fixed
 
+- `taylor_mode_initialization` and `joint_taylor_initialization` held the time
+  at `t0`, so the higher initial derivatives of a time-dependent vector field
+  were wrong (`x''' = 1` instead of `0` for `x' = cos(t) x` at `t0 = 0`). Time
+  is now expanded with the state. **This changes the initial state, and so the
+  results, of time-dependent problems.**
+- A prior with a singular `Xi` (e.g. `Xi=0`) produced a NaN process noise
+  without an error; a concrete `Xi` must now be symmetric positive definite.
 - `PrecondMaternPrior` returned NaN at short length scales (e.g. `q = 2`,
   `length_scale = 2.6e-3`, `h = 1e-2`): the 0.7.3 fix reached only
   `MaternPrior`. Both now share the length-scale-normalized `A(h)` and the

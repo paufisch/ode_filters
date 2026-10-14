@@ -189,3 +189,49 @@ def test_taylor_mode_initialization_second_order_rejects_mismatched_shapes():
         taylor_mode_initialization(
             vf, (np.array([1.0, 2.0]), np.array([0.0])), q=1, order=2
         )
+
+
+def test_time_dependent_vector_field_gets_exact_derivatives():
+    """Time is expanded with the state: x' = cos(t) x, x(t0) = 1 at t0 = 0.3.
+
+    The solution is x(t) = exp(sin t - sin t0); its derivatives at t0 come from
+    nested autodiff of the closed form.
+    """
+    import jax
+
+    t0 = 0.3
+
+    def exact(t):
+        return np.exp(np.sin(t) - np.sin(t0))
+
+    derivs = [exact]
+    for _ in range(4):
+        derivs.append(jax.grad(derivs[-1]))
+    expected = np.array([float(f(t0)) for f in derivs])
+
+    m, _ = taylor_mode_initialization(
+        lambda x, *, t: np.cos(t) * x, np.array([1.0]), q=4, t0=t0
+    )
+    assert np.allclose(m, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_time_dependent_second_order_field_gets_exact_derivatives():
+    """x'' = -x + cos(2t) with x(0) = 1, x'(0) = 0 has a closed form."""
+    import jax
+
+    def exact(t):
+        # Particular solution -cos(2t)/3 plus the homogeneous part.
+        return (4.0 / 3.0) * np.cos(t) - np.cos(2.0 * t) / 3.0
+
+    derivs = [exact]
+    for _ in range(4):
+        derivs.append(jax.grad(derivs[-1]))
+    expected = np.array([float(f(0.0)) for f in derivs])
+
+    m, _ = taylor_mode_initialization(
+        lambda x, v, *, t: -x + np.cos(2.0 * t),
+        (np.array([1.0]), np.array([0.0])),
+        q=4,
+        order=2,
+    )
+    assert np.allclose(m, expected, rtol=1e-12, atol=1e-12)
