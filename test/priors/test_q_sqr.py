@@ -1,13 +1,18 @@
 """Tests for the square-root process noise ``prior.Q_sqr(h)``.
 
-``Q_sqr`` is the quantity the square-root filter consumes; it must satisfy
-``Q_sqr.T @ Q_sqr == Q(h)`` for every prior. For IWP / PrecondIWP it is a
-closed form that avoids factorizing the dense, ill-conditioned Hilbert-like
-``Q(h)`` at runtime (the motivation for exposing it).
+``Q_sqr`` is the quantity the square-root filter consumes, and ``Q(h)`` is
+derived from it (``Q_sqr.T @ Q_sqr``). Both are checked against Van Loan's
+block exponential of each prior's SDE, built here from the prior's definition
+(for the Matern prior: from the textbook kernel), never from the prior itself.
+For IWP / PrecondIWP the factor is a closed form that avoids factorizing the
+dense, ill-conditioned Hilbert-like ``Q(h)`` at runtime (the motivation for
+exposing it).
 """
 
 import jax.numpy as np
+import numpy as onp
 import pytest
+from scipy.linalg import block_diag
 
 from ode_filters.priors import (
     IWP,
@@ -17,61 +22,120 @@ from ode_filters.priors import (
     PrecondIWP,
     PrecondMaternPrior,
 )
+from test.helpers import assert_close, matern_sde, van_loan
 
 
 def _is_upper_triangular(M, atol=1e-10):
     return np.allclose(np.tril(M, k=-1), 0.0, atol=atol)
 
 
+def _integrated_sde(q, d, *, rate=None, Xi=None):
+    """``(F, S)`` of a ``q``-times integrated process on ``[Y, Y', ..., Y^(q)]``.
+
+    ``dY^(i) = Y^(i+1) dt`` for ``i < q`` and ``dY^(q) = R Y^(q) dt + dW`` with
+    ``Cov(dW) = Xi dt``: the IWP for ``R = 0``, the IOUP otherwise.
+    """
+    F = onp.kron(onp.eye(q + 1, k=1), onp.eye(d))
+    if rate is not None:
+        F[q * d :, q * d :] = rate
+    S = onp.zeros(((q + 1) * d, (q + 1) * d))
+    S[q * d :, q * d :] = onp.eye(d) if Xi is None else Xi
+    return F, S
+
+
+def _matern_sde(q, d, length_scale, Xi=None):
+    """``(F, S)`` of ``d`` Matern components, from the scalar kernel SDE."""
+    F, S = (onp.asarray(M) for M in matern_sde(q, length_scale))
+    return onp.kron(F, onp.eye(d)), onp.kron(S, onp.eye(d) if Xi is None else Xi)
+
+
+def _joint_sde(sde_x, sde_u):
+    return block_diag(sde_x[0], sde_u[0]), block_diag(sde_x[1], sde_u[1])
+
+
 def _priors():
-    """A representative spread of priors and the h at which to test them."""
+    """A representative spread of priors, the h to test them at, and their SDE."""
     xi_full = np.array([[2.0, 0.3], [0.3, 1.5]])
+    rate_a = np.array([[-2.0, 1.0], [0.0, -3.0]])
+    rate_b = np.array([[-2.0, 0.5], [0.0, -3.0]])
     return [
-        ("IWP q=2 d=1", IWP(q=2, d=1), 0.3),
-        ("IWP q=3 d=2", IWP(q=3, d=2), 0.2),
-        ("IWP q=2 d=2 Xi", IWP(q=2, d=2, Xi=xi_full), 0.25),
-        ("PrecondIWP q=3 d=2", PrecondIWP(q=3, d=2), 0.2),
-        ("Matern q=2 d=1", MaternPrior(q=2, d=1, length_scale=1.0), 0.3),
-        ("Matern q=2 d=2", MaternPrior(q=2, d=2, length_scale=1.5), 0.25),
-        ("PrecondMatern q=2 d=2", PrecondMaternPrior(q=2, d=2, length_scale=1.5), 0.2),
-        ("IOUP q=2 d=1 scalar", IOUPPrior(q=2, d=1, rate=-2.0), 0.25),
+        ("IWP q=2 d=1", IWP(q=2, d=1), 0.3, _integrated_sde(2, 1)),
+        ("IWP q=3 d=2", IWP(q=3, d=2), 0.2, _integrated_sde(3, 2)),
+        (
+            "IWP q=2 d=2 Xi",
+            IWP(q=2, d=2, Xi=xi_full),
+            0.25,
+            _integrated_sde(2, 2, Xi=xi_full),
+        ),
+        ("PrecondIWP q=3 d=2", PrecondIWP(q=3, d=2), 0.2, _integrated_sde(3, 2)),
+        (
+            "Matern q=2 d=1",
+            MaternPrior(q=2, d=1, length_scale=1.0),
+            0.3,
+            _matern_sde(2, 1, 1.0),
+        ),
+        (
+            "Matern q=2 d=2",
+            MaternPrior(q=2, d=2, length_scale=1.5),
+            0.25,
+            _matern_sde(2, 2, 1.5),
+        ),
+        (
+            "PrecondMatern q=2 d=2 Xi",
+            PrecondMaternPrior(q=2, d=2, length_scale=1.5, Xi=xi_full),
+            0.2,
+            _matern_sde(2, 2, 1.5, Xi=xi_full),
+        ),
+        (
+            "IOUP q=2 d=1 scalar",
+            IOUPPrior(q=2, d=1, rate=-2.0),
+            0.25,
+            _integrated_sde(2, 1, rate=-2.0),
+        ),
         (
             "IOUP q=2 d=2 matrix Xi",
-            IOUPPrior(q=2, d=2, rate=np.array([[-2.0, 1.0], [0.0, -3.0]]), Xi=xi_full),
+            IOUPPrior(q=2, d=2, rate=rate_a, Xi=xi_full),
             0.2,
+            _integrated_sde(2, 2, rate=rate_a, Xi=xi_full),
         ),
         (
             "JointPrior IWP+IWP",
             JointPrior(IWP(q=2, d=2), IWP(q=1, d=1)),
             0.25,
+            _joint_sde(_integrated_sde(2, 2), _integrated_sde(1, 1)),
         ),
         (
             "JointPrior IOUP+IWP",
             JointPrior(
-                IOUPPrior(q=2, d=2, rate=np.array([[-2.0, 0.5], [0.0, -3.0]])),
+                IOUPPrior(q=2, d=2, rate=rate_b),
                 IWP(q=0, d=1, Xi=1e-3 * np.eye(1)),
             ),
             0.2,
+            _joint_sde(
+                _integrated_sde(2, 2, rate=rate_b),
+                _integrated_sde(0, 1, Xi=1e-3 * onp.eye(1)),
+            ),
         ),
         (
             "JointPrior PrecondIWP+PrecondIWP",
             JointPrior(PrecondIWP(q=2, d=2), PrecondIWP(q=1, d=1)),
             0.2,
+            _joint_sde(_integrated_sde(2, 2), _integrated_sde(1, 1)),
         ),
     ]
 
 
-@pytest.mark.parametrize("name,prior,h", _priors(), ids=[p[0] for p in _priors()])
-def test_q_sqr_reconstructs_q(name, prior, h):
-    """Q_sqr.T @ Q_sqr must reconstruct Q(h)."""
-    Q = prior.Q(h)
-    Q_sqr = prior.Q_sqr(h)
-    assert Q_sqr.shape == Q.shape
-    assert np.allclose(Q_sqr.T @ Q_sqr, Q, rtol=1e-9, atol=1e-12), name
+@pytest.mark.parametrize("name,prior,h,sde", _priors(), ids=[p[0] for p in _priors()])
+def test_transition_and_noise_match_van_loan(name, prior, h, sde):
+    """``A(h)`` and ``Q(h) = Q_sqr.T @ Q_sqr`` are the SDE's exact discretization."""
+    A_ref, Q_ref = van_loan(*(np.asarray(M) for M in sde), h)
+    assert prior.Q_sqr(h).shape == Q_ref.shape, name
+    assert_close(prior.A(h), A_ref, rtol=1e-10)
+    assert_close(prior.Q(h), Q_ref, rtol=1e-9)
 
 
-@pytest.mark.parametrize("name,prior,h", _priors(), ids=[p[0] for p in _priors()])
-def test_q_sqr_is_upper_triangular(name, prior, h):
+@pytest.mark.parametrize("name,prior,h,sde", _priors(), ids=[p[0] for p in _priors()])
+def test_q_sqr_is_upper_triangular(name, prior, h, sde):
     """The square-root factor is upper-triangular (the library convention)."""
     assert _is_upper_triangular(prior.Q_sqr(h)), name
 

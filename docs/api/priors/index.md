@@ -7,7 +7,7 @@ it encodes the smoothness assumed before seeing the ODE. See
 | Prior | Process | Key parameters |
 | --- | --- | --- |
 | `IWP` | `q`-times integrated Wiener process (the default) | `q` (smoothness order), `d` (dimension), `Xi` (structural scale) |
-| `MaternPrior` | Matern process | `q` (smoothness order), `d` (dimension), `length_scale`, `Xi` (structural scale) |
+| `MaternPrior` | Matern process of smoothness `nu = q + 1/2`, unit variance | `q` (smoothness order), `d` (dimension), `length_scale` (the textbook `l` of Rasmussen & Williams 2006, eq. 4.14; SDE rate `sqrt(2q+1) / l`), `Xi` (structural scale) |
 | `IOUPPrior` | integrated Ornstein–Uhlenbeck process — the highest derivative follows `dY^(q) = R Y^(q) dt + dW` | `q`, `d`, `rate` (scalar, length-`d` vector, or `d × d` matrix), `Xi` |
 | `JointPrior` | a state block stacked with a hidden block | exposes `E0_x`, `E0_hidden` for joint state–parameter models |
 | `PrecondIWP`, `PrecondMaternPrior` | the same processes, computed in preconditioned coordinates | better conditioning at high `q` / small `h` |

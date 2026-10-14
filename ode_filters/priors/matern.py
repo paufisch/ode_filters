@@ -1,13 +1,26 @@
 """Matern priors: ``MaternPrior`` and ``PrecondMaternPrior``.
 
-A Matern process of smoothness ``nu = q + 1/2`` is the stationary solution of a
-linear SDE on ``[u, u', ..., u^(q)]`` with the companion drift ``F`` whose last
-row holds ``-C(q+1, j) lam^(q+1-j)``, ``lam = sqrt((2q+1) / length_scale)``.
-In the coordinates ``D_lam^-1 Y`` with ``D_lam = diag(1, lam, ..., lam^q)`` the
-drift becomes ``lam M`` with the fixed binomial companion ``M`` and the
-diffusion ``lam c_q e_q e_q.T``: all of the length scale's dynamic range sits in
-the diagonal ``D_lam``. Every quantity here is computed in those coordinates
-and mapped back, which keeps it finite at short length scales and high order.
+A Matern process of smoothness ``nu = q + 1/2`` and length scale ``l`` has the
+textbook covariance ``k(r) = 2^(1-nu) / Gamma(nu) (sqrt(2 nu) r / l)^nu
+K_nu(sqrt(2 nu) r / l)`` (Rasmussen & Williams 2006, Sec. 4.2.1, eq. 4.14),
+e.g. ``k(r) = (1 + sqrt(3) r / l) exp(-sqrt(3) r / l)`` for ``q = 1`` (eq.
+4.17). It is the stationary solution of the SDE ``(d/dt + lambda)^(q+1) u = w``
+with ``lambda = sqrt(2 nu) / l = sqrt(2q+1) / l`` (Saerkkae, Solin & Hartikainen
+2013, Example 1): on ``[u, u', ..., u^(q)]`` a companion drift ``F`` whose last
+row holds ``-C(q+1, j) lambda^(q+1-j)``. In the coordinates ``D_lam^-1 Y`` with
+``D_lam = diag(1, lambda, ..., lambda^q)`` the drift becomes ``lambda M`` with
+the fixed binomial companion ``M`` and the diffusion ``lambda c_q e_q e_q.T``:
+all of the length scale's dynamic range sits in the diagonal ``D_lam``. Every
+quantity here is computed in those coordinates and mapped back, which keeps it
+finite at short length scales and high order.
+
+References:
+    C. E. Rasmussen and C. K. I. Williams. Gaussian Processes for Machine
+    Learning. MIT Press, 2006, Sec. 4.2.1.
+
+    S. Saerkkae, A. Solin and J. Hartikainen. Spatiotemporal learning via
+    infinite-dimensional Bayesian filtering and smoothing. IEEE Signal
+    Processing Magazine 30(4), 2013.
 """
 
 from __future__ import annotations
@@ -38,10 +51,10 @@ from .iwp import _iwp_T_diag
 def _matern_constants(q: int) -> tuple[onp.ndarray, float, onp.ndarray]:
     """Length-scale-free pieces of the scalar Matern prior, built once per ``q``.
 
-    Returns ``(M, c, P_n_sqr)``: the binomial companion ``M`` (drift ``lam M`` in
-    normalized coordinates), the diffusion constant ``c`` (diffusion
-    ``lam c e_q e_q.T``, which normalizes the stationary variance of ``u`` to
-    one), and the upper-triangular square root of the stationary covariance in
+    Returns ``(M, c, P_n_sqr)``: the binomial companion ``M`` (drift
+    ``lambda M`` in normalized coordinates), the diffusion constant ``c``
+    (diffusion ``lambda c e_q e_q.T``, which normalizes the stationary variance
+    of ``u`` to one), and the upper-triangular square root of the stationary covariance in
     normalized coordinates, which solves ``M P + P M.T + c e_q e_q.T = 0`` and so
     does not depend on the length scale.
     """
@@ -61,7 +74,8 @@ def _matern_constants(q: int) -> tuple[onp.ndarray, float, onp.ndarray]:
 
 
 def _rate(length_scale: ArrayLike, q: int) -> Array:
-    return np.sqrt((2.0 * q + 1.0) / np.asarray(length_scale, dtype=float))
+    """The SDE rate ``lambda = sqrt(2 nu) / length_scale``, ``nu = q + 1/2``."""
+    return np.sqrt(2.0 * q + 1.0) / np.asarray(length_scale, dtype=float)
 
 
 class MaternPrior(BasePrior):
@@ -74,10 +88,18 @@ class MaternPrior(BasePrior):
     matrix-fraction decomposition (Bosch, Hennig & Tronarp 2023), which stays
     accurate up to the float64 order ceiling (``q ~ 18``).
 
+    The length scale ``l`` is the textbook one (Rasmussen & Williams 2006, Sec.
+    4.2.1, eq. 4.14): the correlation of a component at lag ``tau`` is the Matern
+    kernel in ``r = sqrt(2 nu) tau / l``, i.e. ``exp(-tau / l)`` for ``q = 0``,
+    ``(1 + r) exp(-r)`` for ``q = 1`` and ``(1 + r + r^2 / 3) exp(-r)`` for
+    ``q = 2`` (eq. 4.17). The SDE rate is ``lambda = sqrt(2 nu) / l`` (Saerkkae,
+    Solin & Hartikainen 2013, Example 1).
+
     Args:
         q: Smoothness order (``nu = q + 1/2``).
         d: Dimension of the solution.
-        length_scale: Length scale of the process.
+        length_scale: Length scale ``l`` of the process, in the textbook
+            convention above (SDE rate ``lambda = sqrt(2q+1) / l``).
         Xi: Component-correlation matrix, shape ``[d, d]``; defaults to the
             identity. Per-component calibration requires it diagonal.
         n_quad: Gauss-Legendre nodes of the square-root decomposition (must
@@ -159,7 +181,7 @@ class PrecondMaternPrior(MaternPrior):
     Args:
         q: Smoothness order (``nu = q + 1/2``).
         d: Dimension of the solution.
-        length_scale: Length scale of the process.
+        length_scale: Length scale ``l`` of the process, as for ``MaternPrior``.
         Xi: Component-correlation matrix, shape ``[d, d]``.
         n_quad: Gauss-Legendre nodes of the square-root decomposition.
     """

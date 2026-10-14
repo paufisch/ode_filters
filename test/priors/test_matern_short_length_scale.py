@@ -1,10 +1,11 @@
 """`MaternPrior` transition and noise at SHORT length scales.
 
-The Hamiltonian-block matrix fraction decomposition overflowed to NaN once
-`lam = sqrt((2q+1)/length_scale)` was a few tens -- `lam h` still well below 1 --
-which is what a problem re-expressed on a unit time interval looks like.  The
-normalized form must stay finite there and agree with the block form where that
-is finite.
+The Hamiltonian-block matrix fraction decomposition overflowed to NaN once the
+rate `lam = sqrt(2q+1) / length_scale` was a few tens -- `lam h` still well
+below 1 -- which is what a problem re-expressed on a unit time interval looks
+like.  The normalized form must stay finite there and agree with the block form
+where that is finite.  The block form is built from the SDE that the textbook
+kernel implies (`matern_sde`), not from the prior.
 """
 
 import jax
@@ -19,26 +20,26 @@ from ode_filters import (
     gaussian_filter,
     taylor_mode_initialization,
 )
-from test.helpers import matern_companion, van_loan
+from test.helpers import matern_sde, van_loan
 
 jax.config.update("jax_enable_x64", True)
 
 
 def _block_form(q, length_scale, h):
     """The former implementation: `expm` of `[[F, S], [0, -F.T]] h`."""
-    return van_loan(*matern_companion(length_scale, q), h)
+    return van_loan(*matern_sde(q, length_scale), h)
 
 
 # (q, length_scale, h) cells where the block form is finite AND accurate; at
-# q = 3, length_scale = 0.16, h = 0.5 it is finite but already losing digits.
+# q = 3, length_scale = 0.4, h = 0.5 it is no longer (lam h ~ 3.3).
 @pytest.mark.parametrize(
     "q, length_scale, h",
     [
         (q, ell, h)
         for q in (1, 2, 3)
-        for ell in (200.0, 10.0, 0.16)
+        for ell in (14.0, 3.0, 0.4)
         for h in (1e-2, 0.5)
-        if not (q == 3 and ell == 0.16 and h == 0.5)
+        if not (q == 3 and ell == 0.4 and h == 0.5)
     ],
 )
 def test_matches_block_form_where_finite(q, length_scale, h):
@@ -50,7 +51,8 @@ def test_matches_block_form_where_finite(q, length_scale, h):
     assert np.allclose(Q, Q_ref, rtol=1e-8, atol=1e-10 * np.abs(Q_ref).max())
 
 
-@pytest.mark.parametrize("length_scale", [2.56e-3, 1.2e-4])
+# lam = sqrt(5) / length_scale ~ 44 and ~ 200
+@pytest.mark.parametrize("length_scale", [0.0506, 0.011])
 @pytest.mark.parametrize("h", [1e-2, 1.0 / 512, 1.0 / 8640])
 def test_finite_at_short_length_scale(length_scale, h):
     prior = MaternPrior(2, 1, length_scale=length_scale, Xi=np.eye(1))
@@ -65,7 +67,8 @@ def test_finite_at_short_length_scale(length_scale, h):
     assert np.allclose(R.T @ R, Q, rtol=1e-10, atol=1e-12 * np.abs(Q).max())
 
 
-@pytest.mark.parametrize("length_scale", [2.56e-3, 1.2e-4])
+# lam = sqrt(5) / length_scale ~ 44 and ~ 200
+@pytest.mark.parametrize("length_scale", [0.0506, 0.011])
 @pytest.mark.parametrize("h", [1e-2, 1.0 / 512, 1.0 / 8640])
 def test_precond_matern_is_the_plain_matern_in_preconditioned_coordinates(
     length_scale, h
@@ -92,8 +95,8 @@ def test_precond_matern_is_the_plain_matern_in_preconditioned_coordinates(
 
 
 def test_precond_matern_filter_matches_plain_at_short_length_scale():
-    """The configuration from the MaternPrior fix (q=2, length_scale=2.6e-3,
-    N=100 on a unit interval) must also solve with the preconditioned prior."""
+    """The configuration from the MaternPrior fix (q=2, lam ~ 44, N=100 on a
+    unit interval) must also solve with the preconditioned prior."""
 
     def vf(x, *, t):
         return -x
@@ -101,7 +104,7 @@ def test_precond_matern_filter_matches_plain_at_short_length_scale():
     m_0, P_0_sqr = taylor_mode_initialization(vf, jnp.array([1.0]), q=2)
     means = []
     for cls in (MaternPrior, PrecondMaternPrior):
-        prior = cls(2, 1, 2.6e-3)
+        prior = cls(2, 1, 0.051)
         measure = ODEInformation(vf, prior.E0, prior.E1)
         res = gaussian_filter(m_0, P_0_sqr, prior, measure, np.linspace(0.0, 1.0, 101))
         means.append(np.asarray(res.m))

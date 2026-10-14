@@ -190,6 +190,16 @@ numbers in these cases:
 - **Step-size controllers**: `PController.propose` / `PIController.propose`
   return a 0-d JAX array, and a custom controller passed to
   `gaussian_filter_adaptive` must be traceable.
+- **`MaternPrior(length_scale=l)`** (and `PrecondMaternPrior`) returns
+  different numbers for every `l != 1`: it uses the textbook length scale. The
+  correlation of the process is the Matern kernel in `sqrt(2 nu) tau / l`
+  (Rasmussen & Williams, *Gaussian Processes for Machine Learning*, 2006, Sec.
+  4.2.1, eq. 4.14), and the rate of its SDE is
+  `lambda = sqrt(2 nu) / l = sqrt(2q+1) / l` (Särkkä, Solin & Hartikainen,
+  IEEE Signal Processing Magazine 30(4), 2013, Example 1). 0.7 used
+  `lambda = sqrt((2q+1) / l)`, so its `length_scale` acted as the square of
+  the usual one: an old `l_old` corresponds to `length_scale=sqrt(l_old)`.
+  `length_scale=1` is unchanged.
 - **Preconditioned priors** run in the original coordinates with a change of
   variables per step. Solutions agree with 0.7 to rounding; at very high order
   (`q >= 8`) on fine grids the ODE-information log-likelihood is dominated by

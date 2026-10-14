@@ -48,5 +48,5 @@ def test_transition_converges_to_the_iwp_constants(q):
 
 
 def test_short_length_scale_stays_finite():
-    tr = PrecondMaternPrior(q=2, d=1, length_scale=2.6e-3).transition(1e-2)
+    tr = PrecondMaternPrior(q=2, d=1, length_scale=0.051).transition(1e-2)
     assert bool(np.all(np.isfinite(tr.A))) and bool(np.all(np.isfinite(tr.Q_sqr)))

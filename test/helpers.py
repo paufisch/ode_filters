@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from math import comb, factorial
 
 import jax
 import jax.numpy as np
+import numpy as onp
 from jax import Array
 
 # ---------------------------------------------------------------------------
@@ -252,29 +254,74 @@ def dense_kalman(
 
 
 # ---------------------------------------------------------------------------
-# Matern companion form: an independent oracle for the Matern prior
+# The textbook Matern kernel: an independent oracle for the Matern prior
 # ---------------------------------------------------------------------------
 
 
-def matern_companion(length_scale: float, q: int) -> tuple[Array, Array]:
-    """The raw companion drift ``F`` and diffusion ``S`` of a unit-variance Matern.
+def matern_kernel_derivatives(
+    q: int, length_scale: float, tau: float, n: int
+) -> onp.ndarray:
+    """``[k(tau), k'(tau), ..., k^(n)(tau)]`` of the unit-variance Matern kernel.
 
-    ``F`` is the companion matrix of ``(D + lam)^(q+1)`` with
-    ``lam = sqrt((2q+1)/length_scale)``; ``S = q_c e_q e_q.T`` with
-    ``q_c = (q!)^2 / (2q)! (2 lam)^(2q+1)``, which normalizes the stationary
-    variance of the process to one (Hartikainen & Saerkkae 2010).
+    The textbook closed form for the half-integer smoothness ``nu = q + 1/2``
+    (Rasmussen & Williams 2006, eq. 4.16), valid for ``tau >= 0``::
+
+        k(tau) = exp(-r) q! / (2q)! sum_i (q+i)! / (i! (q-i)!) (2 r)^(q-i)
+
+    with ``r = sqrt(2 nu) tau / length_scale``. It is written as
+    ``exp(-a tau) P(tau)`` with a polynomial ``P``, whose derivatives follow
+    from Leibniz' rule. At ``tau = 0`` they are the right-hand limits, which are
+    the derivatives of ``k`` up to the order ``2q`` where ``k`` is smooth.
     """
-    from math import comb, factorial
+    a = (2.0 * q + 1.0) ** 0.5 / length_scale
+    coef = [
+        factorial(q)
+        / factorial(2 * q)
+        * factorial(q + i)
+        / (factorial(i) * factorial(q - i))
+        * (2.0 * a) ** (q - i)
+        for i in range(q + 1)
+    ]
+    P = onp.polynomial.Polynomial(coef[::-1])  # coefficient of tau^(q-i)
+    return onp.array(
+        [
+            onp.exp(-a * tau)
+            * sum(comb(m, k) * (-a) ** (m - k) * P.deriv(k)(tau) for k in range(m + 1))
+            for m in range(n + 1)
+        ]
+    )
 
+
+def matern_lag_covariance(q: int, length_scale: float, h: float) -> onp.ndarray:
+    """``Cov(Y(t + h), Y(t))`` of the stationary state ``Y = [u, u', ..., u^(q)]``.
+
+    Entry ``[i, j]`` is ``d^i/ds^i d^j/dt^j k(s - t) = (-1)^j k^(i+j)(h)`` at
+    ``s - t = h >= 0``; at ``h = 0`` it is the stationary covariance.
+    """
+    k = matern_kernel_derivatives(q, length_scale, h, 2 * q)
+    i, j = onp.indices((q + 1, q + 1))
+    return (-1.0) ** j * k[i + j]
+
+
+def matern_sde(q: int, length_scale: float) -> tuple[Array, Array]:
+    """Drift ``F`` and diffusion ``S`` of the Matern state, from the kernel alone.
+
+    For a stationary Gauss-Markov state, ``Cov(Y(t + h), Y(t)) = e^{F h} Sigma``,
+    so the derivative at ``h = 0+`` is ``F Sigma``. Its first ``q`` rows are the
+    shift ``Y^(i)' = Y^(i+1)``; the last row ``(-1)^j k^(q+j+1)(0+)`` gives the
+    last row of ``F``, and the stationary Lyapunov equation
+    ``F Sigma + Sigma F.T + S = 0`` the diffusion ``S = s e_q e_q.T`` with
+    ``s = -2 (F Sigma)[q, q]``. No companion form or rate formula is assumed.
+    """
     D = q + 1
-    lam = (2.0 * q + 1.0) / length_scale
-    lam = lam**0.5
-    F = np.zeros((D, D))
-    F = F.at[np.arange(q), np.arange(1, D)].set(1.0)
-    F = F.at[q].set(np.array([-comb(D, j) * lam ** (D - j) for j in range(D)]))
-    q_c = factorial(q) ** 2 / factorial(2 * q) * (2.0 * lam) ** (2 * q + 1)
-    S = np.zeros((D, D)).at[q, q].set(q_c)
-    return F, S
+    Sigma = matern_lag_covariance(q, length_scale, 0.0)
+    k = matern_kernel_derivatives(q, length_scale, 0.0, 2 * q + 1)
+    last = onp.array([(-1.0) ** j * k[q + j + 1] for j in range(D)])  # (F Sigma)[q]
+    F = onp.eye(D, k=1)
+    F[q] = onp.linalg.solve(Sigma, last)  # Sigma is symmetric
+    S = onp.zeros((D, D))
+    S[q, q] = -2.0 * last[q]
+    return np.asarray(F), np.asarray(S)
 
 
 def van_loan(F: Array, S: Array, h: float) -> tuple[Array, Array]:
