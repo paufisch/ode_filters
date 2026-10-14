@@ -102,7 +102,8 @@ class BasePrior(eqx.Module):
         xi_diagonal: Whether ``xi`` was diagonal when the prior was built
             (``None`` if it was built from a traced ``Xi``). Static, so the
             per-component calibration can check it under ``jit``, where ``xi``
-            itself is traced.
+            itself is traced. Replacing ``xi`` with ``equinox.tree_at`` does not
+            update it; build a new prior instead.
     """
 
     q: eqx.AbstractVar[int]

@@ -1642,7 +1642,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.3.4" },
     { name = "numpyro", marker = "extra == 'inference'", specifier = ">=0.16.0" },
     { name = "optax", marker = "extra == 'inference'", specifier = ">=0.2.0" },
-    { name = "probdiffeq", marker = "extra == 'benchmarks'", specifier = ">=0.8.0" },
+    { name = "probdiffeq", marker = "extra == 'benchmarks'", specifier = ">=0.8.0,<0.9" },
     { name = "scipy", marker = "extra == 'inference'", specifier = ">=1.13" },
 ]
 provides-extras = ["examples", "inference", "benchmarks"]
@@ -1659,7 +1659,7 @@ dev = [
     { name = "numpyro", specifier = ">=0.16.0" },
     { name = "optax", specifier = ">=0.2.0" },
     { name = "pre-commit", specifier = ">=4.3.0" },
-    { name = "probdiffeq", specifier = ">=0.8.0" },
+    { name = "probdiffeq", specifier = ">=0.8.0,<0.9" },
     { name = "pyright", specifier = ">=1.1.390" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-cases", specifier = ">=3.9.1" },

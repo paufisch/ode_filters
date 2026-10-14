@@ -39,7 +39,7 @@ examples = ["matplotlib>=3.10.7"]
 inference = ["blackjax>=1.2.0", "numpyro>=0.16.0", "optax>=0.2.0", "scipy>=1.13"]
 # `pip install ode-filters[benchmarks]` to run the work-precision benchmark in
 # `benchmarks/`, which compares against probdiffeq and the classical Diffrax solver.
-benchmarks = ["diffrax>=0.6", "matplotlib>=3.10.7", "probdiffeq>=0.8.0"]
+benchmarks = ["diffrax>=0.6", "matplotlib>=3.10.7", "probdiffeq>=0.8.0,<0.9"]
 
 [project.urls]
 Homepage = "https://github.com/paufisch/ode_filters"
@@ -60,7 +60,7 @@ dev = [
     "numpyro>=0.16.0",
     "optax>=0.2.0",
     "pre-commit>=4.3.0",
-    "probdiffeq>=0.8.0",
+    "probdiffeq>=0.8.0,<0.9",  # benchmarks/ uses the 0.8 API
     "pyright>=1.1.390",  # static type checker (run in CI; see [tool.pyright])
     "pytest>=8.4.2",
     "pytest-cases>=3.9.1",

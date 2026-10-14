@@ -120,7 +120,7 @@ dimensions and vector fields are static.
 | `MaternPrior._F`, `_L`, `_q`, `S`, `n`, `A_and_Q` | removed; `length_scale` is a field, `stationary_cov_sqr()` gives the stationary law |
 | `IOUPPrior._F`, `_G` | `_drift_and_dispersion()`; the rate is the field `rate` |
 | `JointPrior._prior_x`, `_prior_u` | `prior_x`, `prior_u` |
-| a subclass calls `BasePrior.__init__(q, d, Xi)` | a subclass is an equinox module: it declares the fields `q`, `d` (static) and `xi`, sets them in its `__init__`, and implements `A(h)` and `Q_sqr(h)`; the filters call `transition(h)`, which `BasePrior` provides |
+| a subclass calls `BasePrior.__init__(q, d, Xi)` | a subclass is an equinox module: it declares the fields `q`, `d` (static) and `xi`, sets them in its `__init__`, and implements `A(h)` and `Q_sqr(h)`; the filters call `transition(h)`, which `BasePrior` provides. Optionally set the static field `xi_diagonal` (see `IWP`), which lets a diagonal calibration policy check `Xi` under `jit` |
 
 ### Information models
 
@@ -145,6 +145,7 @@ The `Correction` interface splits linearizing from conditioning.
 | --- | --- |
 | `correction.correct(measure, m_pred, P_pred_sqr, t=t)` returning a `CorrectionResult` | `correction.linearize(measure, m, t=t)` returning an `AffineModel`, and `correction.correct(measure, x, model, t=t)` with `x` a `Gaussian`, returning `(posterior, innovation)` |
 | `CorrectionResult` | removed |
+| `slr_linearize(..., t=0.0)`, `check_arg_projection(..., t=0.0)` | `t` is required (no default) |
 
 ## Gaussian algebra
 
@@ -172,6 +173,7 @@ and `log_likelihood`.
 | `InferenceProblem(build, prior, tspan=..., N=..., min_sigma_sqr=...)` | `InferenceProblem(build, prior, ts=..., calibration=policy)` |
 | `ODEFilter(..., tspan=..., N=...)` | `ODEFilter(..., ts=...)` (a tuple, so the model stays hashable) |
 | `fit` trains every array leaf of the `ODEFilter` | `fit` trains `ode_params` only |
+| `quasi_mle_sigma_sqr(m_z, P_z_sqr)`, `quasi_mle_sigma_sqr_from_Q(m_z, H, Q_sqr)` | the first argument is `mz` (and `Pz_sqr`), as everywhere else |
 
 ## Results that change
 

@@ -53,12 +53,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from probdiffeq import ivpsolve, ivpsolvers, taylor
 
-from ode_filters.filters import (
-    TaylorCorrection,
-    gaussian_filter,
-    gaussian_filter_adaptive,
-)
+from ode_filters.filters import gaussian_filter, gaussian_filter_adaptive
 from ode_filters.information import ODEInformation
+from ode_filters.linearization import TaylorCorrection
 from ode_filters.priors import IWP, taylor_mode_initialization
 
 # Standalone benchmark scripts do not see `conftest.py`, which is what enables

@@ -78,10 +78,10 @@ class TestODEInformationLinearize:
 
 
 class TestODEInformationGetNoise:
-    """Tests for get_noise method."""
+    """Tests for the noise_sqr method."""
 
-    def test_get_noise_returns_R(self):
-        """Test that get_noise returns R matrix."""
+    def test_noise_sqr_returns_the_factor_of_R(self):
+        """noise_sqr returns the square root of R."""
 
         def vf(x, *, t):
             return x
@@ -690,8 +690,8 @@ class TestConservationMethods:
         # Shape should be (d + k, (q+1)*d) = (3, 4)
         assert jacobian.shape == (3, 4)
 
-    def test_get_noise_returns_correct_shape(self, conservation_model):
-        """Test that get_noise returns correct shape."""
+    def test_noise_sqr_has_the_residual_shape(self, conservation_model):
+        """noise_sqr has the shape of the residual."""
         R = conservation_model.noise_sqr(t=0.0)
 
         # Shape should be (d + k, d + k) = (3, 3)

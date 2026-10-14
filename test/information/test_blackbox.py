@@ -173,7 +173,7 @@ class TestBlackBoxMeasurementMethods:
         assert jacobian[1, 1] == pytest.approx(1.0)
 
     def test_noise_sqr(self, bb_model):
-        """Test get_noise returns square root of R matrix."""
+        """noise_sqr returns the square root of R."""
         R_sqr = bb_model.noise_sqr(t=0.0)
         assert R_sqr.shape == (2, 2)
         # R_sqr.T @ R_sqr should reconstruct the noise covariance
@@ -328,7 +328,7 @@ class TestTransformedMeasurementMethods:
         assert jacobian.shape == (2, 4)
 
     def test_noise_sqr(self, transformed_model):
-        """Test get_noise delegates to base model."""
+        """noise_sqr delegates to the base model."""
         R = transformed_model.noise_sqr(t=0.0)
         assert R.shape == (2, 2)
 

@@ -130,7 +130,7 @@ def test_grad_fixed_filter_with_obs():
 
 
 # --------------------------------------------------------------------------- #
-# RTS smoother (plain & preconditioned) -- uses the noise-free sqr_inversion +
+# RTS smoother (plain & preconditioned) -- uses the noise-free invert +
 # reverse lax.scan, a distinct backward-AD path from the forward filter.
 # --------------------------------------------------------------------------- #
 

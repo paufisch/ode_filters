@@ -89,7 +89,9 @@ fixes below come on top.
   noise covariances are pytree leaves; orders, dimensions and vector fields are
   static. Compile with `equinox.filter_jit` (`jax.jit` with static model
   arguments fails). `measure.R = ...` becomes `measure.with_noise(...)`,
-  `E_constraint` becomes `E_lhs`, `get_noise(t=...)` becomes `noise_sqr(t=...)`.
+  `E_constraint` becomes `E_lhs`, `get_noise(t=...)` becomes `noise_sqr(t=...)`;
+  the sigma estimators take `mz`, `Pz_sqr`; `slr_linearize` and
+  `check_arg_projection` take `t` without a default.
 - **Results.** `FilterResult` is in the original state coordinates for every
   prior (`m_bar`, `P_bar_sqr` and `T` are gone), gains `diffusion`,
   `n_accepted`, `n_rejected` and `steps`, and its field order changed.
