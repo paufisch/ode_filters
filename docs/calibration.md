@@ -1,4 +1,4 @@
-# Diffusion Calibration
+# Diffusion calibration
 
 Probabilistic ODE filters quantify uncertainty by propagating a Gaussian
 covariance. The *magnitude* of that covariance is governed by a scalar

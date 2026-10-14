@@ -1,7 +1,13 @@
-![ODE Filters logo](assets/logo.svg#only-light){ width="240" }
-![ODE Filters logo](assets/logo-dark.svg#only-dark){ width="240" }
+---
+# The sidebar would list only this page (the sections are header tabs).
+hide:
+  - navigation
+---
 
-# ODE Filters
+<h1 class="wordmark">
+  <img src="assets/logo-wordmark.svg#only-light" alt="ODE Filters" width="320">
+  <img src="assets/logo-wordmark-dark.svg#only-dark" alt="ODE Filters" width="320">
+</h1>
 
 [![PyPI](https://img.shields.io/pypi/v/ode-filters.svg)](https://pypi.org/project/ode-filters/)
 [![Python](https://img.shields.io/pypi/pyversions/ode-filters.svg)](https://pypi.org/project/ode-filters/)

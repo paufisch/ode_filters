@@ -1,4 +1,4 @@
-# Linearization Schemes (Corrections)
+# Linearization schemes
 
 A probabilistic ODE filter step has two independent concerns: *what* to observe
 (the measurement model — the ODE residual and conservation laws; external data

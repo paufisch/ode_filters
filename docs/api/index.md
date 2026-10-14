@@ -1,4 +1,4 @@
-# API Reference
+# API reference
 
 The API mirrors the package layout. New here? Read
 [What is a probabilistic ODE solver?](../probabilistic-ode-solvers.md) and

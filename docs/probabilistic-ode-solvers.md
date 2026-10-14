@@ -11,11 +11,6 @@ classical solver's estimate; the covariance quantifies the numerical uncertainty
 introduced by taking finite steps. `ode_filters` computes this posterior with
 Kalman filtering and smoothing.
 
-!!! tip "One-sentence intuition"
-    Solving an ODE is recast as **tracking a moving target**: just like a Kalman
-    filter tracks an object from noisy sensor readings, a probabilistic ODE solver
-    tracks the solution curve, using *the ODE itself* as the measurement.
-
 ## The four ingredients
 
 Every solve in `ode_filters` is built from the same four pieces (you will meet

@@ -4,8 +4,9 @@ repo_url: https://github.com/paufisch/ode_filters
 docs_dir: docs
 theme:
   name: material
+  custom_dir: overrides
   logo: assets/logo-header.svg
-  favicon: assets/favicon.svg
+  favicon: assets/icon.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -22,6 +23,8 @@ theme:
         icon: material/weather-sunny
         name: Switch to light mode
   features:
+    # Top-level sections become header tabs, so the sidebar lists one section.
+    - navigation.tabs
     - navigation.sections
     - navigation.indexes
     - navigation.top
@@ -38,6 +41,8 @@ plugins:
       # Fail the (strict) build when a notebook cell raises, instead of
       # rendering the traceback into the page.
       allow_errors: false
+      # Title notebook pages from the nav, not from their first heading.
+      ignore_h1_titles: true
       # Cells tagged "hide-input" show only their output (e.g. a figure).
       remove_tag_config:
         remove_input_tags:
@@ -95,26 +100,27 @@ nav:
   - Getting started:
       - What is a probabilistic ODE solver?: probabilistic-ode-solvers.md
       - Quickstart: examples/quickstart.ipynb
-      - Notation & conventions: notation.md
-      - Sharp bits & FAQ: sharp-bits.md
       - How it compares: comparison.md
       - Migrating from 0.7: migration.md
-  - Inference from data:
-      - Parameter estimation: examples/parameter-estimation.ipynb
-      - Recovering a hidden input: examples/hidden-input.ipynb
-      - Bayesian posterior sampling: examples/bayesian-sampling.ipynb
-  - Solving ODEs:
-      - Basic usage: examples/examples.ipynb
-      - Second-order systems: examples/second-order-systems.ipynb
-      - Advanced features: examples/advanced-features.ipynb
-      - Calibration modes: examples/calibration-modes.ipynb
-  - How-to guides:
+  - Tutorials:
+      - Solving ODEs:
+          - Multi-dimensional systems: examples/examples.ipynb
+          - Second-order systems: examples/second-order-systems.ipynb
+          - Conservation laws: examples/conservation-laws.ipynb
+          - Calibration modes: examples/calibration-modes.ipynb
+      - Inference from data:
+          - Parameter estimation: examples/parameter-estimation.ipynb
+          - Recovering a hidden input: examples/hidden-input.ipynb
+          - Bayesian posterior sampling: examples/bayesian-sampling.ipynb
+  - Guides:
       - How to choose: how-to-choose.md
       - Linearization schemes: corrections.md
       - Diffusion calibration: calibration.md
       - Adaptive step-size control: adaptive-steps.ipynb
-  - API Reference:
-      - Overview: api/index.md
+      - Notation & conventions: notation.md
+      - Sharp bits & FAQ: sharp-bits.md
+  - API reference:
+      - api/index.md
       - Filters: api/filters/index.md
       - Linearization: api/linearization/index.md
       - Information: api/information/index.md

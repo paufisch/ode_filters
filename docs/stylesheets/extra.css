@@ -6,6 +6,14 @@
   max-width: 1440px;
 }
 
+/* Sidebars: a little wider than Material's 12.1rem, so that most page and
+   section titles fit on one line. Below 76.25em the navigation is a drawer. */
+@media screen and (min-width: 76.25em) {
+  .md-sidebar {
+    width: 13.5rem;
+  }
+}
+
 /* Identifiers in table cells: keep them on one line instead of breaking
    mid-word (Material's default `word-break: break-word` on code). */
 .md-typeset td code,
@@ -24,6 +32,11 @@
 /* API reference: a little air between consecutive objects. */
 .md-typeset .doc-object + .doc-object {
   margin-top: 2.5rem;
+}
+
+/* Home page title: the wordmark image, without the line box's descender gap. */
+.md-typeset h1.wordmark {
+  line-height: 0;
 }
 
 /* Home page cards: equal height, link pinned to the bottom. */

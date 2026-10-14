@@ -3,6 +3,7 @@ probnum_venv/*
 *DS_Store
 *posterior_updates
 *.svg
+!docs/assets/*.svg
 *.npz
 *.pyc
 

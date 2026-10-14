@@ -1,9 +1,9 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/paufisch/ode_filters/main/docs/assets/logo-dark.svg">
-  <img alt="ODE Filters logo" src="https://raw.githubusercontent.com/paufisch/ode_filters/main/docs/assets/logo.svg" width="240">
-</picture>
-
-# ODE Filters
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/paufisch/ode_filters/main/docs/assets/logo-wordmark-dark.svg">
+    <img alt="ODE Filters" src="https://raw.githubusercontent.com/paufisch/ode_filters/main/docs/assets/logo-wordmark.svg" width="320">
+  </picture>
+</h1>
 
 [![PyPI](https://img.shields.io/pypi/v/ode-filters.svg)](https://pypi.org/project/ode-filters/)
 [![Python](https://img.shields.io/pypi/pyversions/ode-filters.svg)](https://pypi.org/project/ode-filters/)

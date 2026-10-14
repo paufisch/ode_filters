@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {#- Material links theme.favicon without a type. Declare the SVG explicitly,
+      add a PNG for browsers without SVG favicons (Safari before 26), and an
+      opaque touch icon, which Safari otherwise looks for at the site root. -#}
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ 'assets/icon-32.png' | url }}">
+  <link rel="icon" type="image/svg+xml" href="{{ config.theme.favicon | url }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ 'assets/apple-touch-icon.png' | url }}">
+{% endblock %}
