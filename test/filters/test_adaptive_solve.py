@@ -24,6 +24,7 @@ from ode_filters.information import (
     Measurement,
     ODEInformationWithHidden,
 )
+from test.helpers import assert_grad_matches_fd
 
 SAVE_AT = np.linspace(0.0, 2.0, 5)
 
@@ -83,9 +84,12 @@ def test_vmap_over_initial_conditions():
 
     x0_batch = np.array([[0.3], [0.5], [0.7]])
     out = jax.vmap(solve)(x0_batch)
-    assert out.shape == (3,)
-    assert np.all(np.isfinite(out))
-    assert np.all(np.diff(out) > 0)  # larger x0 -> larger logistic value at t=2
+    looped = np.array([jax.jit(solve)(x0) for x0 in x0_batch])
+    assert np.allclose(out, looped, rtol=1e-10)
+    # The logistic solution x0 e^t / (1 - x0 + x0 e^t) at t = 2.
+    x0 = x0_batch[:, 0]
+    exact = x0 * np.exp(2.0) / (1.0 - x0 + x0 * np.exp(2.0))
+    assert np.allclose(out, exact, atol=1e-2)
 
 
 def test_reverse_grad_matches_finite_difference():
@@ -104,12 +108,7 @@ def test_reverse_grad_matches_finite_difference():
         )
         return res.m[-1, 0]
 
-    theta = np.array(1.3)
-    g = jax.grad(endpoint)(theta)
-    eps = 1e-5
-    fd = (endpoint(theta + eps) - endpoint(theta - eps)) / (2 * eps)
-    assert np.isfinite(g)
-    assert abs(float(g) - float(fd)) < 1e-5
+    assert_grad_matches_fd(endpoint, np.array(1.3), rtol=0.0, atol=1e-5)
 
 
 @pytest.mark.parametrize("calibration", ["dynamic", "none", "diagonal_ekf0"])
@@ -241,12 +240,7 @@ def test_obs_model_grad_matches_finite_difference():
         )
         return res.log_likelihood
 
-    theta = np.array(1.1)
-    g = jax.grad(loglik)(theta)
-    eps = 1e-5
-    fd = (loglik(theta + eps) - loglik(theta - eps)) / (2 * eps)
-    assert np.isfinite(g)
-    assert abs(float(g) - float(fd)) < 1e-3 * (1.0 + abs(float(fd)))  # relative
+    assert_grad_matches_fd(loglik, np.array(1.1), rtol=1e-3, atol=1e-3)
 
 
 def test_obs_model_wrong_length_raises():

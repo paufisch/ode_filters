@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import equinox as eqx
 import jax
 import jax.numpy as np
 import jax.random as jrandom
@@ -96,9 +97,11 @@ def _model_and_data(lam_init):
 
 
 def test_loglik_with_wrapped_param():
+    """The wrapper changes the parametrization, not the likelihood."""
     model, data = _model_and_data(0.5)
     ll = model.loglik(data)
-    assert np.isfinite(ll)
+    plain = eqx.tree_at(lambda m: m.ode_params, model, np.array([0.5]))
+    assert float(ll) == pytest.approx(float(plain.loglik(data)), rel=1e-12)
 
 
 @pytest.mark.standard_promotion

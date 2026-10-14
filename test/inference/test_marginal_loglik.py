@@ -13,9 +13,10 @@ import jax.numpy as np
 import jax.random as jrandom
 import pytest
 
-from ode_filters import InferenceProblem, marginal_loglik
+from ode_filters import InferenceProblem, gaussian_filter, marginal_loglik
 from ode_filters.information import Measurement, ODEInformation, prepare_observations
 from ode_filters.priors import IWP
+from test.helpers import assert_close, assert_grad_matches_fd
 
 X0 = 2.0
 LAM_TRUE = 0.8
@@ -56,17 +57,33 @@ def _loglik(lam, problem, data):
     return marginal_loglik({"lam": lam}, data, model=problem)
 
 
-def test_loglik_scalar_and_finite():
+def _direct(lam, problem, data):
+    """The filter run ``marginal_loglik`` stands for, spelled out."""
+    m_0, P_0_sqr, measure = problem.build({"lam": lam})
+    return gaussian_filter(
+        m_0,
+        P_0_sqr,
+        problem.prior,
+        measure,
+        problem.ts,
+        calibration=problem.calibration,
+        obs_model=data,
+    )
+
+
+def test_loglik_is_the_data_evidence_of_the_filter():
     problem, data = _problem_and_data()
     ll = marginal_loglik({"lam": np.array(LAM_TRUE)}, data, model=problem)
     assert ll.shape == ()
-    assert np.isfinite(ll)
+    expected = _direct(np.array(LAM_TRUE), problem, data).log_likelihood_obs
+    assert_close(ll, expected, rtol=1e-13)
 
 
 def test_loglik_jittable():
     problem, data = _problem_and_data()
     f = jax.jit(lambda lam: _loglik(lam, problem, data))
-    assert np.isfinite(f(np.array(LAM_TRUE)))
+    lam = np.array(LAM_TRUE)
+    assert_close(f(lam), _loglik(lam, problem, data), rtol=1e-12)
 
 
 def test_loglik_peaks_near_true():
@@ -79,11 +96,7 @@ def test_loglik_peaks_near_true():
 def test_grad_matches_finite_difference():
     problem, data = _problem_and_data()
     f = jax.jit(lambda lam: _loglik(lam, problem, data))
-    lam0 = np.array(0.6)
-    g = jax.grad(f)(lam0)
-    eps = 1e-4
-    fd = (f(lam0 + eps) - f(lam0 - eps)) / (2 * eps)
-    assert np.allclose(g, fd, rtol=1e-3, atol=1e-3)
+    assert_grad_matches_fd(f, np.array(0.6), eps=1e-4, rtol=1e-3, atol=1e-3)
 
 
 def test_vmap_over_theta():
@@ -142,7 +155,8 @@ def test_channel_ode_needs_no_observations():
     ll_ode = marginal_loglik(
         {"lam": np.array(LAM_TRUE)}, None, model=problem, channel="ode"
     )
-    assert np.isfinite(ll_ode)
+    expected = _direct(np.array(LAM_TRUE), problem, None).log_likelihood
+    assert_close(ll_ode, expected, rtol=1e-13)
 
 
 def test_channel_validation():
@@ -168,14 +182,13 @@ def test_channel_both_is_grad_safe():
     """Both channels are differentiable w.r.t. theta."""
     problem, obs_model = _problem_and_data()
 
-    def loss(theta):
+    def loss(lam):
         ll_ode, ll_obs = marginal_loglik(
-            theta, obs_model, model=problem, channel="both"
+            {"lam": lam}, obs_model, model=problem, channel="both"
         )
         return -(ll_ode + ll_obs)
 
-    g = jax.jit(jax.grad(loss))({"lam": np.array(LAM_TRUE)})
-    assert np.isfinite(g["lam"])
+    assert_grad_matches_fd(loss, np.array(LAM_TRUE), eps=1e-4, rtol=1e-3, atol=1e-3)
 
 
 def test_prior_fn_fits_prior_hyperparameters():

@@ -10,7 +10,14 @@ import jax.numpy as np
 import jax.random as jrandom
 import pytest
 
-from ode_filters import IteratedTaylorCorrection, ODEFilter, TaylorCorrection, fit
+from ode_filters import (
+    IteratedTaylorCorrection,
+    ODEFilter,
+    ODEInformation,
+    TaylorCorrection,
+    fit,
+    gaussian_filter,
+)
 from ode_filters.information import Measurement, prepare_observations
 from ode_filters.priors import IWP
 
@@ -63,11 +70,24 @@ def test_fit_recovers_parameter_with_correction(correction):
     assert float(losses[-1]) < float(losses[0])
 
 
-def test_loglik_method_finite():
+def test_loglik_method_is_the_data_evidence_of_the_filter():
     model, data = _model_and_data(0.7)
     ll = model.loglik(data)
     assert ll.shape == ()
-    assert np.isfinite(ll)
+    prior = model.prior
+    measure = ODEInformation(lambda x, *, t: -0.7 * x, prior.E0, prior.E1)
+    m_0, P_0_sqr = model.init_fn(model.ode_params)
+    expected = gaussian_filter(
+        m_0,
+        P_0_sqr,
+        prior,
+        measure,
+        np.asarray(model.ts),
+        calibration="none",
+        obs_model=data,
+    ).log_likelihood_obs
+    assert expected is not None
+    assert float(ll) == pytest.approx(float(expected), rel=1e-12)
 
 
 @pytest.mark.standard_promotion

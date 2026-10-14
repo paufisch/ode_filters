@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import jax
 import jax.numpy as np
 import pytest
 
@@ -20,6 +19,11 @@ from ode_filters import (
 from ode_filters.calibration.sigma import (
     posthoc_mle_sigma_sqr,
     quasi_mle_sigma_sqr_from_Q,
+)
+from test.helpers import (
+    assert_close,
+    assert_grad_matches_fd,
+    assert_grad_matches_fd_vector,
 )
 
 CALIBRATIONS = ["dynamic", "diagonal", "diagonal_ekf0", "none"]
@@ -60,6 +64,10 @@ def test_diagonal_calibration_returns_one_diffusion_per_component():
     prior, m_0, P_0_sqr, measure = _logistic()
     res = gaussian_filter(m_0, P_0_sqr, prior, measure, TS, calibration="diagonal")
     assert res.sigma_sqr.shape == (TS.shape[0] - 1, 1)
+    # With one component, the per-component estimate is the scalar one.
+    scalar = gaussian_filter(m_0, P_0_sqr, prior, measure, TS, calibration="dynamic")
+    assert_close(res.sigma_sqr[:, 0], scalar.sigma_sqr, rtol=1e-10)
+    assert_close(res.m, scalar.m, rtol=1e-10)
 
 
 def test_posthoc_calibration_of_an_uncalibrated_run():
@@ -134,9 +142,8 @@ def test_differentiable_in_the_initial_state_and_in_xi(calibration):
         res = gaussian_filter(m_0, P_0_sqr, prior, measure, ts, calibration=calibration)
         return res.log_likelihood
 
-    assert bool(np.all(np.isfinite(jax.grad(by_mean)(m_0))))
-    value, grad = jax.value_and_grad(by_xi)(np.array([1.0]))
-    assert np.isfinite(value) and bool(np.all(np.isfinite(grad)))
+    assert_grad_matches_fd_vector(by_mean, m_0)
+    assert_grad_matches_fd(lambda xi: by_xi(xi[None]), np.array(1.0))
 
 
 def test_a_concrete_non_diagonal_xi_is_still_rejected():

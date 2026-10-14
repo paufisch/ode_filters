@@ -185,6 +185,9 @@ class TestJointPriorProjections:
 
         E0 = joint.E0
         assert E0.shape == (4, 8)  # (d_x + d_u, D_x + D_u)
+        # Each block derivative-major: x in entries 0..1, u in entries 4..5.
+        picked = E0 @ np.arange(8.0)
+        assert np.array_equal(picked, np.array([0.0, 1.0, 4.0, 5.0]))
 
     def test_E0_x_and_E0_hidden_multidimensional(self):
         """Test E0_x and E0_hidden with multi-dimensional states."""

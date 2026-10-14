@@ -25,7 +25,7 @@ from ode_filters import (
     taylor_mode_initialization,
 )
 from ode_filters.information import Measurement
-from test.helpers import assert_close, cov
+from test.helpers import assert_close, assert_grad_matches_fd, cov
 
 TSPAN = (0.0, 2.0)
 N = 40
@@ -175,5 +175,6 @@ def test_jit_and_grad():
         res = gaussian_filter(m_0, P_0_sqr, prior, measure, TS, calibration="none")
         return res.m[-1, 0]
 
-    assert np.isfinite(jax.jit(endpoint)(np.array(1.0)))
-    assert np.isfinite(jax.grad(endpoint)(np.array(1.0)))
+    theta = np.array(1.0)
+    assert_close(jax.jit(endpoint)(theta), endpoint(theta), rtol=1e-13)
+    assert_grad_matches_fd(endpoint, theta)

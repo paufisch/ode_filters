@@ -84,6 +84,11 @@ fixes below come on top.
   errors; CI also runs them under strict JAX promotion and runtime type checks,
   against the newest allowed dependencies (weekly and on pull requests), and
   runs the benchmark in a quick mode.
+- Tests: a consistency battery that runs every prior, correction, calibration
+  policy, driver and output under `jit`, `vmap` and `grad` (checked against
+  finite differences), with a float32 tier compared against float64; a
+  linear test problem driven by a hidden input, with its closed-form solution;
+  value checks in place of many shape- or finiteness-only assertions.
 
 ### Changed
 

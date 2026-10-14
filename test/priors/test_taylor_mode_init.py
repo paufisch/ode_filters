@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as np
 import pytest
 
@@ -37,6 +38,10 @@ def test_taylor_mode_initialization_vector_field_runs_and_flattens():
 
     assert result.ndim == 1
     assert result.shape[0] == len(x0) * (3 + 1)
+    # Derivative-major: x, then x' = f(x), then x'' = J_f(x) f(x), ...
+    dx = vf(x0, t=0.0)
+    ddx = jax.jacfwd(lambda y: vf(y, t=0.0))(x0) @ dx
+    assert np.allclose(result[:6], np.concatenate([x0, dx, ddx]), rtol=1e-14)
 
 
 def test_taylor_mode_initialization_rejects_invalid_inputs():
@@ -137,8 +142,9 @@ def test_taylor_mode_initialization_second_order_multidim():
 
     result, _ = taylor_mode_initialization(vf, (x0, v0), q=2, order=2)
 
-    # State dimension: d * (q+1) = 2 * 3 = 6
-    assert result.shape == (6,)
+    # [x, x', x''] with x'' = -x - 0.1 x'.
+    expected = np.array([1.0, 2.0, 0.0, 0.0, -1.0, -2.0])
+    assert np.allclose(result, expected, rtol=1e-15)
 
 
 def test_taylor_mode_initialization_rejects_invalid_order():

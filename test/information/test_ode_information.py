@@ -41,8 +41,9 @@ class TestODEInformationLinearize:
 
         H, c = model.linearize(state, t=0.0)
 
-        assert H.shape == (1, 2)  # (d, (q+1)*d)
-        assert c.shape == (1,)  # (d,)
+        # g = x' - x^2: H = [-2x, 1] and c = g - H @ state = x^2 at x = 1.
+        assert np.allclose(H, np.array([[-2.0, 1.0]]), rtol=1e-15)
+        assert np.allclose(c, np.array([1.0]), rtol=1e-15)
 
     def test_linearize_satisfies_affine_approximation(self):
         """Test that H @ state + c ≈ g(state)."""
@@ -254,13 +255,11 @@ class TestComposableConstraints:
 
         model = ODEInformation(vf, E0, E1, constraints=[conservation])
 
-        # ODE (2) + conservation (1) = 3, independent of time
-        state = np.array([1.0, 1.0, -1.0, -1.0])
-        g_t0 = model.g(state, t=0.0)
-        assert g_t0.shape == (3,)
-
-        g_t05 = model.g(state, t=0.5)
-        assert g_t05.shape == (3,)
+        # ODE rows x' + x and the row x1 + x2 - 2, independent of time.
+        state = np.array([1.0, 2.0, -1.0, -1.0])
+        expected = np.array([0.0, 1.0, 1.0])
+        assert np.allclose(model.g(state, t=0.0), expected, rtol=1e-15)
+        assert np.allclose(model.g(state, t=0.5), expected, rtol=1e-15)
 
 
 class TestHiddenStates:
@@ -617,6 +616,8 @@ class TestConservationConstruction:
         # Model has one Conservation constraint
         assert len(model.constraints) == 1
         assert isinstance(model.constraints[0], Conservation)
+        assert np.array_equal(model.constraints[0].A, A)
+        assert np.array_equal(model.constraints[0].p, p)
 
     def test_rejects_mismatched_A_p_shapes(self):
         """Test that mismatched A and p shapes raise error."""
@@ -663,12 +664,12 @@ class TestConservationMethods:
 
     def test_g_returns_combined_residual(self, conservation_model):
         """Test that g returns ODE residual plus conservation residual."""
-        # State: [x1, x1', x2, x2'] = [1.0, 0.5, 1.0, -0.5]
+        # State layout for d=2, q=1: [x1, x2, x1', x2'] = [1.0, 0.5, 1.0, -0.5]
         state = np.array([1.0, 0.5, 1.0, -0.5])
         result = conservation_model.g(state, t=0.0)
 
-        # Should have d + k = 2 + 1 = 3 components
-        assert result.shape == (3,)
+        # ODE rows x' + x = [2.0, 0.0], then the conservation row x1 + x2 - 2.
+        assert np.allclose(result, np.array([2.0, 0.0, -0.5]), rtol=1e-15)
 
     def test_g_conservation_constraint_satisfied(self, conservation_model):
         """Test g when conservation constraint is satisfied."""
@@ -687,15 +688,20 @@ class TestConservationMethods:
         state = np.array([1.0, 0.5, 1.0, -0.5])
         jacobian = conservation_model.jacobian_g(state, t=0.0)
 
-        # Shape should be (d + k, (q+1)*d) = (3, 4)
-        assert jacobian.shape == (3, 4)
+        # ODE rows E1 + E0 (of x' + x), then the conservation row A @ E0.
+        expected = np.array(
+            [[1.0, 0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 1.0], [1.0, 1.0, 0.0, 0.0]]
+        )
+        assert np.allclose(jacobian, expected, rtol=1e-15)
 
     def test_noise_sqr_has_the_residual_shape(self, conservation_model):
         """noise_sqr has the shape of the residual."""
         R = conservation_model.noise_sqr(t=0.0)
 
-        # Shape should be (d + k, d + k) = (3, 3)
+        # (d + k, d + k) = (3, 3), and zero up to the Cholesky jitter: the ODE
+        # rows are noise-free by default and the conservation rows are exact.
         assert R.shape == (3, 3)
+        assert np.allclose(R, np.zeros((3, 3)), atol=1e-12)
 
 
 @pytest.mark.wrong_input_types

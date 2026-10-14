@@ -29,6 +29,7 @@ from ode_filters import (
 from ode_filters.gaussian import Gaussian, invert, marginalize
 from ode_filters.gaussian.algebra import _safe_qr
 from ode_filters.priors import taylor_mode_initialization
+from test.helpers import assert_grad_matches_fd_vector
 
 TSPAN = (0.0, 2.0)
 N_STEPS = 20
@@ -36,19 +37,6 @@ N_STEPS = 20
 
 def logistic(x, *, t):
     return x * (1.0 - x)
-
-
-def _central_diff(f, x, h=1e-6):
-    return np.array(
-        [
-            (
-                f(x + np.zeros_like(x).at[i].set(h))
-                - f(x - np.zeros_like(x).at[i].set(h))
-            )
-            / (2 * h)
-            for i in range(x.shape[0])
-        ]
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -100,9 +88,7 @@ def test_safe_qr_gradient_of_the_reconstructed_covariance_is_correct():
         return np.sum(R.T @ R)
 
     theta = np.array([0.3, -0.15])
-    ad = jax.grad(cov_sum)(theta)
-    fd = _central_diff(cov_sum, theta)
-    assert onp.allclose(ad, fd, rtol=1e-6)
+    assert_grad_matches_fd_vector(cov_sum, theta, eps=1e-6, rtol=1e-6, atol=1e-8)
 
 
 def test_marginalization_takes_a_zero_factor_without_nan_gradients():
@@ -240,11 +226,9 @@ def test_smoothed_covariance_gradient_matches_finite_differences():
         _, P_sqr = _smoothed(mu, prior, measure, P_0_sqr)
         return np.sum(np.einsum("kij,kil->kjl", P_sqr, P_sqr))
 
-    ad = jax.grad(cov_sum)(m_0)
-    fd = _central_diff(cov_sum, m_0)
     # The trailing components are ~1e-8 against an O(1) objective, where central
     # differences are dominated by cancellation; compare on the shared scale.
-    assert onp.allclose(ad, fd, rtol=5e-3, atol=1e-10)
+    assert_grad_matches_fd_vector(cov_sum, m_0, eps=1e-6, rtol=5e-3, atol=1e-10)
 
 
 def test_values_are_unchanged_and_continuous_in_a_regularizing_jitter():
