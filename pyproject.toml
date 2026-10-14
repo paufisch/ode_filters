@@ -63,7 +63,6 @@ dev = [
     "probdiffeq>=0.8.0,<0.9",  # benchmarks/ uses the 0.8 API
     "pyright>=1.1.390",  # static type checker (run in CI; see [tool.pyright])
     "pytest>=8.4.2",
-    "pytest-cases>=3.9.1",
     "pytest-cov>=7.0.0",
     "scipy>=1.13",  # reference solver in test_solver_validity (hard import)
 ]
