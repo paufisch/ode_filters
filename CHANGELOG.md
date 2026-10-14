@@ -76,6 +76,10 @@ fixes below come on top.
 - Tooling: ruff's docstring rules (Google convention) and an ASCII-only check
   for the package source; ruff also lints the notebooks; a `slow` marker for
   the MCMC runs of the example scripts; a float32 smoke test.
+- Tooling: the tests run in parallel (pytest-xdist) and treat warnings as
+  errors; CI also runs them under strict JAX promotion and runtime type checks,
+  against the newest allowed dependencies (weekly and on pull requests), and
+  runs the benchmark in a quick mode.
 
 ### Changed
 
