@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import functools
-
 import jax
 import jax.numpy as np
 import numpy as onp
 from jax import Array
 from jax.scipy.linalg import expm
 from jax.typing import ArrayLike
+
+from ._constants import cached_constants
 
 # Number of Gauss-Legendre nodes for the Matern square-root matrix-fraction
 # decomposition. 64 reconstructs Q(h) to ~1e-13 for every order up to the float64
@@ -18,7 +18,7 @@ from jax.typing import ArrayLike
 QUAD_NODES = 64
 
 
-@functools.lru_cache
+@cached_constants
 def _leggauss(n_quad: int) -> tuple[onp.ndarray, onp.ndarray]:
     return onp.polynomial.legendre.leggauss(n_quad)
 

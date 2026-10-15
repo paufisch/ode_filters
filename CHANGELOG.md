@@ -190,6 +190,12 @@ fixes below come on top.
 
 ### Fixed
 
+- Switching `jax_enable_x64` within one process no longer corrupts later
+  solves. From JAX 0.9.2 on, JAX keeps the device copy of a NumPy constant
+  captured under `jit` across the switch, keyed by the array object, and the
+  priors reused cached constant arrays: a float64 solve after a float32 one ran
+  on float32 constants (eight digits short), and a float32 solve after a
+  float64 one warned. The cached constants are now handed out as fresh copies.
 - `rts_smoother`, `sample_posterior` and smoothed `interpolate` returned NaN
   after a calibrated diffusion of exactly zero. The default dynamic calibration
   gives one for a solve started exactly at an equilibrium (or a solution the
