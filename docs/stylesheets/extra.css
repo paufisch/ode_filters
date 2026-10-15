@@ -55,3 +55,389 @@
   width: 100%;
   height: auto;
 }
+
+/* ---------------------------------------------------------------------------
+   The animated logo mark (overrides/partials/logo.html) and its echoes in the
+   navigation. The O stays put: the observation swings round it into place,
+   and the bold half follows, both on damped springs. Hovering the logo swaps
+   the halves, as at the letter joins of the wordmark, and the observation
+   pings. */
+
+:root {
+  --ode-amber: #ff8f00;
+  --ode-pale: #9fa8da;
+  --ode-bold: #4051b5;
+  --ode-ring: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='12.7 8.7 38.6 40.6'%3E%3Cellipse cx='32' cy='29' rx='16' ry='17' fill='none' stroke='%23000' stroke-width='6.6'/%3E%3C/svg%3E");
+  /* Step responses of damped springs, sampled: the observation leads, light
+     and bouncy (17% overshoot); the bold half follows, heavier (12%). */
+  --ode-spring-lead: linear(
+    0, 0, 0.001, 0.003, 0.009, 0.021, 0.041, 0.07, 0.11, 0.16, 0.222, 0.295,
+    0.377, 0.466, 0.56, 0.657, 0.753, 0.845, 0.93, 1.003, 1.064, 1.111,
+    1.144, 1.163, 1.171, 1.167, 1.155, 1.136, 1.113, 1.087, 1.061, 1.035,
+    1.011, 0.991, 0.973, 0.96, 0.95, 0.945, 0.942, 0.943, 0.946, 0.95,
+    0.957, 0.963, 0.97, 0.977, 0.984, 0.989, 0.994, 0.997, 1
+  );
+  --ode-spring-follow: linear(
+    0, 0, 0.001, 0.003, 0.008, 0.017, 0.032, 0.054, 0.085, 0.125, 0.173,
+    0.231, 0.296, 0.369, 0.447, 0.529, 0.612, 0.695, 0.774, 0.848, 0.914,
+    0.97, 1.018, 1.055, 1.083, 1.103, 1.114, 1.119, 1.118, 1.113, 1.104,
+    1.093, 1.081, 1.068, 1.055, 1.042, 1.031, 1.02, 1.012, 1.005, 0.999,
+    0.995, 0.992, 0.991, 0.99, 0.991, 0.992, 0.994, 0.996, 0.998, 1
+  );
+  --ode-pop: cubic-bezier(0.3, 1.6, 0.5, 1);
+  --ode-ease: cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+
+[data-md-color-scheme="slate"] {
+  --ode-amber: #ffa726;
+  --ode-pale: #5c6bc0;
+  --ode-bold: #e8eaf6;
+}
+
+/* Header (and drawer) logo, on the primary colour. */
+.ode-mark {
+  overflow: visible;
+}
+
+.ode-mark__strands {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 6.6;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 0.9s var(--ode-spring-follow);
+}
+
+.ode-mark__base {
+  stroke-opacity: 0.55;
+}
+
+/* The bold half is one dash of a path once round the O; moving the dash swings
+   it round clockwise, from the top, after the observation. */
+.ode-mark__bold {
+  stroke-linecap: round;
+  stroke-dasharray: 0.5 0.5;
+  animation: ode-swing 1.2s 0.28s var(--ode-spring-follow) both;
+}
+
+/* The observation orbits the centre of the O, 22.2 units above its box. */
+.ode-mark__orbit {
+  transform-box: fill-box;
+  transform-origin: 50% -231.25%;
+  animation: ode-orbit 1.1s var(--ode-spring-lead) both;
+}
+
+.ode-mark__dot,
+.ode-mark__ring {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* It pops up at the top, and glows once when the bold half arrives. */
+.ode-mark__dot {
+  fill: #ffb300;
+  stroke: #ffb300;
+  stroke-opacity: 0;
+  animation:
+    ode-pop 0.4s var(--ode-pop) both,
+    ode-glow 0.8s 0.75s ease-out;
+}
+
+.ode-mark__ring {
+  fill: none;
+  stroke: #ffb300;
+  stroke-width: 1.6;
+  opacity: 0;
+}
+
+/* Later pages of a visit show the mark at rest (overrides/main.html)... */
+[data-ode-mark="seen"] .ode-mark__bold,
+[data-ode-mark="seen"] .ode-mark__orbit,
+[data-ode-mark="seen"] .ode-mark__dot {
+  animation: none;
+}
+
+/* ...except the page a click on the logo leads to. It starts from the hover
+   position, the halves swapped: the observation circles the O once, and the
+   halves turn on after it, into place (or round to the hover position again,
+   if the pointer is still there). The page script then sets the mark to
+   "seen", which hands the halves back to the hover transition. */
+[data-ode-mark="clicked"] .ode-mark__strands {
+  transition: none;
+  animation: ode-unswap 1.2s 0.28s var(--ode-spring-follow) both;
+}
+
+[data-ode-mark="clicked"] .ode-mark__bold {
+  animation: none;
+}
+
+[data-ode-mark="clicked"] .ode-mark__orbit {
+  animation: ode-circle 1.1s cubic-bezier(0.45, 0, 0.3, 1) both;
+}
+
+[data-ode-mark="clicked"] .ode-mark__dot {
+  animation: ode-glow 0.8s 0.75s ease-out;
+}
+
+/* Material dims header buttons on hover; the logo animates instead. */
+.md-header__button.md-logo:is(:hover, :focus) {
+  opacity: 1;
+}
+
+.md-logo:is(:hover, :focus-visible) .ode-mark__strands {
+  transform: rotate(180deg);
+}
+
+.md-logo:is(:hover, :focus-visible) .ode-mark__ring {
+  animation: ode-ping 0.9s ease-out;
+}
+
+/* Header tabs: the active section carries the observation, a dot under its
+   label, which drops in when the section changes (overrides/main.html);
+   hovering another tab previews it. */
+.md-tabs__link {
+  position: relative;
+}
+
+.md-tabs__link::after {
+  content: "";
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 50%;
+  width: 0.3rem;
+  height: 0.3rem;
+  margin-left: -0.15rem;
+  border-radius: 50%;
+  background-color: #ffb300;
+  opacity: 0;
+  transform: scale(0);
+  transition:
+    opacity 0.2s,
+    transform 0.25s cubic-bezier(0.3, 1.7, 0.55, 1);
+}
+
+.md-tabs__link:is(:hover, :focus-visible)::after {
+  opacity: 0.6;
+  transform: scale(0.7);
+}
+
+.md-tabs__item--active .md-tabs__link::after {
+  opacity: 1;
+  transform: none;
+  animation: ode-drop 0.5s 0.15s cubic-bezier(0.3, 1.7, 0.55, 1) both;
+}
+
+[data-ode-tab="same"] .md-tabs__item--active .md-tabs__link::after {
+  animation: none;
+}
+
+/* Navigation sidebar: the active entry carries a small O with the observation
+   at its own hour, at rest. Hovering an entry brings its mark in, the
+   observation moving out from the centre of the O and both turning the last
+   few degrees to the hour, so a click lands on the mark already in place. The
+   k-th of n entries in a list sits k/(n + 1) of the way round from 12 o'clock,
+   so the n hours and 12 divide the clock evenly. The marks sit in a gutter
+   left of every entry, wide enough for the observation at any hour (the text
+   never moves), and only where the sidebar is a column. */
+@property --ode-turn {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@property --ode-reach {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@media screen and (min-width: 76.25em) {
+  .md-sidebar--primary a.md-nav__link {
+    position: relative;
+    padding-left: 1.35em;
+  }
+
+  /* Room for the observation at 12 o'clock on an entry at the very top, such
+     as a section's title, which the scroll area would clip. */
+  .md-sidebar--primary .md-sidebar__inner {
+    padding-top: 0.15rem;
+  }
+
+  /* n: the entries in the list (the lists here have up to nine; longer ones
+     count as twelve); k: the entry's place in it. */
+  .md-sidebar--primary .md-nav__list {
+    --ode-n: 12;
+  }
+
+  .md-sidebar--primary .md-nav__list:has(> :last-child:nth-child(1)) { --ode-n: 1; }
+  .md-sidebar--primary .md-nav__list:has(> :last-child:nth-child(2)) { --ode-n: 2; }
+  .md-sidebar--primary .md-nav__list:has(> :last-child:nth-child(3)) { --ode-n: 3; }
+  .md-sidebar--primary .md-nav__list:has(> :last-child:nth-child(4)) { --ode-n: 4; }
+  .md-sidebar--primary .md-nav__list:has(> :last-child:nth-child(5)) { --ode-n: 5; }
+  .md-sidebar--primary .md-nav__list:has(> :last-child:nth-child(6)) { --ode-n: 6; }
+  .md-sidebar--primary .md-nav__list:has(> :last-child:nth-child(7)) { --ode-n: 7; }
+  .md-sidebar--primary .md-nav__list:has(> :last-child:nth-child(8)) { --ode-n: 8; }
+  .md-sidebar--primary .md-nav__list:has(> :last-child:nth-child(9)) { --ode-n: 9; }
+  .md-sidebar--primary .md-nav__list:has(> :last-child:nth-child(10)) { --ode-n: 10; }
+  .md-sidebar--primary .md-nav__list:has(> :last-child:nth-child(11)) { --ode-n: 11; }
+
+  .md-sidebar--primary .md-nav__item {
+    --ode-at: calc(360deg * var(--ode-k) / (var(--ode-n) + 1));
+  }
+
+  .md-sidebar--primary .md-nav__item:nth-child(12n + 1) { --ode-k: 1; }
+  .md-sidebar--primary .md-nav__item:nth-child(12n + 2) { --ode-k: 2; }
+  .md-sidebar--primary .md-nav__item:nth-child(12n + 3) { --ode-k: 3; }
+  .md-sidebar--primary .md-nav__item:nth-child(12n + 4) { --ode-k: 4; }
+  .md-sidebar--primary .md-nav__item:nth-child(12n + 5) { --ode-k: 5; }
+  .md-sidebar--primary .md-nav__item:nth-child(12n + 6) { --ode-k: 6; }
+  .md-sidebar--primary .md-nav__item:nth-child(12n + 7) { --ode-k: 7; }
+  .md-sidebar--primary .md-nav__item:nth-child(12n + 8) { --ode-k: 8; }
+  .md-sidebar--primary .md-nav__item:nth-child(12n + 9) { --ode-k: 9; }
+  .md-sidebar--primary .md-nav__item:nth-child(12n + 10) { --ode-k: 10; }
+  .md-sidebar--primary .md-nav__item:nth-child(12n + 11) { --ode-k: 11; }
+  .md-sidebar--primary .md-nav__item:nth-child(12n + 12) { --ode-k: 12; }
+
+  /* A section's own page (its title) sits at 12 o'clock, where its pages
+     start. */
+  .md-sidebar--primary .md-nav__container > a.md-nav__link {
+    --ode-at: 0deg;
+  }
+
+  /* The halves are a conic split, cut to the O by the mask. */
+  .md-sidebar--primary a.md-nav__link::before {
+    content: "";
+    position: absolute;
+    top: 0.27em;
+    left: 0;
+    width: 0.72em;
+    height: 0.76em;
+    background: conic-gradient(
+      from calc(var(--ode-turn) - 90deg),
+      var(--ode-bold) 0.5turn,
+      var(--ode-pale) 0
+    );
+    mask: var(--ode-ring) center / contain no-repeat;
+    opacity: 0;
+    --ode-turn: calc(var(--ode-at) - 60deg);
+    transition:
+      opacity 0.25s,
+      --ode-turn 0.5s 0.06s var(--ode-ease);
+  }
+
+  /* Centred on the O, and moved out to the hour. */
+  .md-sidebar--primary a.md-nav__link::after {
+    content: "";
+    position: absolute;
+    top: 0.52em;
+    left: 0.23em;
+    width: 0.26em;
+    height: 0.26em;
+    border-radius: 50%;
+    background-color: var(--ode-amber);
+    opacity: 0;
+    transform: rotate(var(--ode-turn)) translateY(calc(0em - var(--ode-reach)));
+    --ode-turn: calc(var(--ode-at) - 60deg);
+    --ode-reach: 0em;
+    transition:
+      opacity 0.2s,
+      --ode-turn 0.45s var(--ode-ease),
+      --ode-reach 0.3s ease-out;
+  }
+
+  .md-sidebar--primary a.md-nav__link:is(:hover, :focus-visible)::before,
+  .md-sidebar--primary a.md-nav__link:is(:hover, :focus-visible)::after,
+  .md-sidebar--primary a.md-nav__link--active::before,
+  .md-sidebar--primary a.md-nav__link--active::after {
+    opacity: 1;
+    --ode-turn: var(--ode-at);
+  }
+
+  .md-sidebar--primary a.md-nav__link:is(:hover, :focus-visible)::after,
+  .md-sidebar--primary a.md-nav__link--active::after {
+    --ode-reach: 0.59em;
+  }
+
+  /* The active entry's mark is simply there. */
+  .md-sidebar--primary a.md-nav__link--active::before,
+  .md-sidebar--primary a.md-nav__link--active::after {
+    transition: none;
+  }
+}
+
+@keyframes ode-swing {
+  from {
+    stroke-dashoffset: -0.5;
+  }
+}
+
+@keyframes ode-orbit {
+  from {
+    transform: rotate(-180deg);
+  }
+}
+
+@keyframes ode-unswap {
+  from {
+    transform: rotate(-180deg);
+  }
+}
+
+/* Once round, a little past the bottom and back: a fixed overshoot, which a
+   spring would scale with the full turn. */
+@keyframes ode-circle {
+  from {
+    transform: rotate(-360deg);
+  }
+  62% {
+    transform: rotate(14deg);
+  }
+  84% {
+    transform: rotate(-4deg);
+  }
+}
+
+@keyframes ode-pop {
+  from {
+    transform: scale(0);
+  }
+}
+
+@keyframes ode-glow {
+  from {
+    stroke-width: 0;
+    stroke-opacity: 0.5;
+  }
+  to {
+    stroke-width: 8;
+    stroke-opacity: 0;
+  }
+}
+
+@keyframes ode-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-0.4rem) scale(0);
+  }
+}
+
+@keyframes ode-ping {
+  from {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ode-mark *,
+  .md-tabs__link::after,
+  .md-nav__link::before,
+  .md-nav__link::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

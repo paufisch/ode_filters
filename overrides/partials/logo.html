@@ -1,0 +1,14 @@
+{#- The logo mark inline (not an <img>), so that docs/stylesheets/extra.css can
+    animate its parts: on load the observation swings round the O into place
+    and the bold half follows it; on hover the halves swap. Same geometry as
+    docs/assets/icon.svg; the colours come from the stylesheet. -#}
+<svg class="ode-mark" viewBox="5.75 8.6 52.5 52.5" aria-hidden="true" focusable="false">
+  <g class="ode-mark__strands">
+    <ellipse class="ode-mark__base" cx="32" cy="29" rx="16" ry="17"/>
+    <path class="ode-mark__bold" pathLength="1" d="M16 29A16 17 0 0 0 48 29A16 17 0 0 0 16 29"/>
+  </g>
+  <g class="ode-mark__orbit">
+    <circle class="ode-mark__ring" cx="32" cy="56" r="4.8"/>
+    <circle class="ode-mark__dot" cx="32" cy="56" r="4.8"/>
+  </g>
+</svg>
