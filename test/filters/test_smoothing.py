@@ -2,9 +2,9 @@
 
 Posterior samples and dense output (``sample_posterior``, ``interpolate``), and
 smoothing through a step whose calibrated diffusion is zero: from an exact
-(Taylor-mode) initial state such a step leaves the predicted covariance
-singular, and the backward conditional's triangular solve (``invert``) gives
-NaN. A positive ``min_sigma_sqr`` floor avoids it; the failure is pinned below.
+(Taylor-mode) initial state such a step leaves components of the predicted
+state with exactly zero variance, which the backward conditional (``invert``)
+gives a zero gain.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from ode_filters import (
     ODEInformation,
     affine_filter,
     gaussian_filter,
+    gaussian_filter_adaptive,
     interpolate,
     rts_smoother,
     sample_posterior,
@@ -207,10 +208,18 @@ def _pendulum(x, *, t):
     return np.array([x[1], -np.sin(x[0])])
 
 
+def _one_at_rest(x, *, t):
+    """A moving component next to one that stays at its equilibrium."""
+    return np.array([x[0] * (1.0 - x[0]), -x[1]])
+
+
 # (vector field, initial value, calibration policy without a floor)
 ZERO_DIFFUSION = {
     "equilibrium-dynamic": (_logistic, [1.0], DynamicCalibration),
     "at-rest-diagonal": (_pendulum, [1.0, 0.0], DiagonalCalibration),
+    # Every step has a zero-variance block next to a moving one, which the
+    # backward gain must leave out without disturbing the moving block.
+    "one-at-rest-diagonal": (_one_at_rest, [0.1, 0.0], DiagonalCalibration),
 }
 
 
@@ -221,30 +230,79 @@ def _solve(name, min_sigma_sqr):
     m_0, P_0_sqr = taylor_mode_initialization(vf, x0, q=2)
     measure = ODEInformation(vf, prior.E0, prior.E1)
     calibration = policy(min_sigma_sqr=min_sigma_sqr)
-    return gaussian_filter(m_0, P_0_sqr, prior, measure, TS, calibration=calibration)
+    result = gaussian_filter(m_0, P_0_sqr, prior, measure, TS, calibration=calibration)
+    return prior, result
 
 
 @pytest.mark.parametrize("name", list(ZERO_DIFFUSION))
 def test_the_first_diffusion_is_exactly_zero(name):
     """Guard the premise, and that the filter itself stays finite."""
-    result = _solve(name, 0.0)
+    _, result = _solve(name, 0.0)
     assert float(np.min(result.sigma_sqr[0])) == 0.0
     assert bool(np.all(np.isfinite(result.m)))
     assert bool(np.all(np.isfinite(result.P_sqr)))
 
 
-@pytest.mark.xfail(
-    strict=True, reason="invert divides by the singular predicted covariance"
-)
 @pytest.mark.parametrize("name", list(ZERO_DIFFUSION))
-def test_smoothing_through_a_zero_diffusion_is_finite(name):
-    smoothed = rts_smoother(_solve(name, 0.0))
+def test_smoothing_through_a_zero_diffusion_is_its_vanishing_floor_limit(name):
+    """The zero-variance components get a zero backward gain.
+
+    That is the limit of a floor going to zero: a floor of 1e-30 gives the
+    same smoothed means, and the same covariances up to the variance the floor
+    itself adds.
+    """
+    prior, result = _solve(name, 0.0)
+    smoothed = rts_smoother(result)
+    _, floored = _solve(name, 1e-30)
+    limit = rts_smoother(floored)
+    assert_close(smoothed.m, limit.m, rtol=1e-12)
+    assert_close(cov(smoothed.P_sqr), cov(limit.P_sqr), rtol=1e-12, atol=1e-28)
+    sample = sample_posterior(jax.random.PRNGKey(0), result)
+    dense = interpolate(result, prior, np.linspace(0.05, 1.95, 7))
+    assert bool(np.all(np.isfinite(sample)))
+    assert bool(np.all(np.isfinite(dense.m)))
+    assert bool(np.all(np.isfinite(dense.P_sqr)))
+
+
+def test_smoothing_at_an_equilibrium_returns_the_filter():
+    """A zero diffusion throughout: the posterior is the exact, certain path."""
+    _, result = _solve("equilibrium-dynamic", 0.0)
+    smoothed = rts_smoother(result)
+    assert bool(np.all(smoothed.m == result.m))
+    assert float(np.max(np.abs(smoothed.P_sqr))) == 0.0
+
+
+def test_the_adaptive_smoother_at_an_equilibrium_is_finite():
+    vf, x0, _ = ZERO_DIFFUSION["equilibrium-dynamic"]
+    m_0, P_0_sqr = taylor_mode_initialization(vf, np.array(x0), q=2)
+    measure = ODEInformation(vf, PRIOR.E0, PRIOR.E1)
+    result = gaussian_filter_adaptive(m_0, P_0_sqr, PRIOR, measure, TS, smoother=True)
+    smoothed = rts_smoother(result)
+    assert bool(result.success)
     assert bool(np.all(np.isfinite(smoothed.m)))
+    assert bool(np.all(np.isfinite(smoothed.P_sqr)))
+
+
+def test_the_gradient_through_a_zero_diffusion_smoother_is_finite():
+    """Finite, but not the derivative of the calibrated solve.
+
+    With a zero diffusion the ODE information has no weight, so this is the
+    derivative of the Taylor extrapolation; a nearby initial value gives the
+    derivative of the solution (see the sharp bits on a system at rest).
+    """
+
+    def total(x0):
+        m_0, P_0_sqr = taylor_mode_initialization(_logistic, x0, q=2)
+        measure = ODEInformation(_logistic, PRIOR.E0, PRIOR.E1)
+        result = gaussian_filter(m_0, P_0_sqr, PRIOR, measure, TS)
+        return np.sum(rts_smoother(result).m)
+
+    assert bool(np.all(np.isfinite(jax.grad(total)(np.array([1.0])))))
 
 
 @pytest.mark.parametrize("name", list(ZERO_DIFFUSION))
 def test_a_diffusion_floor_keeps_the_smoother_finite(name):
-    result = _solve(name, 1e-12)
+    _, result = _solve(name, 1e-12)
     smoothed = rts_smoother(result)
     assert bool(np.all(np.isfinite(smoothed.m)))
     assert bool(np.all(np.isfinite(smoothed.P_sqr)))

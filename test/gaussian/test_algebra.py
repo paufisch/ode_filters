@@ -84,6 +84,36 @@ def test_invert_matches_dense_bayes_rule(seed, n, k, noise_free):
     assert _is_upper_triangular(conditional.P_sqr)
 
 
+@pytest.mark.parametrize(
+    "P_sqr",
+    [
+        # The zero-variance state comes first, so the zero column of Cov(z)'s
+        # QR factor sits left of columns whose entries stay in its row.
+        np.array([[0.0, 0.8, 0.3], [0.0, 0.5, -0.4], [0.0, 0.0, 0.9]]),
+        np.zeros((3, 3)),
+    ],
+    ids=["partly-degenerate", "all-zero"],
+)
+def test_invert_gives_zero_variance_components_a_zero_gain(P_sqr):
+    """A ``z`` component with exactly zero variance: the pseudo-inverse gain."""
+    A = np.array([[1.0, 0.0, 0.0], [0.3, 1.0, 0.0], [0.0, -0.5, 1.0]])
+    Q_sqr = np.array([[0.0, 0.0, 0.0], [0.0, 0.6, 0.2], [0.0, 0.0, 0.7]])
+    x = Gaussian(np.array([1.0, 2.0, 3.0]), P_sqr)
+    z = marginalize(A, np.zeros(3), Q_sqr, x)
+    assert float(cov(z.P_sqr)[0, 0]) == 0.0
+
+    conditional = invert(A, Q_sqr, x, z)
+
+    P, S = cov(P_sqr), cov(z.P_sqr)
+    G = P @ A.T @ np.linalg.pinv(S)
+    assert_close(conditional.G, G, atol=1e-14)
+    assert float(np.max(np.abs(conditional.G[:, 0]))) == 0.0
+    assert_close(conditional.d, x.m - G @ z.m, atol=1e-14)
+    B = np.eye(3) - G @ A
+    joseph = B @ P @ B.T + G @ cov(Q_sqr) @ G.T
+    assert_close(cov(conditional.P_sqr), joseph, atol=1e-14)
+
+
 @given(seed=seeds, n=dims, k=dims)
 def test_update_and_log_likelihood_match_dense_kalman(seed, n, k):
     keys = jax.random.split(jax.random.PRNGKey(seed), 4)

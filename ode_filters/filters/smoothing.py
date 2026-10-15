@@ -63,6 +63,12 @@ def sample_posterior(key: Array, result: FilterResult) -> Array:
     not a sample from the marginals. The key is split into one key per node.
     Vmap over keys for many paths.
 
+    With exact ODE information (zero noise ``R``) the posterior is singular and
+    the path for a given key depends on which square-root factor the QR returns:
+    a batched and a looped run can differ, and the path is not smooth in the
+    model's parameters. Each path is still an exact draw. A small ODE noise,
+    e.g. ``measure.with_noise(1e-10)``, makes the paths reproducible.
+
     Args:
         key: A ``jax.random`` key.
         result: A ``FilterResult`` with backward conditionals.

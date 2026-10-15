@@ -189,6 +189,14 @@ fixes below come on top.
 
 ### Fixed
 
+- `rts_smoother`, `sample_posterior` and smoothed `interpolate` returned NaN
+  after a calibrated diffusion of exactly zero. The default dynamic calibration
+  gives one for a solve started exactly at an equilibrium (or a solution the
+  prior reproduces, like `x' = 1`), diagonal calibration for a component at
+  rest. `invert` now gives a component with exactly zero variance a zero gain
+  (the pseudo-inverse), the limit of a vanishing `min_sigma_sqr`; all other
+  results are unchanged bit for bit. Gradients at such a point still need a
+  floor (see the sharp bits).
 - `taylor_mode_initialization` and `joint_taylor_initialization` held the time
   at `t0`, so the higher initial derivatives of a time-dependent vector field
   were wrong (`x''' = 1` instead of `0` for `x' = cos(t) x` at `t0 = 0`). Time
