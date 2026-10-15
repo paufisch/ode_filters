@@ -72,11 +72,43 @@ A dash means we found no dedicated support, not that it cannot be built.
   linearization error should enter the uncertainty (statistical linearization,
   the IPLS); or when you want to check a fit with innovation diagnostics.
 
+## Speed
+
+The [work-precision benchmark](https://github.com/paufisch/ode_filters/tree/main/benchmarks)
+times `ode_filters`, probdiffeq and Diffrax on three problems, with the prior
+of order `q = 3` in float64 on a CPU. With adaptive steps `ode_filters` and
+probdiffeq are within a small factor of each other, each ahead on some
+problems; on a fixed grid probdiffeq is faster for the same accuracy. Diffrax's
+Tsit5, which computes no covariance, is one to two orders of magnitude faster
+than either.
+
+<figure markdown="span">
+  ![Work-precision diagram of the three libraries with adaptive steps](assets/work-precision.svg)
+  <figcaption><strong>Adaptive steps.</strong> Relative trajectory RMSE against
+  the median runtime of one solve, sweeping the tolerance (atol = rtol, 1e-3 to
+  1e-9). Colour: library. Circles with solid lines: first-order linearization
+  (EK1, probdiffeq's ts1); triangles with dashed lines: zeroth order (EK0, ts0);
+  squares: Diffrax's Tsit5. Lower left is better. Points with an error above 1
+  are left out.</figcaption>
+</figure>
+
+<figure markdown="span">
+  ![Work-precision diagram of the three libraries on a fixed grid](assets/work-precision-fixed.svg)
+  <figcaption><strong>Fixed grid.</strong> As above, but every solver runs the
+  same uniform grid of 80 to 1280 steps, Diffrax with a constant step
+  size.</figcaption>
+</figure>
+
+Measured on 2026-10-14 on an Apple M4 Pro with JAX 0.8.0, probdiffeq 0.8.0,
+Diffrax 0.7.2 and the development version of `ode_filters` (commit `631a50b`).
+Each runtime is the median of 20 timing rounds after compilation; the
+interquartile range is a few percent of it (at most 11 %), smaller than the
+markers. Timings depend on the machine.
+
 ## Classical solvers
 
 [Diffrax](https://docs.kidger.site/diffrax/) and SciPy's
 [`solve_ivp`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.integrate.solve_ivp.html)
 return a point trajectory and are faster for the same accuracy: they compute
-no covariance. Use them when you need the solution and nothing else. The
-[work-precision benchmark](https://github.com/paufisch/ode_filters/tree/main/benchmarks)
-compares `ode_filters`, probdiffeq and Diffrax on three problems.
+no covariance (see [Speed](#speed)). Use them when you need the solution and
+nothing else.
