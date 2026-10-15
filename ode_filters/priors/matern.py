@@ -25,7 +25,6 @@ References:
 
 from __future__ import annotations
 
-import functools
 from math import comb, factorial
 
 import equinox as eqx
@@ -36,6 +35,7 @@ from jax.scipy.linalg import expm
 from jax.typing import ArrayLike
 
 from ..gaussian.algebra import _cholesky_upper
+from ._constants import cached_constants
 from ._lti import QUAD_NODES, _gauss_legendre, _sqr_noise_via_quadrature
 from .base import (
     BasePrior,
@@ -47,7 +47,7 @@ from .base import (
 from .iwp import _iwp_T_diag
 
 
-@functools.lru_cache
+@cached_constants
 def _matern_constants(q: int) -> tuple[onp.ndarray, float, onp.ndarray]:
     """Length-scale-free pieces of the scalar Matern prior, built once per ``q``.
 

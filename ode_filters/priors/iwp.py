@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 from math import comb, factorial
 
 import equinox as eqx
@@ -12,6 +11,7 @@ from jax import Array
 from jax.typing import ArrayLike
 
 from ..gaussian.algebra import _cholesky_upper
+from ._constants import cached_constants
 from .base import (
     BasePrior,
     Transition,
@@ -21,7 +21,7 @@ from .base import (
 )
 
 
-@functools.lru_cache
+@cached_constants
 def _iwp_constants(q: int) -> tuple[onp.ndarray, onp.ndarray, onp.ndarray]:
     """Step-size-independent pieces of the scalar IWP, built once per ``q``.
 
