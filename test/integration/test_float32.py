@@ -25,10 +25,11 @@ from ode_filters import (
 def _fresh_jax_caches():
     """Keep the float32 solve from leaking into later float64 tests.
 
-    JAX 0.11 (not 0.8) keeps the device copy of a NumPy constant used under
-    ``jit`` across a change of ``jax_enable_x64``: after a float32 solve, the
-    cached prior constants (``_iwp_constants``) came back as float32 in the
-    float64 tests that ran next in the same process, eight digits short.
+    From JAX 0.9.2 on (0.9.1 is fine; still in 0.11.2), a NumPy constant used
+    under ``jit`` keeps its device copy across a change of ``jax_enable_x64``,
+    keyed by the array object: after a float32 solve, the cached prior
+    constants (``_iwp_constants``) came back as float32 in the float64 tests
+    that ran next in the same process, eight digits short. A JAX bug.
     """
     jax.clear_caches()
     yield
