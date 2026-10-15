@@ -100,7 +100,7 @@ than either.
 </figure>
 
 Measured on 2026-10-14 on an Apple M4 Pro with JAX 0.8.0, probdiffeq 0.8.0,
-Diffrax 0.7.2 and the development version of `ode_filters` (commit `631a50b`).
+Diffrax 0.7.2 and a pre-release of `ode_filters` 0.8.0 (commit `631a50b`).
 Each runtime is the median of 20 timing rounds after compilation; the
 interquartile range is a few percent of it (at most 11 %), smaller than the
 markers. Timings depend on the machine.

@@ -7,6 +7,8 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-15
+
 A breaking release that rebuilds the package around one filter step and turns it
 towards inference from data. Every solver -- fixed grid, adaptive, frozen
 linearization, iterated smoother -- now runs the same step; preconditioned priors
@@ -597,7 +599,8 @@ single consolidated solver API and a differentiable parameter-inference layer.
 part of the public API and is not jit/grad-able. Prefer `gaussian_filter_adaptive`.
 
 [res]: https://paufisch.github.io/ode_filters/api/filters/
-[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/paufisch/ode_filters/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/paufisch/ode_filters/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/paufisch/ode_filters/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/paufisch/ode_filters/compare/v0.7.0...v0.7.1
