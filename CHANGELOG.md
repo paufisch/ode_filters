@@ -71,7 +71,8 @@ fixes below come on top.
 - Docs: an *Inference from data* tutorial track (parameter estimation, a hidden
   input, Bayesian sampling), a *How it compares* page, the migration guide, and
   an API page for `ode_filters.calibration`. CI checks every internal link of
-  the built site (`.github/scripts/check_site_links.py`). A project logo.
+  the built site (`.github/scripts/check_site_links.py`). A project logo,
+  animated in the docs header, tabs and navigation.
 - `probdiffeq` joins the `benchmarks` extra.
 - Tooling: ruff's docstring rules (Google convention) and an ASCII-only check
   for the package source; ruff also lints the notebooks; a `slow` marker for

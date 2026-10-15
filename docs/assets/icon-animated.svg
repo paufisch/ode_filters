@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -3 64 64" role="img" aria-labelledby="title">
+  <title id="title">ODE Filters</title>
+  <!-- The O of the logo, animated once: the O stays put, the observation
+       swings round it into place and the bold half follows, both on damped
+       springs (as in docs/stylesheets/extra.css); the observation glows when
+       the bold half arrives. The frame is wider than icon.svg's, centred on
+       the O, so that the orbit fits. -->
+  <style>
+    svg {
+      --lead: linear(
+        0, 0, 0.001, 0.003, 0.009, 0.021, 0.041, 0.07, 0.11, 0.16, 0.222, 0.295,
+        0.377, 0.466, 0.56, 0.657, 0.753, 0.845, 0.93, 1.003, 1.064, 1.111,
+        1.144, 1.163, 1.171, 1.167, 1.155, 1.136, 1.113, 1.087, 1.061, 1.035,
+        1.011, 0.991, 0.973, 0.96, 0.95, 0.945, 0.942, 0.943, 0.946, 0.95,
+        0.957, 0.963, 0.97, 0.977, 0.984, 0.989, 0.994, 0.997, 1
+      );
+      --follow: linear(
+        0, 0, 0.001, 0.003, 0.008, 0.017, 0.032, 0.054, 0.085, 0.125, 0.173,
+        0.231, 0.296, 0.369, 0.447, 0.529, 0.612, 0.695, 0.774, 0.848, 0.914,
+        0.97, 1.018, 1.055, 1.083, 1.103, 1.114, 1.119, 1.118, 1.113, 1.104,
+        1.093, 1.081, 1.068, 1.055, 1.042, 1.031, 1.02, 1.012, 1.005, 0.999,
+        0.995, 0.992, 0.991, 0.99, 0.991, 0.992, 0.994, 0.996, 0.998, 1
+      );
+    }
+    .base, .bold { fill: none; stroke-width: 6.6; }
+    .bold { stroke-linecap: round; stroke-dasharray: 0.5 0.5;
+      animation: swing 1.2s 0.28s var(--follow) both; }
+    .orbit { transform-box: fill-box; transform-origin: 50% -231.25%;
+      animation: orbit 1.1s var(--lead) both; }
+    .dot { fill: #FF8F00; stroke: #FF8F00; stroke-opacity: 0;
+      transform-box: fill-box; transform-origin: center;
+      animation: pop 0.4s cubic-bezier(0.3, 1.6, 0.5, 1) both, glow 0.8s 0.75s ease-out; }
+    @keyframes swing { from { stroke-dashoffset: -0.5; } }
+    @keyframes orbit { from { transform: rotate(-180deg); } }
+    @keyframes pop { from { transform: scale(0); } }
+    @keyframes glow { from { stroke-width: 0; stroke-opacity: 0.5; } to { stroke-width: 8; stroke-opacity: 0; } }
+    @media (prefers-reduced-motion: reduce) { .bold, .orbit, .dot { animation: none; } }
+  </style>
+  <ellipse class="base" stroke="#9FA8DA" cx="32" cy="29" rx="16" ry="17"/>
+  <path class="bold" stroke="#4051B5" pathLength="1" d="M16 29A16 17 0 0 0 48 29A16 17 0 0 0 16 29"/>
+  <g class="orbit">
+    <circle class="dot" cx="32" cy="56" r="4.8"/>
+  </g>
+</svg>
