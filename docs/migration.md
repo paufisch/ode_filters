@@ -1,6 +1,6 @@
-# Migrating from 0.7
+# Migrating from 0.7 to 0.8
 
-This release reorganizes the package around one filter step and makes the
+Release 0.8.0 reorganizes the package around one filter step and makes the
 models JAX pytrees. It breaks the 0.7 API in one go, with no deprecation
 period: this page lists every change a 0.7 user can hit, old on the left and
 new on the right. The [changelog](https://github.com/paufisch/ode_filters/blob/main/CHANGELOG.md)
