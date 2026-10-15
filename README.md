@@ -1,4 +1,9 @@
-# ODE Filters
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/paufisch/ode_filters/main/docs/assets/logo-wordmark-dark.svg">
+    <img alt="ODE Filters" src="https://raw.githubusercontent.com/paufisch/ode_filters/main/docs/assets/logo-wordmark.svg" width="320">
+  </picture>
+</h1>
 
 [![PyPI](https://img.shields.io/pypi/v/ode-filters.svg)](https://pypi.org/project/ode-filters/)
 [![Python](https://img.shields.io/pypi/pyversions/ode-filters.svg)](https://pypi.org/project/ode-filters/)
@@ -6,21 +11,19 @@
 [![Docs](https://img.shields.io/badge/docs-latest-brightgreen)](https://paufisch.github.io/ode_filters/)
 [![Coverage](https://codecov.io/gh/paufisch/ode_filters/branch/main/graph/badge.svg)](https://codecov.io/gh/paufisch/ode_filters)
 
-A JAX-based implementation of probabilistic ODE solvers using Gaussian filtering and smoothing. This package provides tools for solving ordinary differential equations while quantifying uncertainty through Bayesian inference.
+Fit ODE models to data, with the solver's numerical error accounted for. `ode_filters` is a probabilistic ODE solver in JAX: it returns a Gaussian distribution over the solution instead of a single trajectory, and it treats the ODE as information about the solution, on the same footing as data. One square-root Kalman filter conditions on the ODE, on noisy measurements, on conservation laws and on an unknown input that drives the system, which gives a likelihood of the data that is differentiable in every parameter of the model.
 
 ## Features
 
-- **Pure JAX implementation** - Fully differentiable and JIT-compilable
-- **Square-root filtering** - Numerically stable EKF and RTS smoothing
-- **Flexible priors** - Integrated Wiener Process (IWP), Matern, and joint priors
-- **First and second-order ODEs** - Native support for both ODE types
-- **Constraint handling** - Conservation laws and time-varying measurements
-- **State-parameter estimation** - Joint inference with hidden states
-- **Black-box measurements** - Custom observation models with autodiff Jacobians
-- **Transformed measurements** - Nonlinear state transformations with chain-rule Jacobians
-- **Pluggable linearization** - EK0 / EK1 / IEKF corrections, selectable per solve
-- **Adaptive step sizes** - jit/vmap/grad-safe adaptive solving, with optional fixed-point smoothing
-- **Parameter estimation** - Differentiable marginal likelihood with an Optax-friendly `fit` API
+- **Inference from data** - a differentiable marginal likelihood for any parameter of the ODE or the prior; `fit_scipy` (L-BFGS-B), `fit` (Optax), NumPyro and BlackJAX
+- **Hidden inputs** - joint state-input priors recover an unknown force driving the system, with information criteria for what the data say about it
+- **Evidence for hyperparameters** - the sequential data evidence and the conditional evidence given the ODE (Fenrir, Dalton)
+- **Outputs** - smoothed marginals, joint posterior samples, dense output, observation predictives, innovation diagnostics (NIS, whitened residuals)
+- **The ODE as information** - first- and second-order ODEs, conservation laws, black-box and transformed operators, data at any grid node
+- **Pluggable linearization** - EK0, EK1, IEKF and statistical linearization, plus the IEKS and IPLS smoothers
+- **Priors** - integrated Wiener, Matern, integrated Ornstein-Uhlenbeck and joint priors, plain or preconditioned
+- **Calibrated uncertainty** - online and post-hoc diffusion calibration; fixed grids of any spacing and adaptive steps
+- **Pure JAX, square-root form** - `jit`, `vmap` and `grad` through every solver; numerically stable QR-based filtering and smoothing
 
 ## Installation
 
@@ -28,60 +31,94 @@ Install the latest release from PyPI:
 
 ```bash
 pip install ode-filters
+pip install "ode-filters[inference]"  # with Optax, SciPy, NumPyro and BlackJAX
 ```
 
-Or install from source with development dependencies:
+Or install from source with the development tools (tests, linting, type checking):
 
 ```bash
 git clone https://github.com/paufisch/ode_filters.git
 cd ode_filters
-pip install -e ".[dev]"
+uv sync --group dev
 ```
 
-## Quick Example
+With pip 25.1 or newer, `pip install -e . --group dev` does the same.
+
+## Quick example
+
+Estimate the growth rate of the logistic ODE from noisy data:
 
 ```python
+import jax
 import jax.numpy as np
+
 from ode_filters import (
     IWP,
+    InferenceProblem,
+    Measurement,
     ODEInformation,
-    gaussian_filter,
-    rts_smoother,
+    PositiveReal,
+    fit_scipy,
+    marginal_loglik,
+    prepare_observations,
     taylor_mode_initialization,
 )
 
-# Define ODE: dx/dt = -x (exponential decay)
-def vf(x, *, t):
-    return -x
+jax.config.update("jax_enable_x64", True)
 
-x0 = np.array([1.0])
-tspan = (0.0, 5.0)  # a tuple: hashable for use as a jax.jit static argument
+# Noisy observations of the logistic ODE x' = r x (1 - x), x(0) = 0.1
+ts = np.linspace(0.0, 10.0, 101)
+x = 1.0 / (1.0 + 9.0 * np.exp(-0.8 * ts[1:]))
+y = x + 0.02 * jax.random.normal(jax.random.PRNGKey(0), x.shape)
 
-# Set up the prior and the ODE-information measurement model
-prior = IWP(q=2, d=1, Xi=0.5 * np.eye(1))
-mu_0, Sigma_0_sqr = taylor_mode_initialization(vf, x0, q=2)
-measure = ODEInformation(vf, prior.E0, prior.E1)
+prior = IWP(q=2, d=1)
+data = prepare_observations(
+    [Measurement(np.eye(1), y[:, None], ts[1:], noise=0.02**2)], prior.E0, ts
+)
 
-# Filter on a fixed grid, then smooth
-result = gaussian_filter(mu_0, Sigma_0_sqr, prior, measure, tspan, N=50)
-m_smooth, P_smooth_sqr = rts_smoother(prior, result)
 
-# result.m / result.P_sqr -> filtered means / square-root covariances at the grid
-# result.log_likelihood   -> calibrated marginal log-likelihood
+# The ODE, as a function of the unknown rate r
+def build(theta):
+    def vf(x, *, t):
+        return theta["r"] * x * (1.0 - x)
+
+    m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([0.1]), q=2)
+    return m_0, P_0_sqr, ODEInformation(vf, prior.E0, prior.E1)
+
+
+# Maximize the likelihood of the data, numerical error included
+problem = InferenceProblem(build=build, prior=prior, ts=ts)
+theta, _ = fit_scipy(
+    lambda th: -marginal_loglik(th, data, model=problem), {"r": PositiveReal(0.3)}
+)
+print(f"r = {theta['r'].unwrap():.3f}  (true: 0.8)")
+# r = 0.793  (true: 0.8)
 ```
 
-For adaptive step sizes, use `gaussian_filter_adaptive(mu_0, Sigma_0_sqr, prior,
-measure, save_at=...)` — it is `jit` / `vmap` / `grad`-safe; pass `smoother=True`
-to also get a fixed-point smoothing pass that `rts_smoother` consumes.
+Solving an ODE without data is the same filter without the data:
+
+```python
+from ode_filters import gaussian_filter, rts_smoother
+
+vf = lambda x, *, t: 0.8 * x * (1.0 - x)
+m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([0.1]), q=2)
+result = gaussian_filter(m_0, P_0_sqr, prior, ODEInformation(vf, prior.E0, prior.E1), ts)
+posterior = rts_smoother(result)  # posterior.m, posterior.std: mean and error estimate
+```
+
+Upgrading from 0.7? See the [migration guide](https://paufisch.github.io/ode_filters/migration/).
 
 ## Package Structure
 
 ```
 ode_filters/
-├── filters/          # EKF and RTS smoothing loops
-├── inference/        # Square-root Gaussian algebra
-├── measurement/      # ODE and observation models
-└── priors/           # Gaussian Markov process priors
+├── priors/           # Gauss-Markov priors (IWP, Matern, IOUP, joint)
+├── information/      # ODE information, conservation laws, data observations
+├── linearization/    # Taylor and statistical linearization, frozen surrogates
+├── calibration/      # Diffusion (sigma^2) calibration policies and rescaling
+├── filters/          # Filters, smoothers, the iterated smoother, step control
+├── inference/        # Marginal likelihoods and parameter fitting
+└── gaussian/         # Square-root Gaussian types and algebra
 ```
 
 ## Documentation
@@ -99,7 +136,7 @@ uv run pytest --cov=ode_filters --cov-report=term-missing
 Build documentation locally:
 
 ```bash
-uv run mkdocs serve
+uv run --group docs mkdocs serve
 ```
 
 ## License

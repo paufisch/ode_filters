@@ -62,26 +62,79 @@ Merging to `main` triggers an automated release (see [Releasing](#releasing-main
    uv run pytest                       # tests + coverage
    ```
 
-4. Add a `CHANGELOG.md` entry under the top `... - Unreleased` section (see below).
+4. Add a `CHANGELOG.md` entry under the `## [Unreleased]` section (see below).
 5. Push and open a PR against `development`. Note whether the change is breaking.
 
 The pull-request template prompts for each of these.
+
+## Testing
+
+`uv run pytest` runs the whole suite in parallel, one worker per core
+(pytest-xdist, `-n auto` in `[tool.pytest.ini_options]`), and fails below 100%
+line coverage, combined over the workers. Lines that cannot run by design carry
+`# pragma: no cover`. Every warning is an error: fix its cause, or, for a
+warning from a dependency that cannot be fixed on this side, add a specific
+`filterwarnings` entry in `pyproject.toml` with a comment saying why.
+
+```bash
+uv run pytest                               # parallel, with the coverage gate
+uv run pytest -n 0 --no-cov -k name --pdb   # one process, to debug one test
+HYPOTHESIS_PROFILE=ci uv run pytest         # 100 examples per property, as CI
+```
+
+Two stricter modes run in CI and are worth running before touching array code:
+
+```bash
+# Implicit dtype promotion (int with float, float32 with float64) and implicit
+# rank promotion (broadcasting arrays of different rank) raise.
+JAX_NUMPY_DTYPE_PROMOTION=strict JAX_NUMPY_RANK_PROMOTION=raise uv run pytest --no-cov
+# jaxtyping + beartype check every annotation at runtime (see Type checking).
+ODE_FILTERS_TYPECHECK=1 uv run pytest --no-cov
+```
+
+Under strict promotion, write the cast or the reshape out (`n.astype(float)`,
+`x.mean(axis=0, keepdims=True)`, `M[None]`). optax, NumPyro and BlackJAX do not
+support strict promotion; a test that drives them carries
+`@pytest.mark.standard_promotion`, which runs it under the default rules.
+
+CI (`.github/workflows/`) runs, on every push to and pull request against
+`development` and `main`:
+
+- **Checks**: `pre-commit run --all-files` (ruff, pyright, ...).
+- **Tests (py3.13, py3.14)**: the suite with the coverage gate, on the versions
+  pinned in `uv.lock`.
+- **Tests (strict promotion, runtime type checks)**: the two modes above.
+- **Build docs (strict)**: the MkDocs build, executing every notebook.
+- **Benchmark smoke run**: `benchmarks/work_precision.py --quick`, which keeps
+  the benchmark running against the current API:
+  `uv run --extra benchmarks python benchmarks/work_precision.py --quick --out-dir /tmp/bench`.
+- **Latest dependencies** (`latest-deps.yml`; weekly, on demand, and on pull
+  requests that touch `pyproject.toml` or `uv.lock`): the suite against the
+  newest versions `pyproject.toml` allows, since `uv.lock` pins `jax` at its
+  lower bound. It is not a required check. A failure there that the main tests
+  do not show comes from a new upstream release. To reproduce it locally, then
+  return to the lock:
+
+  ```bash
+  uv sync --upgrade --group dev && uv run pytest --no-cov
+  git checkout uv.lock && uv sync --group dev
+  ```
 
 ## Changelog and versioning
 
 The split is deliberate: **contributors describe the change, maintainers assign
 the version.**
 
-- **Contributors:** add a line to `CHANGELOG.md` under the top, not-yet-released
-  section (the `## [...] - Unreleased` heading), in the appropriate
+- **Contributors:** add a line to `CHANGELOG.md` under the `## [Unreleased]`
+  section, in the appropriate
   [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) category (`Added`,
   `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`), and flag it if it is
   breaking. **Do not edit `version` in `pyproject.toml`** -- the right bump
   depends on everything else queued for the release, so it is the maintainer's
   call.
 - **Maintainers (at release time):** decide the version under the project's
-  pre-1.0 rule (breaking changes -> minor bump, otherwise patch), stamp the date
-  on the top section (`## [X.Y.Z] - YYYY-MM-DD`, with the version matching
+  pre-1.0 rule (breaking changes -> minor bump, otherwise patch), rename
+  `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` (the version matching
   `pyproject.toml`), refresh the compare links at the bottom of the file, and
   bump `version` in `pyproject.toml` -- all in the release PR (see below).
 
@@ -91,8 +144,9 @@ Releases are automated: publishing to PyPI and creating the GitHub Release happe
 on merge to `main`, gated on green CI. The manual surface is just the release PR.
 
 1. On `development`, in one commit: bump `version` in `pyproject.toml`, and in
-   `CHANGELOG.md` date the top section (`## [X.Y.Z] - YYYY-MM-DD`, version matching
-   `pyproject.toml`) and update the compare links.
+   `CHANGELOG.md` rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` (version
+   matching `pyproject.toml`), open a new empty `## [Unreleased]` above it, and
+   update the compare links.
 2. Open a PR `development -> main` and merge once CI is green.
 3. That's it. On the `main` push, after CI succeeds, the release workflow
    (`.github/workflows/pypi-publish.yml`) reads the version, and if there is no
@@ -103,11 +157,14 @@ on merge to `main`, gated on green CI. The manual surface is just the release PR
 ## Documentation
 
 Docs are built with MkDocs; example notebooks in `docs/examples/` are executed
-during the build, so they must run end-to-end.
+during the build, and a cell that raises fails it, so they must run end-to-end.
+Inside notebooks, link to other pages by their site URL (`../../calibration/`),
+not by the `.md` file: mkdocs-jupyter copies notebook links verbatim.
 
 ```bash
 uv run --group docs mkdocs serve         # live preview at http://localhost:8000
-uv run --group docs mkdocs build --strict  # what CI checks
+uv run --group docs mkdocs build --strict  # what CI checks, plus the link check:
+uv run python .github/scripts/check_site_links.py site /ode_filters/
 ```
 
 When you change the public API, verify the notebooks still execute:
@@ -134,11 +191,13 @@ array types like `Float[Array, "n n"]` -- are validated on each call:
 ODE_FILTERS_TYPECHECK=1 uv run pytest
 ```
 
-It is off by default because a few negative-path tests intentionally pass
-invalid inputs (to assert the library's own `ValueError`s), which the runtime
-checker rejects earlier with a `TypeCheckError`. Use it locally to check new
-code. Migrating annotations from plain `Array` to jaxtyping shapes -- and
-reconciling those tests -- is an ongoing, incremental effort; new code is
+The suite passes with it. Tests that pass wrongly typed input on purpose (to
+assert the library's own error message) carry the marker
+`@pytest.mark.wrong_input_types` and are skipped in this mode, because the
+runtime checker rejects their input first; mark new tests of that kind too. It
+is off by default because it slows the suite down; CI runs it in a job of its
+own (see [Testing](#testing)). Migrating annotations from
+plain `Array` to jaxtyping shapes is an ongoing, incremental effort; new code is
 encouraged to use jaxtyping types.
 
 ## Quick reference
@@ -148,5 +207,6 @@ encouraged to use jaxtyping types.
 | Install hooks   | `uv run pre-commit install`              |
 | Lint + format   | `uv run pre-commit run --all-files`      |
 | Tests           | `uv run pytest`                          |
+| One test, debug | `uv run pytest -n 0 --no-cov -k name`    |
 | Type check      | `uv run pyright`                         |
 | Docs preview    | `uv run --group docs mkdocs serve`       |

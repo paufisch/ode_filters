@@ -3,7 +3,10 @@ probnum_venv/*
 *DS_Store
 *posterior_updates
 *.svg
+!docs/assets/*.svg
 *.npz
+# The recorded solver outputs the reference tests compare against.
+!test/integration/reference/reference_outputs.npz
 *.pyc
 
 #image folders
@@ -61,3 +64,5 @@ CLAUDE.md
 .claude/*
 
 benchmarks/*.png
+# Output of benchmarks/work_precision.py (machine-specific timings)
+benchmarks/results/

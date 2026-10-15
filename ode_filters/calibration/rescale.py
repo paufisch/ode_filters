@@ -4,8 +4,8 @@ After a fixed-step run with ``sigma = 1``, calibrating the trajectory amounts
 to multiplying every covariance by sigma^2. In square-root form this is a
 multiplication of every ``P_sqr`` by ``sqrt(sigma^2)``.
 
-For joint / latent-force priors (``JointPrior`` / ``PrecondJointPrior``) the
-diffusion ``sigma^2`` belongs to the ODE-*state* block only; the hidden/input
+For joint / latent-force priors (``JointPrior``, with plain or preconditioned
+blocks) the diffusion ``sigma^2`` belongs to the ODE-*state* block only; the hidden/input
 block must be left untouched (Schmidt et al. 2021). Pass ``prior=`` to route the
 rescaling through ``prior.apply_state_sigma_to_cov_sqr``, which scales only the
 state block for joint priors (and the whole covariance for non-joint priors, so
@@ -14,14 +14,19 @@ the result is identical to the plain path there).
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import jax
 import jax.numpy as np
 from jax import Array
 from jax.typing import ArrayLike
 
+from ..gaussian.algebra import _safe_sqrt
 
+
+# runtime_checkable so the opt-in jaxtyping/beartype hook
+# (ODE_FILTERS_TYPECHECK=1) can check ``prior=`` annotations against it.
+@runtime_checkable
 class _StateRescalable(Protocol):
     """A prior exposing the block-aware post-hoc rescaling hook."""
 
@@ -46,7 +51,7 @@ def rescale_sqr(
             latent-force priors scale only the ODE-state block and leave the
             hidden/input block unchanged. For non-joint priors this is identical
             to the default whole-covariance scaling. **Pass this for any
-            ``JointPrior`` / ``PrecondJointPrior`` result** -- omitting it scales
+            ``JointPrior`` result** -- omitting it scales
             the input block too, which is incorrect.
 
     Returns:
@@ -54,7 +59,7 @@ def rescale_sqr(
     """
     if prior is not None:
         return prior.apply_state_sigma_to_cov_sqr(P_sqr, sigma_sqr)
-    return np.sqrt(np.asarray(sigma_sqr)) * P_sqr
+    return _safe_sqrt(sigma_sqr) * P_sqr
 
 
 def rescale_sqr_seq(
@@ -69,7 +74,7 @@ def rescale_sqr_seq(
         P_seq_sqr: Stacked square-root covariances, shape ``[N, ...]``.
         sigma_sqr: Either a scalar (applied globally) or a 1-D array of
             length ``N`` (applied per step).
-        prior: Optional prior; see :func:`rescale_sqr`. When given, joint /
+        prior: Optional prior; see ``rescale_sqr``. When given, joint /
             latent-force priors rescale only the state block.
 
     Returns:
@@ -87,7 +92,7 @@ def rescale_sqr_seq(
             f"sigma_sqr must be scalar or shape ({P_arr.shape[0]},); got {s.shape}"
         )
 
-    factor = np.sqrt(s)
+    factor = _safe_sqrt(s)
     if factor.ndim == 0:
         return factor * P_arr
     if factor.ndim == 1 and factor.shape[0] == P_arr.shape[0]:

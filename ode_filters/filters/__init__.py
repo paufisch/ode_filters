@@ -1,58 +1,36 @@
-"""Filtering and smoothing routines for ODE models.
+"""Filters and smoothers.
 
-The public solver API is the consolidated :func:`gaussian_filter` /
-:func:`gaussian_filter_adaptive` / :func:`rts_smoother` (returning
-:class:`FilterResult`), plus the pluggable :class:`Correction` strategies and the
-adaptive step-size controllers. The historical ``sqr_loop*`` / ``*_step*``
-matrix is now an implementation detail of those entry points; import it from the
-``ode_filters.filters.ode_filter_loop`` / ``ode_filter_step`` /
-``ode_filter_adaptive`` submodules if you need the low-level variants directly.
+- ``gaussian_filter``: fixed grid (uniform or not), online linearization.
+- ``gaussian_filter_adaptive``: adaptive steps, solution at given save times.
+- ``affine_filter``: a frozen linearization (``AffineSurrogate``).
+- ``rts_smoother``: smoothing of any of their results; ``sample_posterior``
+  draws joint posterior paths and ``interpolate`` gives marginals between nodes.
+- ``iterated_smoother``: the IEKS / IPLS, iterating linearization and smoothing.
+
+All return named results in the original state coordinates. The steps they are
+built from are in ``ode_filters.filters.kernel``.
 """
 
+from .adaptive import gaussian_filter_adaptive
 from .adaptive_controller import PController, PIController, StepSizeController
-from .correction import (
-    Correction,
-    CorrectionResult,
-    IteratedTaylorCorrection,
-    QuadratureCorrection,
-    TaylorCorrection,
-)
-from .gaussian_filter import (
-    FilterResult,
-    gaussian_filter,
-    gaussian_filter_adaptive,
-    rts_smoother,
-)
-from .ipls import IPLSResult, affine_filter_scan, ipls_smoother
-from .statistical_linearization import (
-    SLRModel,
-    check_arg_projection,
-    cubature_rule,
-    gauss_hermite_rule,
-    quadrature_nodes,
-    slr_linearize,
-)
+from .fixed_grid import affine_filter, gaussian_filter
+from .iterated import IteratedSmootherResult, IterationState, iterated_smoother
+from .result import FilterResult, StepRecord
+from .smoothing import interpolate, rts_smoother, sample_posterior
 
 __all__ = [
-    "Correction",
-    "CorrectionResult",
     "FilterResult",
-    "IPLSResult",
-    "IteratedTaylorCorrection",
+    "IteratedSmootherResult",
+    "IterationState",
     "PController",
     "PIController",
-    "QuadratureCorrection",
-    "SLRModel",
+    "StepRecord",
     "StepSizeController",
-    "TaylorCorrection",
-    "affine_filter_scan",
-    "check_arg_projection",
-    "cubature_rule",
-    "gauss_hermite_rule",
+    "affine_filter",
     "gaussian_filter",
     "gaussian_filter_adaptive",
-    "ipls_smoother",
-    "quadrature_nodes",
+    "interpolate",
+    "iterated_smoother",
     "rts_smoother",
-    "slr_linearize",
+    "sample_posterior",
 ]

@@ -1,19 +1,38 @@
-"""Inference routines for ODE filtering."""
+"""Parameter inference: marginal likelihoods, evidence and fitting."""
 
-from .model import ODEFilter, fit
-from .parameter_inference import InferenceProblem, marginal_loglik
-from .parameters import AbstractParameter, PositiveReal, Real, unwrap
-from .sqr_gaussian_inference import sqr_inversion, sqr_marginalization
+from .diagnostics import (
+    nis,
+    observation_predictive,
+    residual_autocorrelation,
+    whitened_residuals,
+)
+from .evidence import (
+    InformationCriteria,
+    conditional_loglik,
+    fenrir_loglik,
+    information_criteria,
+)
+from .likelihood import InferenceProblem, marginal_loglik
+from .model import ODEFilter, fit, fit_scipy
+from .parameters import AbstractParameter, NonNegativeReal, PositiveReal, Real, unwrap
 
 __all__ = [
     "AbstractParameter",
     "InferenceProblem",
+    "InformationCriteria",
+    "NonNegativeReal",
     "ODEFilter",
     "PositiveReal",
     "Real",
+    "conditional_loglik",
+    "fenrir_loglik",
     "fit",
+    "fit_scipy",
+    "information_criteria",
     "marginal_loglik",
-    "sqr_inversion",
-    "sqr_marginalization",
+    "nis",
+    "observation_predictive",
+    "residual_autocorrelation",
     "unwrap",
+    "whitened_residuals",
 ]

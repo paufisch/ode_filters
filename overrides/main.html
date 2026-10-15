@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {#- Material links theme.favicon without a type. Declare the SVG explicitly,
+      add a PNG for browsers without SVG favicons (Safari before 26), and an
+      opaque touch icon, which Safari otherwise looks for at the site root. -#}
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ 'assets/icon-32.png' | url }}">
+  <link rel="icon" type="image/svg+xml" href="{{ config.theme.favicon | url }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ 'assets/apple-touch-icon.png' | url }}">
+  {#- The logo mark (docs/stylesheets/extra.css) animates on the first page of
+      a visit, and on the page a click on it leads to; on every other page it
+      is at rest. Inline in the head, so that it runs before the first paint. -#}
+  <script>
+    try {
+      if (sessionStorage.getItem("ode-mark-clicked")) {
+        document.documentElement.dataset.odeMark = "clicked";
+        sessionStorage.removeItem("ode-mark-clicked");
+      } else if (sessionStorage.getItem("ode-mark-seen")) {
+        document.documentElement.dataset.odeMark = "seen";
+      }
+      sessionStorage.setItem("ode-mark-seen", "1");
+      document.addEventListener("click", (event) => {
+        if (event.target instanceof Element && event.target.closest(".md-logo")) {
+          sessionStorage.setItem("ode-mark-clicked", "1");
+        }
+      });
+      document.addEventListener("animationend", (event) => {
+        if (event.animationName === "ode-unswap") {
+          document.documentElement.dataset.odeMark = "seen";
+        }
+      });
+    } catch (error) {}
+  </script>
+{% endblock %}
+
+{% block tabs %}
+  {{ super() }}
+  {#- The observation under the active tab drops in when the section changes,
+      not on every page of it. Right after the tabs, before they are painted. -#}
+  <script>
+    try {
+      const tab = document.querySelector(".md-tabs__item--active > a");
+      if (tab && sessionStorage.getItem("ode-tab") === tab.href) {
+        document.documentElement.dataset.odeTab = "same";
+      }
+      sessionStorage.setItem("ode-tab", tab ? tab.href : "");
+    } catch (error) {}
+  </script>
+{% endblock %}

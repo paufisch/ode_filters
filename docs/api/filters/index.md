@@ -1,47 +1,103 @@
 # Filters
 
-The consolidated solver API: `gaussian_filter` (fixed grid),
-`gaussian_filter_adaptive` (adaptive, save-at-grid), and `rts_smoother` for the
-backward smoothing pass — all returning a single `FilterResult`. The
-linearization is a pluggable [`Correction`](../../corrections.md) (EK0 / EK1 /
-IEKF), and adaptive stepping uses a step-size controller (`PController` /
-`PIController`). Diffusion is calibrated per step by default
-(`calibration="dynamic"`, a scalar quasi-MLE), so the process noise is rescaled
-each step; pass `calibration="none"` for a fixed diffusion. See
-[How to choose](../../how-to-choose.md).
+The solvers all return a `FilterResult` in the original state coordinates:
 
-Dispatch is automatic: a `PrecondIWP` / `PrecondMaternPrior` prior selects the
-preconditioned square-root recursion, and passing `obs_model=` adds a masked
-observation update.
+- `gaussian_filter` — a given time grid (uniform or not), the ODE information
+  linearized at each prediction by a [`Correction`](../../corrections.md).
+- `gaussian_filter_adaptive` — adaptive steps between given save times.
+- `affine_filter` — a frozen linearization (an `AffineSurrogate`).
+- `rts_smoother` — smoothing of any result that carries backward conditionals.
+- `sample_posterior` — a joint sample path from the smoothing posterior.
+- `interpolate` — filtered or smoothed marginals between the grid nodes.
+- `iterated_smoother` — the IEKS and the IPLS: linearize along the smoothed
+  trajectory, filter and smooth, repeat.
+
+Every step calibrates the diffusion with the `calibration=` policy (`"dynamic"`
+by default; see [Diffusion calibration](../../calibration.md)) and conditions on
+the data of an `obs_model`, if any, after the ODE information. A preconditioned
+prior changes how a step is computed, not its result. See
+[How to choose](../../how-to-choose.md).
 
 ## The `FilterResult`
 
-Both `gaussian_filter` and `gaussian_filter_adaptive` return a `FilterResult` with
-named fields (recover a covariance with `P = P_sqr.T @ P_sqr`; see
-[notation](../../notation.md)):
+Recover a covariance with `P = P_sqr.T @ P_sqr` (see [notation](../../notation.md)).
+On a grid of `K` nodes, per-step fields have `K - 1` entries; entry `n` belongs to
+the step from `t[n]` to `t[n + 1]`.
 
 | Field | Meaning |
 | --- | --- |
-| `t` | time grid |
-| `m`, `P_sqr` | **filtered** posterior mean and square-root covariance |
-| `log_likelihood` | scalar **post-calibration** ODE-information log-marginal-likelihood (not comparable across `calibration` modes — each defines a different generative model) |
-| `log_likelihood_obs` | observation log-likelihood (`None` without `obs_model`) |
-| `m_pred`, `P_pred_sqr` | one-step predictions before each update (`None` for the adaptive save-at solver) |
-| `G_back`, `d_back`, `P_back_sqr` | backward transitions consumed by `rts_smoother` |
-| `sigma_sqr` | per-step calibrated diffusion `sigma_hat^2` (`None` for the adaptive solver) |
-| `success` | adaptive only: whether sub-stepping reached every save time **and** the log-likelihood is finite (`None` for the fixed grid) |
-| `m_bar`, `P_bar_sqr`, `T` | preconditioned-space internals (`None` for a plain prior) |
+| `t` | time grid (the save times on the adaptive path) |
+| `m`, `P_sqr` | **filtered** mean and square-root covariance |
+| `log_likelihood` | ODE-information evidence, after calibration (not comparable across calibration policies) |
+| `log_likelihood_obs` | data evidence, each observation conditioned on the ODE information up to its time (`None` without data) |
+| `sigma_sqr` | per-step diffusion estimate (`None` on the adaptive path) |
+| `diffusion` | the diffusion each step propagated with: `sigma_sqr` under a calibrating policy, ones under `"none"` (`None` on the adaptive path); `interpolate` bridges with it |
+| `m_pred`, `P_pred_sqr` | predictions before each update (`None` on the adaptive path) |
+| `G_back`, `d_back`, `P_back_sqr` | backward conditionals `p(x_n \| x_{n+1})`, consumed by `rts_smoother` |
+| `mz`, `Pz_sqr` | ODE-information innovations |
+| `mz_obs`, `Pz_obs_sqr` | data innovations; rows without data are zero with unit variance |
+| `success` | adaptive: every save time reached with a finite evidence |
+| `n_accepted`, `n_rejected` | adaptive: steps per save interval |
+| `steps` | adaptive with `record_steps > 0`: every accepted step (a `StepRecord`) |
+
+`result.filtered` and `result.backward` return the marginals and the backward
+conditionals as a stacked `Gaussian` and `Conditional`.
 
 `gaussian_filter_adaptive` is **filtering-only by default** (`smoother=False`):
-its backward-pass fields are then `None` and `rts_smoother` raises. Pass
-`smoother=True` to additionally compute a fixed-point smoothing backward pass
-(one composite conditional per save interval, `O(#save points)` memory); the
-result then carries `G_back` / `d_back` / `P_back_sqr` and `rts_smoother(prior,
-result)` works directly. `smoother=True` is not supported together with
-`obs_model`.
+its backward fields are then `None` and `rts_smoother` raises. With
+`smoother=True` it composes one backward conditional per save interval
+(`O(#save points)` memory), with or without data.
 
-The low-level scan loops and step functions that `gaussian_filter` wraps live in
-the `ode_filters.filters.ode_filter_loop` / `ode_filter_step` / `ode_filter_adaptive`
-submodules; they are implementation detail, not part of the public API.
+## Solvers
 
-::: ode_filters.filters
+::: ode_filters.filters.gaussian_filter
+
+::: ode_filters.filters.gaussian_filter_adaptive
+
+::: ode_filters.filters.affine_filter
+
+::: ode_filters.filters.rts_smoother
+
+## Posterior samples and dense output
+
+::: ode_filters.filters.sample_posterior
+
+::: ode_filters.filters.interpolate
+
+## Result types
+
+::: ode_filters.filters.FilterResult
+
+::: ode_filters.filters.StepRecord
+
+## Iterated smoothing
+
+See [Linearization schemes](../../corrections.md#iterated-smoothing-iekf-ieks-and-ipls).
+
+::: ode_filters.filters.iterated_smoother
+
+::: ode_filters.filters.IteratedSmootherResult
+
+::: ode_filters.filters.IterationState
+
+## The filter step
+
+The step every solver is built from, for building new drivers.
+
+::: ode_filters.filters.kernel.filter_step
+
+::: ode_filters.filters.kernel.StepOutput
+
+::: ode_filters.filters.kernel.predict
+
+::: ode_filters.filters.kernel.observe
+
+## Step-size control
+
+See [Adaptive step-size control](../../adaptive-steps.ipynb).
+
+::: ode_filters.filters.StepSizeController
+
+::: ode_filters.filters.PController
+
+::: ode_filters.filters.PIController

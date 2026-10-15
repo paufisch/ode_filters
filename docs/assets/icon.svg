@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="5.75 8.6 52.5 52.5">
+  <!-- The O of the logo, unboxed. One palette for light and dark tab bars:
+       Safari ignores prefers-color-scheme inside SVG favicons. -->
+  <g fill="none" stroke-width="6.6" stroke-linecap="round">
+    <path stroke="#9FA8DA" d="M16 29A16 17 0 0 1 48 29"/>
+    <path stroke="#4051B5" d="M16 29A16 17 0 0 0 48 29"/>
+  </g>
+  <circle cx="32" cy="56" r="4.8" fill="#FF8F00"/>
+</svg>

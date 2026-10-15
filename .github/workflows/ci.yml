@@ -50,7 +50,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Sync dependencies
         run: uv sync --group dev
+      # Parallel over the runner's cores (-n auto in [tool.pytest.ini_options]);
+      # pytest-cov combines the workers' coverage.
       - name: Run tests
+        env:
+          HYPOTHESIS_PROFILE: ci
         run: uv run pytest --cov=ode_filters --cov-report=term-missing --cov-report=xml
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -59,6 +63,49 @@ jobs:
           flags: unit
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: paufisch/ode_filters
+
+  strict:
+    name: Tests (strict promotion, runtime type checks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.13"
+      - name: Sync dependencies
+        run: uv sync --group dev
+      # Implicit dtype promotion (int with float, float32 with float64) and
+      # implicit rank promotion (broadcasting arrays of different rank) raise
+      # instead of passing silently. Coverage is the test job's concern.
+      - name: Strict dtype and rank promotion
+        env:
+          JAX_NUMPY_DTYPE_PROMOTION: strict
+          JAX_NUMPY_RANK_PROMOTION: raise
+        run: uv run pytest --no-cov
+      # jaxtyping + beartype check the annotations on every call (see
+      # test/conftest.py); runs even when the step above failed.
+      - name: Runtime type checks
+        if: ${{ !cancelled() }}
+        env:
+          ODE_FILTERS_TYPECHECK: "1"
+        run: uv run pytest --no-cov
+
+  benchmark:
+    name: Benchmark smoke run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.13"
+      # Keeps benchmarks/ running against the current API; --quick shrinks the
+      # sweeps, so the timings it prints are not meaningful.
+      - name: Run the work-precision benchmark (quick)
+        run: uv run --extra benchmarks python benchmarks/work_precision.py --quick --out-dir "$RUNNER_TEMP/bench"
 
   docs:
     name: Build docs (strict)
@@ -72,3 +119,6 @@ jobs:
           python-version: "3.13"
       - name: Build MkDocs site
         run: uv run --group docs mkdocs build --strict
+      # --strict does not see links inside the rendered notebooks.
+      - name: Check internal links
+        run: uv run python .github/scripts/check_site_links.py site /ode_filters/

@@ -11,11 +11,6 @@ classical solver's estimate; the covariance quantifies the numerical uncertainty
 introduced by taking finite steps. `ode_filters` computes this posterior with
 Kalman filtering and smoothing.
 
-!!! tip "One-sentence intuition"
-    Solving an ODE is recast as **tracking a moving target**: just like a Kalman
-    filter tracks an object from noisy sensor readings, a probabilistic ODE solver
-    tracks the solution curve, using *the ODE itself* as the measurement.
-
 ## The four ingredients
 
 Every solve in `ode_filters` is built from the same four pieces (you will meet
@@ -85,9 +80,28 @@ covariance scales with $\sigma^2$. See [Diffusion calibration](calibration.md).
   same forward solve (the smoothing band comes from the backward pass).
 - **Structured information** — conservation laws, partial/noisy observations, and
   hidden parameters all enter as additional measurements in the same machinery.
+- **Inference from data** — the filter also returns the likelihood of the data,
+  with the numerical error accounted for. It is differentiable in every
+  parameter, so the same solve fits parameters, recovers an unknown input, or
+  feeds a sampler.
 
 If you only need a fast point trajectory for a well-behaved ODE, a classical solver
-is the right tool. Reach for a probabilistic solver when you need the *uncertainty*.
+is the right tool. Reach for a probabilistic solver when you need the
+*uncertainty*, or when the ODE is one part of a model you fit to data.
+
+## From data to parameters
+
+Because data enter as one more measurement, fitting an ODE to data needs no
+extra machinery. Each data update reports how well the model predicted the
+observation, and the sum of these terms is the log-likelihood of the data
+(`result.log_likelihood_obs`). It accounts for the numerical error: a coarse
+grid widens the predictions and the likelihood says so, rather than trusting a
+wrong trajectory. Maximize it over the parameters with `fit_scipy`, or sample
+from the posterior with NumPyro — see
+[Parameter estimation](examples/parameter-estimation.ipynb). An unknown input
+`u(t)` that drives the ODE is one more block of the state with its own prior,
+recovered by the same smoother: see
+[Recovering a hidden input](examples/hidden-input.ipynb).
 
 ## From concept to code
 
@@ -98,8 +112,10 @@ is the right tool. Reach for a probabilistic solver when you need the *uncertain
 | "Derivative must equal `f`" (the information operator) | `ODEInformation(vf, prior.E0, prior.E1)` |
 | How to linearize `f` (EK0 / EK1) | `TaylorCorrection(order=0 | 1)` |
 | Forward filtering pass | `gaussian_filter(...)` (or `gaussian_filter_adaptive(...)`) |
-| Backward smoothing pass | `rts_smoother(prior, result)` |
+| Backward smoothing pass | `rts_smoother(result)` |
 | Size the error bars | `calibration=` / `ode_filters.calibration` |
+| Data | `prepare_observations(...)`, passed as `obs_model=` |
+| Fit parameters to data | `marginal_loglik` with `fit_scipy` / `fit` |
 
 The symbols (`q`, `d`, `E0`/`E1`, `Xi`, `sigma^2`, the square-root convention) are
 defined in [Notation & conventions](notation.md).

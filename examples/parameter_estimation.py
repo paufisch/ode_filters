@@ -18,7 +18,7 @@ import jax.random as jrandom
 import optax
 
 from ode_filters import ODEFilter, fit
-from ode_filters.measurement import Measurement, prepare_observations
+from ode_filters.information import Measurement, prepare_observations
 from ode_filters.priors import IWP
 
 jax.config.update("jax_enable_x64", True)
@@ -53,8 +53,7 @@ def main() -> None:
         vf=vf,
         init_fn=init_fn,
         prior=prior,
-        tspan=TSPAN,
-        N=N,
+        ts=ts,
         ode_params=np.array([0.4]),  # deliberately wrong starting guess
     )
 

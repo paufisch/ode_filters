@@ -9,7 +9,7 @@ packages = ["ode_filters"]
 [project]
 name = "ode-filters"
 authors = [{name="Paul Fischer"}]
-version = "0.7.3"
+version = "0.8.0"
 description = "Probabilistic ODE solvers using square-root Gaussian filtering and smoothing in JAX."
 readme = "README.md"
 license = "MIT"
@@ -34,11 +34,12 @@ classifiers = [
 # `pip install ode-filters[examples]` to run the example notebooks locally.
 examples = ["matplotlib>=3.10.7"]
 # `pip install ode-filters[inference]` to run the parameter-inference example
-# scripts in `examples/` (Optax-based `fit`, NumPyro / BlackJAX posterior sampling).
-inference = ["blackjax>=1.2.0", "numpyro>=0.16.0", "optax>=0.2.0"]
+# scripts in `examples/` (Optax-based `fit`, SciPy-based `fit_scipy`, NumPyro /
+# BlackJAX posterior sampling).
+inference = ["blackjax>=1.2.0", "numpyro>=0.16.0", "optax>=0.2.0", "scipy>=1.13"]
 # `pip install ode-filters[benchmarks]` to run the work-precision benchmark in
 # `benchmarks/`, which compares against probdiffeq and the classical Diffrax solver.
-benchmarks = ["diffrax>=0.6", "matplotlib>=3.10.7"]
+benchmarks = ["diffrax>=0.6", "matplotlib>=3.10.7", "probdiffeq>=0.8.0,<0.9", "tueplots>=0.2.5"]
 
 [project.urls]
 Homepage = "https://github.com/paufisch/ode_filters"
@@ -59,11 +60,11 @@ dev = [
     "numpyro>=0.16.0",
     "optax>=0.2.0",
     "pre-commit>=4.3.0",
-    "probdiffeq>=0.8.0",
+    "probdiffeq>=0.8.0,<0.9",  # benchmarks/ uses the 0.8 API
     "pyright>=1.1.390",  # static type checker (run in CI; see [tool.pyright])
     "pytest>=8.4.2",
-    "pytest-cases>=3.9.1",
     "pytest-cov>=7.0.0",
+    "pytest-xdist>=3.8",
     "scipy>=1.13",  # reference solver in test_solver_validity (hard import)
 ]
 docs = [
@@ -72,14 +73,36 @@ docs = [
     "mkdocs-jupyter>=0.24.1",
     "mkdocs-material>=9.5,<9.6",
     "mkdocstrings[python]>=0.28.3",
+    "numpyro>=0.16.0",  # the Bayesian-sampling tutorial
+    "optax>=0.2.0",  # the parameter-estimation tutorial
     "ruff>=0.6",  # lets mkdocstrings format rendered signatures
+    "scipy>=1.13",  # fit_scipy in the inference tutorials
+    "tueplots>=0.2.5",  # figure style of the notebooks
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
-# --cov-fail-under=100 gates the suite at full line coverage (local + CI; the CI
-# command appends its own --cov-report=xml on top of these defaults).
-addopts = "--cov=ode_filters --cov-report=term-missing --cov-fail-under=100"
+# -n auto runs the tests in parallel (pytest-xdist, one worker per core; pass
+# -n 0 to run in one process, e.g. for --pdb). --cov-fail-under=100 gates the
+# suite at full line coverage, combined over the workers by pytest-cov (local +
+# CI; the CI command appends its own --cov-report=xml on top of these defaults).
+addopts = "-n auto --dist worksteal --cov=ode_filters --cov-report=term-missing --cov-fail-under=100"
+# Every warning fails the test. Ignore a dependency's warning here only when it
+# cannot be fixed on this side, with a comment saying why.
+filterwarnings = ["error"]
+markers = [
+    "slow: long-running tests (MCMC runs of the example scripts); deselect with -m 'not slow'",
+    "wrong_input_types: passes wrongly typed input on purpose to test an error message; skipped under ODE_FILTERS_TYPECHECK=1, whose checker rejects the input first",
+    "standard_promotion: drives optax, NumPyro or BlackJAX, which need JAX's standard dtype promotion; runs under it even with JAX_NUMPY_DTYPE_PROMOTION=strict",
+]
+
+[tool.coverage.report]
+# Lines that never run by design; everything else counts towards the 100% gate.
+exclude_also = [
+    "raise NotImplementedError",  # bodies of abstract methods
+    "@(abc\\.)?abstractmethod",
+    "if TYPE_CHECKING:",
+]
 
 [tool.ruff]
 target-version = "py313"
@@ -95,17 +118,36 @@ select = [
     "B",      # flake8-bugbear
     "SIM",    # flake8-simplify
     "RUF",    # Ruff-specific rules
+    "D",      # pydocstyle (Google convention, package only; see per-file-ignores)
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
     "B008",   # function call in default argument (common in JAX)
+    # Constructor arguments are documented in the class docstring (Args: /
+    # Attributes:), which is where mkdocstrings renders them.
+    "D107",
+    # The only magic methods are equinox's __check_init__ validation hooks;
+    # the constraints they enforce are documented on the class.
+    "D105",
 ]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Docstring rules cover the package's public API; tests, scripts and notebooks
+# document themselves through names and comments.
+"test/**" = ["D"]
+"benchmarks/**" = ["D"]
+"examples/**" = ["D"]
+"docs/**" = ["D"]
+".github/**" = ["D"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["ode_filters"]
 
 [tool.pyright]
-include = ["ode_filters"]
+include = ["ode_filters", "benchmarks"]
 pythonVersion = "3.13"
 typeCheckingMode = "basic"
 reportMissingTypeStubs = false
