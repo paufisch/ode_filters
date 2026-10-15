@@ -23,7 +23,8 @@ fixes below come on top.
 
 - **Time grids.** `gaussian_filter` takes the time grid `ts` (any strictly
   increasing array) instead of `tspan` and `N`; on a concrete uniform grid the
-  prior's transition is computed once.
+  prior's transition is computed once, also when a jitted function closes over
+  the grid.
 - **Calibration policies** `NoCalibration`, `DynamicCalibration` and
   `DiagonalCalibration(jacobian="ek1" | "ek0")`, which own the floor
   `min_sigma_sqr`. The strings `"none"`, `"dynamic"`, `"diagonal"` and

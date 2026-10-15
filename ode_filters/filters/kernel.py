@@ -181,6 +181,20 @@ def predict(x: Gaussian, transition: Transition) -> tuple[Gaussian, Conditional]
     return scale_gaussian(predicted, s), scale_conditional(backward, s)
 
 
+def mask_rows(model: AffineModel, mask: Array) -> AffineModel:
+    """``model`` with the rows that ``mask`` marks as absent switched off.
+
+    An absent row becomes an exact observation of zero with unit noise and a
+    zero row in ``H``: it leaves the state unchanged, and its innovation is
+    ``N(0, 1)`` and uncorrelated with the other rows.
+    """
+    present = mask.astype(model.H.dtype)
+    R_sqr = _safe_qr(
+        np.concatenate([model.R_sqr * present[None, :], np.diag(1.0 - present)], axis=0)
+    )
+    return AffineModel(model.H * present[:, None], model.c * present, R_sqr)
+
+
 def observe(
     x: Gaussian, model: AffineModel, mask: Array
 ) -> tuple[Gaussian, Gaussian, Array]:
@@ -199,12 +213,8 @@ def observe(
     Returns:
         ``(posterior, innovation, log_likelihood)``.
     """
+    posterior, innovation = update(mask_rows(model, mask), x)
     present = mask.astype(x.m.dtype)
-    R_sqr = _safe_qr(
-        np.concatenate([model.R_sqr * present[None, :], np.diag(1.0 - present)], axis=0)
-    )
-    masked = AffineModel(model.H * present[:, None], model.c * present, R_sqr)
-    posterior, innovation = update(masked, x)
     n_absent = present.shape[0] - np.sum(present)
     ll = log_likelihood(innovation) + 0.5 * n_absent * np.log(2.0 * np.pi)
     return posterior, innovation, ll

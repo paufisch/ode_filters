@@ -197,10 +197,11 @@ hidden input `U`,
 - `D = sum_n I(U; y_n | z_<=n, y_<n)`: the directed information of the data
   about the input, as the filter sees it.
 
-They come from the innovation log-determinants of four `affine_filter` passes
-(the joint model and the state block given `U`, each with and without the
-data), so they are exact for the frozen model and differentiable in its
-hyperparameters.
+They come from the innovation log-determinants of four filter passes on the
+frozen model (the joint model and the state block given `U`, each with and
+without the data), so they are exact for it and differentiable in its
+hyperparameters. The means drop out, so the passes carry only the square-root
+covariances.
 
 ## What calibration cannot fix
 
