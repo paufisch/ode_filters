@@ -29,7 +29,7 @@ from ode_filters import (
 from ode_filters.gaussian import Gaussian, invert, marginalize
 from ode_filters.gaussian.algebra import _safe_qr
 from ode_filters.priors import taylor_mode_initialization
-from test.helpers import assert_grad_matches_fd_vector
+from test.helpers import assert_close, assert_grad_matches_fd_vector
 
 TSPAN = (0.0, 2.0)
 N_STEPS = 20
@@ -127,15 +127,12 @@ def test_inversion_takes_a_zero_prior_factor_without_nan_gradients():
     assert bool(np.all(np.isfinite(jax.grad(total)(np.array([0.4, -0.2, 0.7])))))
 
 
-def test_singular_innovation_covariance_is_a_separate_unhandled_degeneracy():
-    """Documents the boundary of the fix.
-
-    ``_safe_qr`` repairs a degenerate *output* factor. It does not repair a
-    degenerate *innovation* covariance: ``invert`` divides by
-    the innovation factor in a triangular solve, so a zero innovation covariance is
-    ill-posed (conditioning a zero-variance state on a zero-variance
-    observation) and stays ``NaN``. Recorded so the boundary is a known
-    limitation rather than a later surprise.
+def test_a_zero_innovation_covariance_gives_a_zero_gain():
+    """``_safe_qr`` repairs a degenerate *output* factor; ``invert`` handles a
+    zero-variance *innovation* separately: such a component carries no
+    information, so its gain is zero (the pseudo-inverse). The conditional is
+    then the prior, ``d = m`` with a zero covariance, and the gradient is that
+    of ``sum(m)``.
     """
     n = 3
     A = jax.random.normal(jax.random.PRNGKey(1), (n, n))
@@ -146,7 +143,20 @@ def test_singular_innovation_covariance_is_a_separate_unhandled_degeneracy():
         cond = invert(A, zero, x, marginalize(A, np.zeros(n), zero, x))
         return np.sum(cond.d) + np.sum(cond.P_sqr.T @ cond.P_sqr)
 
-    assert bool(np.all(np.isnan(jax.grad(total)(np.array([0.4, -0.2, 0.7])))))
+    assert_close(jax.grad(total)(np.array([0.4, -0.2, 0.7])), np.ones(n))
+
+
+def test_a_singular_innovation_mixing_components_is_unhandled():
+    """Documents the boundary: only components with exactly zero variance are
+    repaired. A ``Cov(z)`` that is singular in a direction mixing components
+    still divides by a zero pivot.
+    """
+    x = Gaussian(np.zeros(2), np.array([[1.0, 1.0], [0.0, 0.0]]))
+    A, zero = np.eye(2), np.zeros((2, 2))
+    z = marginalize(A, np.zeros(2), zero, x)
+    assert float(np.min(np.sum(z.P_sqr**2, axis=0))) > 0.0  # no zero column
+    cond = invert(A, zero, x, z)
+    assert not bool(np.all(np.isfinite(cond.G)))
 
 
 # ---------------------------------------------------------------------------

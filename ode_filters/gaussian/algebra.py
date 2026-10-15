@@ -66,9 +66,10 @@ def _safe_qr(C: Array) -> Array:
     rank-deficient one (a structurally singular ``Q``, say) still has an undefined
     QR derivative, which needs a rank-revealing factorization. And this repairs a
     degenerate *output* factor, not a degenerate *innovation* covariance:
-    ``invert`` divides by the innovation factor in a triangular solve, so a
-    singular innovation stays ``NaN`` -- correctly, since conditioning a
-    zero-variance state on a zero-variance observation is ill-posed.
+    ``invert`` divides by the innovation factor in a triangular solve. It gives
+    components of ``z`` with exactly zero variance unit variance first (see
+    ``_unit_variance_where_zero``), but an innovation that is singular in a
+    direction mixing components stays ``NaN``.
 
     Args:
         C: Stacked square-root factor, shape ``[M, N]`` with ``M >= N`` (both call
@@ -191,6 +192,30 @@ def marginalize(A: Array, b: Array, Q_sqr: Array, x: Gaussian) -> Gaussian:
     return Gaussian(mz, Pz_sqr)
 
 
+def _unit_variance_where_zero(Pz_sqr: Array) -> Array:
+    """The factor of ``Cov(z)`` with unit variance on its zero-variance components.
+
+    A component ``j`` with exactly zero variance is a zero column of the factor.
+    Row and column ``j`` of ``Cov(z)`` then vanish, and so does row ``j`` of the
+    cross-covariance ``A P``, so giving ``z_j`` unit variance makes the gain's
+    solves regular and leaves the gain zero in column ``j`` and unchanged
+    elsewhere. Setting the zero pivot to one would not do: row ``j`` of a QR
+    factor can still hold entries of the later columns, so the factor is
+    re-triangularized. Without such a component the factor is returned as it
+    is, so a regular ``Cov(z)`` gives bitwise the same gain.
+    """
+
+    def regularized() -> Array:
+        zero = np.all(Pz_sqr == 0.0, axis=0)
+        unit = np.diag(zero.astype(Pz_sqr.dtype))
+        return _safe_qr(np.concatenate([Pz_sqr, unit], axis=0))
+
+    # A zero column has a zero pivot. A zero pivot without one (a Cov(z) that is
+    # singular in a direction mixing components) has nothing added: not repaired.
+    singular = np.any(np.diagonal(Pz_sqr) == 0.0)
+    return jax.lax.cond(singular, regularized, lambda: Pz_sqr)
+
+
 def invert(A: Array, Q_sqr: Array, x: Gaussian, z: Gaussian) -> Conditional:
     """Bayes' rule for ``z = A x + b + w``: the conditional ``p(x | z)``.
 
@@ -200,6 +225,12 @@ def invert(A: Array, Q_sqr: Array, x: Gaussian, z: Gaussian) -> Conditional:
     ``Lambda = (I - G A) P (I - G A).T + G Q G.T``. Observing ``z = 0`` gives the
     posterior ``N(d, Lambda)``; in the filters' prediction it is the backward
     conditional ``p(x_n | x_{n+1})``.
+
+    A component of ``z`` with exactly zero variance gets a zero gain column (the
+    pseudo-inverse of ``Cov(z)``): it carries no information about ``x``. This is
+    the backward conditional after an exactly zero calibrated diffusion from an
+    exact initial value, e.g. a solve started at an equilibrium. A ``Cov(z)``
+    that is singular in a direction mixing components still gives ``NaN``.
 
     Args:
         A: Linear map, shape ``[k, n]``.
@@ -213,7 +244,7 @@ def invert(A: Array, Q_sqr: Array, x: Gaussian, z: Gaussian) -> Conditional:
     """
     n_state = A.shape[1]
     P_sqr = np.atleast_2d(x.P_sqr)
-    Pz_sqr = np.atleast_2d(z.P_sqr)
+    Pz_sqr = _unit_variance_where_zero(np.atleast_2d(z.P_sqr))
     # G = P A^T Pz^-1 by two triangular solves with the factor of Pz.
     cross = (A @ P_sqr.T) @ P_sqr
     Z = jax.scipy.linalg.solve_triangular(Pz_sqr.T, cross, lower=True)

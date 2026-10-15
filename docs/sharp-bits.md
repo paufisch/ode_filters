@@ -70,17 +70,36 @@ conditions on the rows that have data.
 Both `gaussian_filter` (fixed grid) and `gaussian_filter_adaptive` (save-at-grid)
 are `jit`/`grad`/`vmap`-compatible, so any `jax.grad` over a solve works either way.
 
-### A system at rest needs a diffusion floor
+### A system at rest: exact values, but gradients need a floor
 
 Dynamic calibration estimates the diffusion from each step's ODE residual. A
-system that starts at rest -- for instance a driven oscillator with zero initial
-state and a zero-mean input -- has residuals that vanish identically for the
-first steps, so the estimate is zero, the state block's process noise vanishes,
-and the predicted covariance is singular. The filter survives that, but the
-smoother's backward gains blow up. Set a floor,
-`calibration=DynamicCalibration(min_sigma_sqr=1e-8)`, or use
+solve that starts exactly at an equilibrium -- or whose solution the prior
+reproduces exactly, like `x' = 1` -- has residuals that vanish identically, so
+the estimate is exactly zero. From an exact initial value
+(`taylor_mode_initialization`) the posterior is then the exact, certain path,
+and the filter, smoother, samples and dense output return it. Diagonal
+calibration does the same per component, e.g. for a pendulum released at rest.
+
+Derivatives at such a point are not right: with a zero diffusion the ODE
+information has no weight, so `jax.grad` differentiates the Taylor
+extrapolation of the initial value instead of the solution. An optimizer can
+land there, e.g. a fit of a decay started from the initial guess `x0 = 0`.
+Set a floor, `calibration=DynamicCalibration(min_sigma_sqr=1e-8)`, or use
 `calibration="none"` with a deliberately chosen `Xi` (the usual choice for
 inference).
+
+### Sample paths depend on the factorization when the ODE information is exact
+
+With exact ODE information (zero noise `R`, the default) the smoothing posterior
+is singular, and a singular covariance has many square-root factors. Which one
+the QR returns depends on round-off, so `sample_posterior` can return a
+different path for the same key in a batched (`vmap`) and a looped run, or on
+other hardware, and a fixed-key path is not smooth in the model's parameters
+(finite differences through it do not converge). Each path is still an exact
+draw from the posterior, so means, covariances and Monte Carlo estimates are
+unaffected. For reproducible paths, give the ODE information a small noise, a
+nugget: `measure.with_noise(1e-10)`. Keep it well below the variance the filter
+predicts for the residual, since it widens the posterior a little.
 
 ### Dynamic calibration absorbs model–data misfit
 
