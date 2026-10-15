@@ -34,7 +34,7 @@
   margin-top: 2.5rem;
 }
 
-/* Home page title: the wordmark image, without the line box's descender gap. */
+/* Home page title: the wordmark, without the line box's descender gap. */
 .md-typeset h1.wordmark {
   line-height: 0;
 }
@@ -67,6 +67,8 @@
   --ode-amber: #ff8f00;
   --ode-pale: #9fa8da;
   --ode-bold: #4051b5;
+  --ode-ink: #1a237e;
+  --ode-text: #4051b5;
   --ode-ring: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='12.7 8.7 38.6 40.6'%3E%3Cellipse cx='32' cy='29' rx='16' ry='17' fill='none' stroke='%23000' stroke-width='6.6'/%3E%3C/svg%3E");
   /* Step responses of damped springs, sampled: the observation leads, light
      and bouncy (17% overshoot); the bold half follows, heavier (12%). */
@@ -92,6 +94,8 @@
   --ode-amber: #ffa726;
   --ode-pale: #5c6bc0;
   --ode-bold: #e8eaf6;
+  --ode-ink: #e8eaf6;
+  --ode-text: #9fa8da;
 }
 
 /* Header (and drawer) logo, on the primary colour. */
@@ -229,6 +233,108 @@
 
 [data-ode-tab="same"] .md-tabs__item--active .md-tabs__link::after {
   animation: none;
+}
+
+/* The home page wordmark (inline in docs/index.md). Hovering it sends a front
+   through O, D and E, left to right as a filter runs through time: behind it
+   the two strands have swapped colours, as the logo's halves do on hover, and
+   each observation pings as the front reaches it. Leaving sends the front
+   back. Each strand is drawn twice, as a single dash: the base from the front
+   on, the swapped copy up to it. Both strands are 138 units long, so the
+   fronts keep step; the E's middle bar is a path of its own, timed to follow
+   the front up the stem. */
+.ode-wordmark {
+  max-width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.ode-wordmark__strands {
+  fill: none;
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ode-wordmark__pale {
+  stroke: var(--ode-pale);
+}
+
+.ode-wordmark__ink {
+  stroke: var(--ode-ink);
+}
+
+.ode-wordmark__text {
+  fill: var(--ode-text);
+}
+
+.ode-wordmark__base,
+.ode-wordmark__swap {
+  stroke-dasharray: 2 3;
+  transition: stroke-dashoffset 1.2s linear;
+}
+
+.ode-wordmark__base {
+  stroke-dashoffset: 0.02;
+}
+
+.ode-wordmark__swap {
+  stroke-dashoffset: 2.02;
+}
+
+.ode-wordmark:hover .ode-wordmark__base {
+  stroke-dashoffset: -1.02;
+}
+
+.ode-wordmark:hover .ode-wordmark__swap {
+  stroke-dashoffset: 0.98;
+}
+
+.ode-wordmark__bar {
+  transition-duration: 0.145s;
+  transition-delay: 0.175s;
+}
+
+.ode-wordmark:hover .ode-wordmark__bar {
+  transition-delay: 0.88s;
+}
+
+.ode-wordmark__dot,
+.ode-wordmark__ring {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.ode-wordmark__dot {
+  fill: var(--ode-amber);
+}
+
+.ode-wordmark__ring {
+  fill: none;
+  stroke: var(--ode-amber);
+  stroke-width: 1.2;
+  opacity: 0;
+}
+
+/* The front passes under the O, over the D and under the E at these times. */
+.ode-wordmark__obs:nth-of-type(1) {
+  --ode-delay: 0.24s;
+}
+
+.ode-wordmark__obs:nth-of-type(2) {
+  --ode-delay: 0.64s;
+}
+
+.ode-wordmark__obs:nth-of-type(3) {
+  --ode-delay: 1.12s;
+}
+
+.ode-wordmark:hover .ode-wordmark__dot {
+  animation: ode-beat 0.5s var(--ode-delay) ease-out;
+}
+
+.ode-wordmark:hover .ode-wordmark__ring {
+  animation: ode-ping 0.9s var(--ode-delay) ease-out;
 }
 
 /* Navigation sidebar: the active entry carries a small O with the observation
@@ -414,6 +520,12 @@
   }
 }
 
+@keyframes ode-beat {
+  40% {
+    transform: scale(1.35);
+  }
+}
+
 @keyframes ode-drop {
   from {
     opacity: 0;
@@ -434,6 +546,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ode-mark *,
+  .ode-wordmark *,
   .md-tabs__link::after,
   .md-nav__link::before,
   .md-nav__link::after {
