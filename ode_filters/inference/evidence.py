@@ -35,13 +35,19 @@ import jax.numpy as np
 from jax import Array
 from jax.typing import ArrayLike
 
-from ..filters.fixed_grid import affine_filter
-from ..filters.kernel import observe
+from ..filters.fixed_grid import (
+    check_grid,
+    check_obs_model,
+    check_surrogate,
+    grid_transitions,
+)
+from ..filters.kernel import mask_rows, observe, scale_gaussian
 from ..filters.result import FilterResult
 from ..gaussian import AffineModel, Gaussian, marginalize
 from ..gaussian.algebra import _safe_qr
 from ..information import ObsModel
 from ..linearization.surrogate import AffineSurrogate
+from ..priors.base import Transition
 from ..priors.joint import JointPrior
 
 
@@ -153,11 +159,80 @@ class InformationCriteria(NamedTuple):
     D: Array
 
 
-def _innovation_logdet(Pz_sqr: Array | None) -> Array:
-    """``sum_n log|S_n|`` from stacked square-root innovation covariances."""
-    assert Pz_sqr is not None
-    diagonals = jax.vmap(np.diag)(Pz_sqr)
-    return 2.0 * np.sum(np.log(np.abs(diagonals)))
+def _logdet(F: Array) -> Array:
+    """``log|F.T @ F|`` of a triangular square-root factor ``F``."""
+    return 2.0 * np.sum(np.log(np.abs(np.diag(F))))
+
+
+def _predicted_factor(P_sqr: Array, transition: Transition) -> Array:
+    """Square root of the predicted covariance ``A P A.T + Q``.
+
+    A preconditioned transition acts on ``x / T_diag``: the factor moves into
+    those coordinates and back, as in the filter's prediction.
+    """
+    x = Gaussian(np.zeros(P_sqr.shape[0], dtype=P_sqr.dtype), P_sqr)
+    s = transition.T_diag
+    frame = x if s is None else scale_gaussian(x, 1.0 / s)
+    predicted = marginalize(transition.A, transition.b, transition.Q_sqr, frame)
+    return (predicted if s is None else scale_gaussian(predicted, s)).P_sqr
+
+
+def _updated_factors(P_sqr: Array, model: AffineModel) -> tuple[Array, Array]:
+    """Innovation factor and updated factor of observing ``H x + v``, from one QR.
+
+    The triangular factor of the pre-array ``[[R_sqr, 0], [P_sqr H.T, P_sqr]]``
+    is ``[[S_sqr, K], [0, P_sqr_new]]``: its Gram matrix
+    ``[[S, H P], [P H.T, P]]`` has the innovation covariance
+    ``S = H P H.T + R`` in the first block, and ``P_sqr_new`` factors the
+    Schur complement ``P - P H.T S^-1 H P``, the updated covariance.
+    """
+    k, n = model.H.shape
+    pre = np.block(
+        [
+            [model.R_sqr, np.zeros((k, n), dtype=P_sqr.dtype)],
+            [P_sqr @ model.H.T, P_sqr],
+        ]
+    )
+    post = _safe_qr(pre)
+    return post[:k, :k], post[k:, k:]
+
+
+def _innovation_logdets(
+    P_0_sqr: Array,
+    transitions: tuple[Transition | None, Transition | None],
+    surrogate: AffineSurrogate,
+    obs_model: ObsModel | None = None,
+) -> tuple[Array, Array]:
+    """``sum_n log|S_n|`` of the ODE information and of the data along a pass.
+
+    The innovation covariances do not depend on the means, so the pass carries
+    the state's square-root covariance alone: one QR per prediction and one per
+    update, which gives the innovation factor and the updated factor together
+    (``_updated_factors``). Rows without data are masked as in the filters and
+    add nothing; without ``obs_model`` the data's sum is zero.
+    """
+    constant, per_step = transitions
+    data = None if obs_model is None else (obs_model.c_seq, obs_model.mask)
+
+    def step(P_sqr: Array, inputs):
+        transition, model, step_data = inputs
+        step_transition = constant if transition is None else transition
+        assert step_transition is not None
+        P_sqr = _predicted_factor(P_sqr, step_transition)
+        S_sqr, P_sqr = _updated_factors(P_sqr, AffineModel(*model))
+        logdet_obs = np.zeros((), dtype=P_sqr.dtype)
+        if step_data is not None:
+            assert obs_model is not None
+            c, mask = step_data
+            observation = AffineModel(obs_model.H, c, obs_model.R_sqr)
+            S_obs_sqr, P_sqr = _updated_factors(P_sqr, mask_rows(observation, mask))
+            logdet_obs = _logdet(S_obs_sqr)
+        return P_sqr, (_logdet(S_sqr), logdet_obs)
+
+    _, (logdet_ode, logdet_obs) = jax.lax.scan(
+        step, np.asarray(P_0_sqr), (per_step, surrogate, data)
+    )
+    return np.sum(logdet_ode), np.sum(logdet_obs)
 
 
 def conditional_state_cov_sqr(P_0_sqr: ArrayLike, n_state: int) -> Array:
@@ -198,9 +273,11 @@ def information_criteria(
         I(U; Y | Z) = I(U; Y, Z) - I(U; Z)
         D           = 1/2 sum_n [log|S^obs_n| - log|S^obs_n given U|]
 
-    Each log-determinant is a sum of innovation log-determinants of a filter
-    pass, so four ``affine_filter`` passes give them all: the joint model and
-    the state block alone (given ``U``), each without and with the data. This
+    Each log-determinant is a sum of innovation log-determinants along a filter
+    pass, so four passes give them all: the joint model and the state block
+    alone (given ``U``), each without and with the data. The innovation
+    covariances do not depend on the means, so each pass carries only the
+    square-root covariance, with one QR per prediction and per update. This
     is valid because the joint prior's block-diagonal transition makes the
     state block evolve independently given ``U``, and a frozen surrogate is
     affine in ``U``, so conditioning on ``U`` only shifts the residual means --
@@ -237,35 +314,36 @@ def information_criteria(
             f"{prior.state_dim}; got m_0 of shape {m_0.shape} and data on "
             f"{obs_model.H.shape[1]} columns."
         )
-    if P_0_state_sqr is None:
-        P_0_state_sqr = conditional_state_cov_sqr(P_0_sqr, D_x)
+    ts = check_grid(ts)
+    n_steps = ts.shape[0] - 1
+    check_surrogate(surrogate, n_steps, m_0.shape[0])
+    check_obs_model(obs_model, n_steps)
+    P_0_state_sqr = (
+        conditional_state_cov_sqr(P_0_sqr, D_x)
+        if P_0_state_sqr is None
+        else np.asarray(P_0_state_sqr)
+    )
     state_surrogate = AffineSurrogate(
         surrogate.H[:, :, :D_x], surrogate.c, surrogate.R_sqr
     )
     state_obs = obs_model._replace(H=obs_model.H[:, :D_x])
+    joint = grid_transitions(prior, ts)
+    given_u = grid_transitions(prior.prior_x, ts)
 
-    joint = affine_filter(m_0, P_0_sqr, prior, surrogate, ts)
-    given_u = affine_filter(
-        m_0[:D_x], P_0_state_sqr, prior.prior_x, state_surrogate, ts
+    logdet_z, _ = _innovation_logdets(P_0_sqr, joint, surrogate)
+    logdet_z_given_u, _ = _innovation_logdets(P_0_state_sqr, given_u, state_surrogate)
+    # With the data: the ODE rows' innovations (now also given the earlier data)
+    # and the data's; together they factorize Cov(Z, Y).
+    logdet_z_data, logdet_obs = _innovation_logdets(
+        P_0_sqr, joint, surrogate, obs_model
     )
-    joint_data = affine_filter(m_0, P_0_sqr, prior, surrogate, ts, obs_model=obs_model)
-    given_u_data = affine_filter(
-        m_0[:D_x],
-        P_0_state_sqr,
-        prior.prior_x,
-        state_surrogate,
-        ts,
-        obs_model=state_obs,
+    logdet_z_data_given_u, logdet_obs_given_u = _innovation_logdets(
+        P_0_state_sqr, given_u, state_surrogate, state_obs
     )
-
-    logdet_z = _innovation_logdet(joint.Pz_sqr)
-    logdet_z_given_u = _innovation_logdet(given_u.Pz_sqr)
-    logdet_obs = _innovation_logdet(joint_data.Pz_obs_sqr)
-    logdet_obs_given_u = _innovation_logdet(given_u_data.Pz_obs_sqr)
-    logdet_zy = _innovation_logdet(joint_data.Pz_sqr) + logdet_obs
-    logdet_zy_given_u = _innovation_logdet(given_u_data.Pz_sqr) + logdet_obs_given_u
 
     I_UZ = 0.5 * (logdet_z - logdet_z_given_u)
-    I_UYZ = 0.5 * (logdet_zy - logdet_zy_given_u)
+    I_UYZ = 0.5 * (
+        (logdet_z_data + logdet_obs) - (logdet_z_data_given_u + logdet_obs_given_u)
+    )
     D = 0.5 * (logdet_obs - logdet_obs_given_u)
     return InformationCriteria(I_UZ=I_UZ, I_UY_given_Z=I_UYZ - I_UZ, D=D)

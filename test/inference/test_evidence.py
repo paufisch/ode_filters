@@ -21,6 +21,7 @@ from ode_filters import (
     MaternPrior,
     Measurement,
     ODEInformation,
+    PrecondIWP,
     affine_filter,
     conditional_loglik,
     fenrir_loglik,
@@ -264,6 +265,18 @@ def test_informations_are_differentiable_in_the_state_diffusion():
 
     assert_grad_matches_fd(criterion("I_UY_given_Z"), np.array(0.2))
     assert_grad_matches_fd(criterion("D"), np.array(0.2))
+
+
+def test_informations_do_not_depend_on_preconditioning():
+    """A preconditioned state prior is a change of variables inside each step."""
+    _, surrogate, m_0, P_0_sqr, obs = _setup()
+    plain = information_criteria(m_0, P_0_sqr, _prior(), surrogate, TS, obs)
+    precond = JointPrior(
+        PrecondIWP(q=1, d=1, Xi=np.eye(1)), MaternPrior(q=1, d=1, length_scale=0.8)
+    )
+    other = information_criteria(m_0, P_0_sqr, precond, surrogate, TS, obs)
+    for name in InformationCriteria._fields:
+        assert_close(getattr(other, name), getattr(plain, name), rtol=1e-9)
 
 
 def test_default_conditional_state_covariance_is_the_schur_complement():

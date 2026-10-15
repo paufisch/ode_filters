@@ -39,8 +39,17 @@ solve = eqx.filter_jit(gaussian_filter)
 result = solve(m_0, P_0_sqr, prior, measure, np.linspace(0.0, 10.0, 101))
 ```
 
-A traced grid is handled step by step (one transition per step); a concrete
-uniform grid passed outside `jit` computes the prior's transition once.
+A traced grid -- an argument of the compiled function, as above -- is handled
+step by step (one transition per step). A concrete uniform grid computes the
+prior's transition once: a NumPy or JAX array outside `jit`, or one the
+compiled function closes over. For a fixed grid and a prior whose transition is
+costly (a `MaternPrior` takes a matrix exponential and a quadrature per
+transition), close over it:
+
+```python
+ts = np.linspace(0.0, 10.0, 101)
+solve = eqx.filter_jit(lambda m_0, prior: gaussian_filter(m_0, P_0_sqr, prior, measure, ts))
+```
 
 ### Models are pytrees: use `equinox.filter_jit`, not `jax.jit` with static arguments
 

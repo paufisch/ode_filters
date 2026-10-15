@@ -7,6 +7,23 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+### Fixed
+
+- Under `jax.jit`, a concrete uniform grid -- a NumPy array, or a JAX array the
+  jitted function closes over -- gets one transition, as documented. It was
+  converted to a traced array first and so took the per-step path, one
+  transition per step, which made jitted solves with a `MaternPrior` two to
+  three times slower and moved their last bits away from the eager solve's. A
+  grid passed as an argument of a jitted function is traced and still takes the
+  per-step path.
+
+### Changed
+
+- `information_criteria` is about twice as fast. Its four passes carry only the
+  square-root covariance, which is all the informations depend on, with one QR
+  per prediction and per update; it ran four full `affine_filter` passes, with
+  means, backward conditionals and evidence. Values agree to round-off.
+
 ## [0.8.0] - 2026-10-15
 
 A breaking release that rebuilds the package around one filter step and turns it

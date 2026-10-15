@@ -186,7 +186,7 @@ def gaussian_filter_adaptive(
             ``obs_model`` of another length, or a calibration the prior does not
             support.
     """
-    save_at = check_grid(save_at)
+    save_at = np.asarray(check_grid(save_at))
     calibration = as_calibration(calibration)
     calibration.validate(prior)
     if sigma_in_error not in ("per_step", "running_mean"):

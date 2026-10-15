@@ -172,7 +172,7 @@ def iterated_smoother(
         smoothed = rts_smoother(one_shot)
         if n_iters == 0:
             return IteratedSmootherResult(
-                t=ts,
+                t=np.asarray(ts),
                 m=smoothed.m,
                 P_sqr=smoothed.P_sqr,
                 filter=one_shot,
@@ -233,7 +233,7 @@ def iterated_smoother(
         body, (point, last_init), None, length=n_iters
     )
     return IteratedSmootherResult(
-        t=ts,
+        t=np.asarray(ts),
         m=smoothed.m,
         P_sqr=smoothed.P_sqr,
         filter=result,

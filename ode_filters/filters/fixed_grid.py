@@ -8,9 +8,11 @@ affine model per step, and so is an exact square-root Kalman filter of that
 linear-Gaussian model.
 
 The grid may be non-uniform. On a concrete uniform grid the prior's transition
-is computed once; otherwise once per step. Data (an ``ObsModel`` from
-``prepare_observations`` on the same grid) are conditioned on after the ODE
-information at each step.
+is computed once; otherwise once per step. A grid is concrete when it is a NumPy
+array or a JAX array that is not traced -- also when a jitted function closes
+over it -- and traced when it is, e.g., an argument of a jitted function. Data
+(an ``ObsModel`` from ``prepare_observations`` on the same grid) are conditioned
+on after the ODE information at each step.
 """
 
 from __future__ import annotations
@@ -36,24 +38,30 @@ from .kernel import FrozenInformation, Information, OnlineInformation, filter_st
 from .result import FilterResult
 
 
-def check_grid(ts: ArrayLike) -> Array:
-    """Validate a time grid: 1-D, at least two nodes, increasing where concrete."""
-    ts = np.asarray(ts, dtype=float)
-    if ts.ndim != 1 or ts.shape[0] < 2:
-        raise ValueError(
-            f"ts must be a 1-D array of at least two times, got shape {ts.shape}."
-        )
+def check_grid(ts: ArrayLike) -> Array | onp.ndarray:
+    """Validate a time grid: 1-D, at least two nodes, increasing where concrete.
+
+    A concrete grid comes back as a NumPy array, a traced one as a JAX array. The
+    NumPy array stays concrete inside ``jax.jit``, where converting it to a JAX
+    array would make it a tracer, so ``grid_transitions`` still sees a uniform
+    grid as uniform.
+    """
     try:
-        ts_host = onp.asarray(ts)
+        ts_host = onp.asarray(ts, dtype=float)
     except jax.errors.TracerArrayConversionError:
-        return ts
-    if not onp.all(onp.diff(ts_host) > 0):
+        ts_host = None
+    grid = np.asarray(ts, dtype=float) if ts_host is None else ts_host
+    if grid.ndim != 1 or grid.shape[0] < 2:
+        raise ValueError(
+            f"ts must be a 1-D array of at least two times, got shape {grid.shape}."
+        )
+    if ts_host is not None and not onp.all(onp.diff(ts_host) > 0):
         raise ValueError("ts must be strictly increasing.")
-    return ts
+    return grid
 
 
 def grid_transitions(
-    prior: BasePrior, ts: Array
+    prior: BasePrior, ts: Array | onp.ndarray
 ) -> tuple[Transition | None, Transition | None]:
     """The prior's transitions over the steps of ``ts``.
 
@@ -83,11 +91,31 @@ def check_obs_model(obs_model: ObsModel, n_steps: int) -> None:
         )
 
 
+def check_surrogate(surrogate: AffineSurrogate, n_steps: int, state_dim: int) -> None:
+    """Raise unless ``surrogate`` holds one affine model per step on the state."""
+    H, c, R_sqr = surrogate
+    if H.ndim != 3 or H.shape[0] != n_steps:
+        raise ValueError(
+            f"surrogate.H must have shape [N, m, D] with N = {n_steps} steps, got "
+            f"{H.shape}."
+        )
+    if H.shape[2] != state_dim:
+        raise ValueError(
+            f"surrogate.H acts on states of dimension {H.shape[2]}, but m_0 has "
+            f"dimension {state_dim}."
+        )
+    if c.shape != H.shape[:2] or R_sqr.shape != (*H.shape[:2], H.shape[1]):
+        raise ValueError(
+            f"surrogate.c and surrogate.R_sqr must have shapes {H.shape[:2]} and "
+            f"{(*H.shape[:2], H.shape[1])}, got {c.shape} and {R_sqr.shape}."
+        )
+
+
 def run_filter(
     m_0: Array,
     P_0_sqr: Array,
     prior: BasePrior,
-    ts: Array,
+    ts: Array | onp.ndarray,
     *,
     calibration: Calibration,
     information: Information | None = None,
@@ -140,7 +168,7 @@ def run_filter(
 
     innovation_obs, ll_obs = out.innovation_obs, out.log_likelihood_obs
     return FilterResult(
-        t=ts,
+        t=np.asarray(ts),
         m=with_initial(x_0.m, out.filtered.m),
         P_sqr=with_initial(x_0.P_sqr, out.filtered.P_sqr),
         log_likelihood=np.sum(out.log_likelihood),
@@ -254,23 +282,7 @@ def affine_filter(
     """
     ts = check_grid(ts)
     m_0 = np.asarray(m_0)
-    n_steps = ts.shape[0] - 1
-    H, c, R_sqr = surrogate
-    if H.ndim != 3 or H.shape[0] != n_steps:
-        raise ValueError(
-            f"surrogate.H must have shape [N, m, D] with N = {n_steps} steps, got "
-            f"{H.shape}."
-        )
-    if H.shape[2] != m_0.shape[0]:
-        raise ValueError(
-            f"surrogate.H acts on states of dimension {H.shape[2]}, but m_0 has "
-            f"dimension {m_0.shape[0]}."
-        )
-    if c.shape != H.shape[:2] or R_sqr.shape != (*H.shape[:2], H.shape[1]):
-        raise ValueError(
-            f"surrogate.c and surrogate.R_sqr must have shapes {H.shape[:2]} and "
-            f"{(*H.shape[:2], H.shape[1])}, got {c.shape} and {R_sqr.shape}."
-        )
+    check_surrogate(surrogate, ts.shape[0] - 1, m_0.shape[0])
     return run_filter(
         m_0,
         np.asarray(P_0_sqr),
