@@ -132,6 +132,15 @@ def test_a_closed_over_grid_keeps_one_transition_under_jit():
     assert_close(transition_matrix(), prior.A((TSPAN[1] - TSPAN[0]) / N), rtol=1e-14)
 
 
+def test_a_concrete_grid_comes_back_as_a_new_copy_on_every_call():
+    """JAX keys a captured constant's device copy by the array object."""
+    for grid in (onp.linspace(*TSPAN, N + 1), TS):
+        first, second = check_grid(grid), check_grid(grid)
+        assert isinstance(first, onp.ndarray)
+        assert first is not second and first is not grid
+        assert onp.array_equal(first, second)
+
+
 def test_a_jitted_solve_on_a_closed_over_grid_matches_the_eager_one():
     prior, measure, m_0, P_0_sqr = _logistic(MaternPrior, length_scale=1.0)
     grid = onp.linspace(*TSPAN, N + 1)

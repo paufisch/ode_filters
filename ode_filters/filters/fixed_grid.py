@@ -44,10 +44,13 @@ def check_grid(ts: ArrayLike) -> Array | onp.ndarray:
     A concrete grid comes back as a NumPy array, a traced one as a JAX array. The
     NumPy array stays concrete inside ``jax.jit``, where converting it to a JAX
     array would make it a tracer, so ``grid_transitions`` still sees a uniform
-    grid as uniform.
+    grid as uniform. It is a new copy on every call: JAX keys its device copy of
+    a captured NumPy constant by the array object and keeps it across a change
+    of ``jax_enable_x64`` (see ``ode_filters.priors._constants``), and
+    ``onp.asarray`` returns the same object for the same grid.
     """
     try:
-        ts_host = onp.asarray(ts, dtype=float)
+        ts_host = onp.array(ts, dtype=float)
     except jax.errors.TracerArrayConversionError:
         ts_host = None
     grid = np.asarray(ts, dtype=float) if ts_host is None else ts_host
