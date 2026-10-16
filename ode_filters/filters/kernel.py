@@ -40,7 +40,7 @@ from ..gaussian import (
     update,
 )
 from ..gaussian.algebra import _safe_qr
-from ..information.protocol import MeasurementModel
+from ..information.protocol import HasLHSSelector, MeasurementModel
 from ..linearization.correction import Correction
 from ..priors.base import Transition
 
@@ -121,8 +121,20 @@ class OnlineInformation(NamedTuple):
         return self.correction.correct(self.measure, x, model, t=t)
 
     def lhs_selector(self) -> Array:
-        """The measurement model's ``E_lhs``."""
-        return self.measure.E_lhs  # type: ignore[attr-defined]
+        """The measurement model's ``E_lhs``.
+
+        Raises:
+            AttributeError: If the measurement model declares no ``E_lhs``
+                (see ``HasLHSSelector``).
+        """
+        measure = self.measure
+        if not isinstance(measure, HasLHSSelector):
+            raise AttributeError(
+                f"{type(measure).__name__} has no 'E_lhs', the selector of the "
+                "ODE's left-hand side (see HasLHSSelector). Use a calibration "
+                "that does not need one."
+            )
+        return measure.E_lhs
 
 
 class FrozenInformation(NamedTuple):

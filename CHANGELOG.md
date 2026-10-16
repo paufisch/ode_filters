@@ -7,6 +7,12 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+### Added
+
+- `ode_filters.information` protocols for the optional members of a
+  measurement model: `HasLHSSelector`, `EK0Linearizable`, `HasNoiseCovariance`
+  and `NoiseSettable`. A model that lacks one raises an error naming it.
+
 ## [0.8.0] - 2026-10-15
 
 A breaking release that rebuilds the package around one filter step and turns it

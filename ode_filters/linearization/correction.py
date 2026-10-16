@@ -41,7 +41,7 @@ from jax import Array
 from jax.typing import ArrayLike
 
 from ..gaussian import AffineModel, Gaussian, update
-from ..information.protocol import MeasurementModel
+from ..information.protocol import EK0Linearizable, MeasurementModel
 from .statistical import QuadratureRule, quadrature_nodes, slr_linearize
 
 
@@ -56,18 +56,23 @@ def taylor_linearize(
         t: Time.
         order: ``1`` for the full Jacobian (EK1); ``0`` drops the vector-field
             Jacobian from the ODE rows (EK0), which needs a model with a
-            ``linearize_ek0`` method (the ODE-information models).
+            ``linearize_ek0`` method (``EK0Linearizable``, which the
+            ODE-information models implement).
 
     Returns:
         The affine model, with the measurement noise.
+
+    Raises:
+        TypeError: If ``order`` is ``0`` and ``measure`` has no
+            ``linearize_ek0``.
     """
     if order == 0:
-        if not hasattr(measure, "linearize_ek0"):
+        if not isinstance(measure, EK0Linearizable):
             raise TypeError(
                 f"An EK0 linearization needs an ODE-information model; "
                 f"{type(measure).__name__} has no linearize_ek0."
             )
-        H, c = measure.linearize_ek0(state, t=t)  # type: ignore[attr-defined]
+        H, c = measure.linearize_ek0(state, t=t)
     else:
         H, c = measure.linearize(state, t=t)
     return AffineModel(H, c, measure.noise_sqr(t=t))
