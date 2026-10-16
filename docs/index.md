@@ -34,15 +34,16 @@ hide:
 [![Docs](https://img.shields.io/badge/docs-latest-brightgreen)](https://paufisch.github.io/ode_filters/)
 [![Coverage](https://codecov.io/gh/paufisch/ode_filters/branch/main/graph/badge.svg)](https://codecov.io/gh/paufisch/ode_filters)
 
-**`ode_filters` fits ODE models to data, with the solver's numerical error
-accounted for.** It is a probabilistic ODE solver: instead of a single
-approximate trajectory, it returns a Gaussian distribution over the solution,
-whose spread estimates the numerical error. It treats the ODE as *information*
-about the solution, on the same footing as data, so one square-root Kalman
-filter conditions on the ODE, on noisy measurements, on conservation laws, and
-on an unknown input that drives the system. That gives a likelihood of the data
-that accounts for the numerical error, differentiable in every parameter of the
-model — in pure JAX, so fits can be compiled, batched and differentiated.
+`ode_filters` fits ODE models to data and accounts for the numerical error of
+the solver. It is a probabilistic ODE solver: it returns a Gaussian
+distribution over the solution instead of a single trajectory, and the spread
+of this distribution estimates the numerical error. The ODE enters as
+information about the solution, in the same way as data. One square-root Kalman
+filter therefore conditions on the ODE, on noisy measurements, on conservation
+laws and on an unknown input that drives the system. The result is a likelihood
+of the data that includes the numerical error and is differentiable in every
+parameter of the model. The library is written in JAX, so fits can be
+compiled, batched and differentiated.
 
 ```python
 import jax
@@ -91,10 +92,10 @@ print(f"r = {theta['r'].unwrap():.3f}  (true: 0.8)")
 # r = 0.793  (true: 0.8)
 ```
 
-New here? Read **[What is a probabilistic ODE solver?](probabilistic-ode-solvers.md)**
-for the intuition, run the **[Quickstart](examples/quickstart.ipynb)** to solve an
-ODE, then the **[Parameter estimation](examples/parameter-estimation.ipynb)**
-tutorial to fit one.
+For an introduction, read
+[What is a probabilistic ODE solver?](probabilistic-ode-solvers.md), then solve
+an ODE in the [Quickstart](examples/quickstart.ipynb) and fit one in the
+[Parameter estimation](examples/parameter-estimation.ipynb) tutorial.
 
 ## Where to go next
 
@@ -112,7 +113,7 @@ tutorial to fit one.
 
     ---
 
-    Infer the unknown force that drives an oscillator, with error bars.
+    Infer the unknown force that drives an oscillator, with its uncertainty.
 
     [:octicons-arrow-right-24: Recovering a hidden input](examples/hidden-input.ipynb)
 
@@ -120,7 +121,7 @@ tutorial to fit one.
 
     ---
 
-    What a probabilistic ODE solver computes, and what its uncertainty is good for.
+    What a probabilistic ODE solver computes, and what its uncertainty is used for.
 
     [:octicons-arrow-right-24: What is a probabilistic ODE solver?](probabilistic-ode-solvers.md)
 
@@ -136,7 +137,7 @@ tutorial to fit one.
 
     ---
 
-    Prior, order, linearization, step size, calibration and the inference tools, with sensible defaults.
+    Prior, order, linearization, step size, calibration and the inference tools, and their defaults.
 
     [:octicons-arrow-right-24: How to choose](how-to-choose.md)
 
@@ -144,7 +145,7 @@ tutorial to fit one.
 
     ---
 
-    What probdiffeq, ProbNumDiffEq.jl and rodeo offer, and where this library differs.
+    What probdiffeq, ProbNumDiffEq.jl and rodeo offer, and when to use which.
 
     [:octicons-arrow-right-24: How it compares](comparison.md)
 
@@ -152,7 +153,7 @@ tutorial to fit one.
 
     ---
 
-    Float64, `jit` and pytrees, data on the grid, and other things that bite.
+    Float64, `jit` and pytrees, data on the grid, and other common errors.
 
     [:octicons-arrow-right-24: Sharp bits & FAQ](sharp-bits.md)
 

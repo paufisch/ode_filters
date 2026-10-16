@@ -1,57 +1,57 @@
-"""Work-precision benchmark: accuracy vs runtime across libraries.
+"""Work-precision benchmark: accuracy against runtime, across libraries.
 
-Measures *accuracy* against a high-accuracy reference and plots work-precision
-diagrams (relative **trajectory RMSE** vs runtime -- not a single endpoint, which
-is noisy and phase-sensitive on oscillatory problems), comparing ode_filters to
-probdiffeq and Diffrax. To keep the comparison apples-to-apples it produces
-**two** diagrams, each holding the stepping strategy fixed across *all* solvers:
+Measures the accuracy of ode_filters, probdiffeq and Diffrax against a reference
+solution and plots it against the runtime. Accuracy is the relative trajectory
+RMSE, averaged over the solution path rather than taken at the endpoint, which
+is noisy and sensitive to the phase on oscillatory problems. Within each figure
+all solvers use the same stepping strategy:
 
-- ``work_precision.{pdf,svg}`` -- **all adaptive** (the headline). Every solver
-  sweeps its tolerance and runs its own step-size controller:
-  ``ode_filters`` EK1 / EK0 (``gaussian_filter_adaptive``, PI controller),
-  ``probdiffeq`` ts1 / ts0 (``solve_adaptive_save_at``), and **Diffrax**
-  Tsit5 (PID controller). This is what a user actually runs, and it lets the
-  probabilistic solvers use the adaptive stepping they ship with. The solution is
-  scored on a common dense save grid (via each solver's dense output, so the save
-  points do not force extra steps).
-- ``work_precision_fixed.{pdf,svg}`` -- **all fixed grid**. Every solver runs on
-  the same uniform grid (``N`` sweep), including Diffrax Tsit5 forced onto a
-  constant step (``ConstantStepSize``); the RMSE is over that native grid.
+- ``work_precision.{pdf,svg}``: adaptive steps. Every solver sweeps its
+  tolerance and runs its own step-size controller: ``ode_filters`` EK1 / EK0
+  (``gaussian_filter_adaptive``, PI controller), ``probdiffeq`` ts1 / ts0
+  (``solve_adaptive_save_at``) and Diffrax's Tsit5 (PID controller). The
+  solution is scored on a common save grid, through each solver's dense output,
+  so the save points do not force extra steps.
+- ``work_precision_fixed.{pdf,svg}``: fixed grid. Every solver runs on the same
+  uniform grid (a sweep over ``N``), Diffrax's Tsit5 with ``ConstantStepSize``;
+  the RMSE is over that grid.
 
-Mixing the two (fixed-grid probabilistic vs adaptive classical) conflates the
-probabilistic-vs-classical axis with the fixed-vs-adaptive axis, so we keep them
-in separate figures. Next to the figures, ``work_precision.json`` holds every
-number (error, runtime median and interquartile range, the per-repeat runtimes,
-step counts) and the metadata of the run (package versions, git commit, CPU,
-load average, date).
+Mixing fixed-grid probabilistic solvers with an adaptive classical one would
+confound the two comparisons, so they are separate figures. Next to the
+figures, ``work_precision.json`` holds every number (error, median runtime and
+interquartile range, the runtime of every round, step counts) and the metadata
+of the run (package versions, git commit, CPU, load average, date).
 
-Timing. Every configuration is compiled and run once first (that call also
-gives the error and the step counts). The timing then runs in ``--repeats``
-rounds; each round visits *all* configurations -- every problem, solver and
-setting -- in a fresh random order, and times one warm-up call plus
+Timing. Every configuration is compiled and run once first; that call also
+gives the error and the step counts. The timing then runs in ``--repeats``
+rounds. Each round visits all configurations (every problem, solver and
+setting) in a new random order and times one warm-up call plus
 ``CALLS_PER_REPEAT`` calls of each (``block_until_ready``), keeping the median
-of those calls. Interleaving the configurations this way makes a slow drift in
-the machine load hit all of them equally instead of biasing whichever ran last.
-The figures show the median over the rounds, with the interquartile range as a
-horizontal bar.
+of those calls. A slow drift in the machine load therefore affects all
+configurations equally instead of biasing the ones that ran last. The figures
+show the median over the rounds, with the interquartile range as a horizontal
+bar.
 
-NOTE: this script enables ``jax_enable_x64`` itself. Standalone scripts do not
-see ``conftest.py`` (which is what turns on float64 for the test suite); in float32
-the probabilistic solvers hit a ~1e-6 round-off floor that *grows* with step count,
-which would show up as spurious "error increases with runtime" curves.
+The script enables ``jax_enable_x64`` itself. Standalone scripts do not read
+``conftest.py``, which enables float64 for the test suite. In float32 the
+probabilistic solvers reach a round-off floor of about 1e-6 that grows with
+the number of steps, which would show as an error that increases with runtime.
 
-All solvers (probabilistic and classical) use ``Q=3`` smoothness / matched order.
-The reference is Diffrax ``Dopri8`` at ``rtol=1e-12`` (a tolerance achievable in
-float64 for these problems, and 2-3 orders tighter than the best method measured).
-Coarse grids / loose tolerances where a solver diverges are dropped (the convergent
-branch is what a work-precision diagram shows). Calibration quality (whether the
-posterior uncertainty is honest) is an *internal* ode_filters concern rather than a
-cross-library comparison, so it lives in the docs --
-``docs/examples/calibration-modes.ipynb`` and ``docs/calibration.md`` -- not
-here.
+All probabilistic solvers use priors of order ``Q = 3``. Both probabilistic
+libraries calibrate the diffusion dynamically, at every step (ode_filters
+``calibration="dynamic"``, probdiffeq ``solver_dynamic``): with the same
+calibration they compute the same means on a fixed grid, so the figures compare
+runtime rather than calibration choices (``probdiffeq.ivpsolvers.solver`` does
+not calibrate, which is far less accurate on Lotka-Volterra). The reference is
+Diffrax's ``Dopri8`` at ``rtol=1e-12``, two to three orders of magnitude below
+the smallest error measured. Settings where a solver diverges (relative error
+above 1) are left out of the figures. Calibration quality, i.e. whether the
+posterior uncertainty matches the error, is a property of ode_filters alone and
+is studied in the docs (``docs/examples/calibration-modes.ipynb`` and
+``docs/calibration.md``), not here.
 
-Run with: ``uv run --extra benchmarks python benchmarks/work_precision.py``
-(``--help`` lists the options; ``--quick`` is a smoke run of well under a minute).
+Run with ``uv run --extra benchmarks python benchmarks/work_precision.py``
+(``--help`` lists the options; ``--quick`` is a smoke run of under a minute).
 """
 
 # pyright runs in the dev environment (pre-commit, CI), which lacks the
@@ -97,10 +97,10 @@ from ode_filters.information import ODEInformation
 from ode_filters.linearization import TaylorCorrection
 from ode_filters.priors import IWP, taylor_mode_initialization
 
-# Standalone benchmark scripts do not see `conftest.py`, which is what enables
-# float64 for the test suite. Without this, JAX defaults to float32 and the
-# probabilistic solvers hit a ~1e-6 round-off floor that *grows* with step count
-# -- producing spurious "error increases with runtime" work-precision curves.
+# Standalone scripts do not read `conftest.py`, which enables float64 for the
+# test suite. In float32 the probabilistic solvers reach a round-off floor of
+# about 1e-6 that grows with the number of steps, so the error would increase
+# with the runtime.
 jax.config.update("jax_enable_x64", True)
 
 DEFAULT_OUT_DIR = Path(__file__).resolve().parent / "results"
@@ -221,7 +221,7 @@ def reference_on(problem: ODEProblem, grids: Sequence[np.ndarray]) -> list[np.nd
 
 
 # --------------------------------------------------------------------------- #
-# Solvers -- each returns the *trajectory* (the solution sampled on its        #
+# Solvers. Each returns the trajectory (the solution sampled on its            #
 # evaluation grid, so the caller can score it with a trajectory RMSE rather    #
 # than a single endpoint) and its accepted / rejected step counts.             #
 #                                                                              #
@@ -279,8 +279,8 @@ def make_ode_filters_adaptive(problem: ODEProblem, order: int) -> AdaptiveRun:
         )
         assert res.success is not None
         assert res.n_accepted is not None and res.n_rejected is not None
-        # A solve that fails to reach every save time is a divergence -- emit NaN
-        # so it drops out of the plotted (convergent) branch.
+        # A solve that fails to reach every save time has diverged; NaN drops it
+        # from the plotted (convergent) branch.
         traj = jnp.where(res.success, res.m @ prior.E0.T, jnp.nan)
         return traj, jnp.sum(res.n_accepted), jnp.sum(res.n_rejected)
 
@@ -302,7 +302,11 @@ def _probdiffeq_setup(problem: ODEProblem, kind: str):
         else ivpsolvers.correction_ts0(vf, ode_order=1, ssm=ssm)
     )
     strategy = ivpsolvers.strategy_filter(ssm=ssm)
-    solver = ivpsolvers.solver(strategy, prior=ibm, correction=correction, ssm=ssm)
+    # Dynamic calibration, as ode_filters' calibration="dynamic" (see the
+    # module docstring and test/integration/test_probdiffeq_agreement.py).
+    solver = ivpsolvers.solver_dynamic(
+        strategy, prior=ibm, correction=correction, ssm=ssm
+    )
     return init, solver, ssm
 
 
@@ -329,7 +333,7 @@ def make_probdiffeq_adaptive(problem: ODEProblem, kind: str) -> AdaptiveRun:
     def run(tol: float) -> Out:
         adaptive = ivpsolvers.adaptive(solver, ssm=ssm, atol=tol, rtol=tol)
         # `save_at` uses the solver's dense output (interpolation), so it does not
-        # force extra steps -- the runtime still reflects the natural adaptive cost.
+        # force extra steps, and the runtime is that of the adaptive steps alone.
         sol = ivpsolve.solve_adaptive_save_at(
             init, save_at=save_at, adaptive_solver=adaptive, dt0=dt0, ssm=ssm
         )
@@ -454,10 +458,9 @@ class Config:
 def rel_trmse(traj: np.ndarray, ref: np.ndarray) -> float:
     """Relative trajectory RMSE between a solution and the reference.
 
-    Both are ``[K, d]`` (solution sampled on the evaluation grid). Averaging the
-    error over the whole trajectory -- rather than reading a single endpoint --
-    is robust to the phase sensitivity of oscillatory problems and is the metric
-    used across the probabilistic-ODE literature.
+    Both are ``[K, d]`` (solution sampled on the evaluation grid). The error is
+    averaged over the whole trajectory instead of read at the endpoint, which is
+    sensitive to the phase on oscillatory problems.
     """
     with np.errstate(over="ignore", invalid="ignore"):  # a diverged run: inf/NaN
         num = np.sqrt(np.mean(np.sum((traj - ref) ** 2, axis=-1)))
@@ -857,8 +860,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     cpus = os.cpu_count() or 1
     if load_start is not None and load_start[0] > 0.25 * cpus:
         print(
-            f"warning: load average {load_start[0]:.1f} on {cpus} CPUs -- the "
-            "timings will be noisy; produce final figures on a quiet machine."
+            f"warning: load average {load_start[0]:.1f} on {cpus} CPUs; the "
+            "timings will be noisy. Produce final figures on an idle machine."
         )
     wall_start = time.perf_counter()
 

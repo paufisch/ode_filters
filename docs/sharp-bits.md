@@ -139,9 +139,9 @@ much smaller too wide. Without data, see [Diffusion calibration](calibration.md)
 
 `scipy` and Diffrax are classical solvers: fast point trajectories, no
 uncertainty. The others are probabilistic solvers. [How it compares](comparison.md)
-sets out what each offers, and where `ode_filters` differs: inference from data
-with the ODE as information, hidden inputs, and the evidence for selecting
-hyperparameters.
+sets out what each offers and when to use which: probdiffeq is the fastest, and
+`ode_filters` focuses on models that combine the ODE with data, conservation laws
+and hidden inputs.
 
 ### Which function do I call?
 
