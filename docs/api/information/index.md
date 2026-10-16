@@ -46,13 +46,16 @@ Further constraints are added with frozen dataclasses:
 - **`Conservation`**: Time-invariant linear constraints `A @ x = p`, passed via
   the ODE class's `constraints=` argument.
 - **`Measurement`**: Time-varying observations `A @ x = z[t]` at specified times.
-  They are not constraints of the measurement model. Build an observation
-  model with `prepare_observations([Measurement(...)], E0, ts)` and pass it as
-  `obs_model=` to the solver. Every measurement time must be a node of the grid.
-  `merge_measurement_times(ts, measurements)` adds off-grid times to it.
-  Measurements may have different times, and each step conditions on the rows
-  that have data. Built inside `jax.jit` from concrete times, a `Measurement`
-  may carry traced data.
+  They are not constraints of the measurement model. Pass them to a solver as
+  `measurements=[Measurement(...)]`, or build an observation model with
+  `prepare_observations([Measurement(...)], prior.E0_state, ts)` and pass it as
+  `obs_model=`. `A` acts on the solution `x = prior.E0_state @ state` (for a
+  `JointPrior`, the solution without the input), or on the full state with
+  `full_state=True`. A time between two grid nodes becomes a data-only node,
+  where the filter conditions on the data without an update on the ODE
+  information (see [sharp bits](../../sharp-bits.md#data-between-grid-nodes-add-nodes-without-ode-information)). Measurements may have
+  different times, and each step conditions on the rows that have data. Built
+  inside `jax.jit` from concrete times, a `Measurement` may carry traced data.
 
 ## Usage Examples
 
@@ -258,8 +261,6 @@ model = TransformedMeasurement(base_model, softmax_transform, sigma_jacobian=sig
 ::: ode_filters.information.Measurement
 
 ::: ode_filters.information.prepare_observations
-
-::: ode_filters.information.merge_measurement_times
 
 ::: ode_filters.information.ObsModel
 

@@ -10,11 +10,22 @@ quasi-Newton methods (L-BFGS-B by default), which on low-dimensional problems
 usually need fewer evaluations. The diagnostics check a fitted model against its
 data.
 
-`marginal_loglik` solves on the fixed grid `InferenceProblem.ts` by default.
-With `InferenceProblem(..., adaptive=AdaptiveSettings(atol=..., rtol=...))` it
-runs `gaussian_filter_adaptive` with `ts` as the save grid, which carries the
-data. The channels `"obs"`, `"ode"`, `"both"` and `"fenrir"` are available
-there, and the result is differentiable in the parameters.
+`marginal_loglik` takes the data as an `ObsModel` for `InferenceProblem.ts` or
+as a list of `Measurement` objects, which it converts with
+`prepare_observations(data, prior.E0_state, ts)`. It solves on the fixed grid
+`ts` by default. Data between the grid nodes become data-only nodes, where the
+filter conditions on the data without an update on the ODE information, and
+every channel works with them. With
+`InferenceProblem(..., adaptive=AdaptiveSettings(atol=..., rtol=...))` it runs
+`gaussian_filter_adaptive` with `ts` as the save grid, which lands on the data
+times as well. The channels `"obs"`, `"ode"`, `"both"` and `"fenrir"` are
+available there, and the result is differentiable in the parameters.
+
+`fenrir_loglik` and `conditional_loglik` take a pass without data. With
+data-only nodes it must run on the same timeline as the data: pass
+`obs_model=obs_model.without_data()` to the solver, which keeps the timeline
+and drops every row. `information_criteria` runs its passes with the data over
+the timeline as well.
 
 ## Parameter inference
 

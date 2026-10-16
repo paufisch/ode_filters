@@ -19,7 +19,7 @@
 - **Hidden inputs**: joint state-input priors recover an unknown force driving the system, with information criteria for what the data say about it
 - **Evidence for hyperparameters**: the sequential data evidence and the conditional evidence given the ODE (Fenrir, Dalton)
 - **Outputs**: smoothed marginals, joint posterior samples, dense output, observation predictives, innovation diagnostics (NIS, whitened residuals)
-- **The ODE as information**: first- and second-order ODEs, conservation laws, black-box and transformed operators, data at any grid node
+- **The ODE as information**: first- and second-order ODEs, conservation laws, black-box and transformed operators, data at any time (between the grid nodes as data-only nodes)
 - **Pluggable linearization**: EK0, EK1, IEKF and statistical linearization, plus the IEKS and IPLS smoothers
 - **Priors**: integrated Wiener, Matern, integrated Ornstein-Uhlenbeck and joint priors, plain or preconditioned
 - **Calibrated uncertainty**: online and post-hoc diffusion calibration; fixed grids of any spacing and adaptive steps

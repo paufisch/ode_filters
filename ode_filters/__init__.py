@@ -78,7 +78,6 @@ from .information import (
     SecondOrderODEInformation,
     SecondOrderODEInformationWithHidden,
     TransformedMeasurement,
-    merge_measurement_times,
     prepare_observations,
 )
 from .linearization import (
@@ -166,7 +165,6 @@ __all__ = [
     "iterated_smoother",
     "joint_taylor_initialization",
     "marginal_loglik",
-    "merge_measurement_times",
     "nis",
     "observation_predictive",
     "posthoc_mle_sigma_sqr",

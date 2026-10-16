@@ -12,7 +12,10 @@ One step of a Gaussian ODE filter moves the state ``x_n ~ N(m, P)`` to time
 3. **observe** the data, if any, with a per-row mask.
 
 The fixed-grid, adaptive and iterated solvers differ only in how they choose
-the step sizes and the information, not in the step itself.
+the step sizes and the information, not in the step itself. On a timeline with
+data-only nodes (see ``ode_filters.filters.fixed_grid``), a step that ends at a
+data-only node runs steps 1 and 3 only, with the diffusion that
+``estimate_diffusion`` gave its grid interval.
 
 **Preconditioning** is a change of variables inside the step. A preconditioned
 prior's transition (``Transition.T_diag``) acts on ``x_bar = x / T_diag``; the
@@ -232,6 +235,52 @@ def observe(
     return posterior, innovation, ll
 
 
+def estimate_diffusion(
+    x: Gaussian,
+    transition: Transition,
+    information: Information,
+    *,
+    t: ArrayLike,
+    calibration: Calibration,
+) -> tuple[Array, Array, AffineModel]:
+    """The diffusion of a step, from the ODE residual at its predicted mean.
+
+    The diffusion is estimated before the predicted covariance exists, from the
+    information linearized at the predicted mean ``A m + b``; the ODE rows alone
+    drive it.
+
+    Args:
+        x: The state at the start of the step.
+        transition: The prior's transition over the step.
+        information: The ODE information at the end of the step.
+        t: The time at the end of the step.
+        calibration: Diffusion calibration policy.
+
+    Returns:
+        ``(sigma_sqr, diffusion, model)``: the estimate, the diffusion to
+        propagate with, and the information linearized at the predicted mean.
+    """
+    s = transition.T_diag
+    m_prev = x.m if s is None else x.m / s
+    m_pred_frame = transition.A @ m_prev + transition.b
+    m_pred = m_pred_frame if s is None else m_pred_frame * s
+
+    model = information.linearize(m_pred, t=t)
+    d = information.ode_dim
+    residual = (model.H @ m_pred + model.c)[:d]
+
+    def in_frame(H: Array) -> Array:
+        return H if s is None else H * s[None, :]
+
+    sigma_sqr, diffusion = calibration.calibrate(
+        residual,
+        in_frame(model.H[:d]),
+        transition.Q_sqr,
+        H_ek0=lambda: in_frame(information.lhs_selector()),
+    )
+    return sigma_sqr, diffusion, model
+
+
 def filter_step(
     x: Gaussian,
     transition: Transition,
@@ -259,25 +308,8 @@ def filter_step(
     Returns:
         The step's ``StepOutput``.
     """
-    s = transition.T_diag
-    m_prev = x.m if s is None else x.m / s
-    m_pred_frame = transition.A @ m_prev + transition.b
-    m_pred = m_pred_frame if s is None else m_pred_frame * s
-
-    # The diffusion is estimated from the ODE residual at the predicted mean,
-    # before the predicted covariance exists; the ODE rows alone drive it.
-    model = information.linearize(m_pred, t=t)
-    d = information.ode_dim
-    residual = (model.H @ m_pred + model.c)[:d]
-
-    def in_frame(H: Array) -> Array:
-        return H if s is None else H * s[None, :]
-
-    sigma_sqr, diffusion = calibration.calibrate(
-        residual,
-        in_frame(model.H[:d]),
-        transition.Q_sqr,
-        H_ek0=lambda: in_frame(information.lhs_selector()),
+    sigma_sqr, diffusion, model = estimate_diffusion(
+        x, transition, information, t=t, calibration=calibration
     )
     Q_sqr = scale_noise(transition.Q_sqr, diffusion)
     predicted, backward = predict(x, transition._replace(Q_sqr=Q_sqr))

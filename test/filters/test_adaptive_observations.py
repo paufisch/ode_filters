@@ -1,8 +1,8 @@
-"""Observations assimilated at their save-at times by the adaptive filter.
+"""Observations assimilated at their times by the adaptive filter.
 
-The adaptive solver lands exactly on every ``save_at`` time, and external
-observations (built with :func:`prepare_observations`, aligned to ``save_at``)
-are assimilated at those times. These end-to-end tests check that a precise
+The adaptive solver lands exactly on every ``save_at`` time and on every data
+time between them, and external observations (built with
+:func:`prepare_observations` for ``save_at``) are assimilated at those times. These end-to-end tests check that a precise
 observation at its time visibly shapes the filtered posterior. The solver-level
 observation tests are the ``test_obs_model_*`` tests in ``test_adaptive.py``.
 """
@@ -10,6 +10,8 @@ observation tests are the ``test_obs_model_*`` tests in ``test_adaptive.py``.
 from __future__ import annotations
 
 import jax.numpy as np
+import numpy as onp
+import pytest
 
 from ode_filters import (
     IWP,
@@ -17,12 +19,14 @@ from ode_filters import (
     ODEInformation,
     gaussian_filter_adaptive,
     prepare_observations,
+    rts_smoother,
     taylor_mode_initialization,
 )
 from ode_filters.information import (
     Measurement,
     ODEInformationWithHidden,
 )
+from test.helpers import assert_close
 
 
 def logistic_vf(x, *, t):
@@ -139,3 +143,70 @@ class TestJointPriorComposition:
             f"observation not assimilated under joint prior: "
             f"free={x_free:.4f} pulled={x_pulled:.4f}"
         )
+
+
+class TestDataBetweenSaveTimes:
+    """Data between the save times: the solver lands on their times too."""
+
+    SAVE_AT = onp.linspace(0.0, 2.0, 5)
+    T_OBS = onp.array([0.33, 0.5, 1.71])  # 0.5 is a save time
+
+    def _data(self):
+        z = 1.0 / (1.0 + 9.0 * onp.exp(-self.T_OBS))
+        return [Measurement(np.eye(1), z[:, None], self.T_OBS, noise=1e-4)]
+
+    def test_the_result_lives_on_the_timeline_of_the_data(self):
+        prior, m_0, P_0_sqr, measure = _setup_logistic()
+        obs = prepare_observations(self._data(), prior.E0, self.SAVE_AT)
+        assert obs is not None and obs.t is not None
+        kwargs = dict(smoother=True, record_steps=256, atol=1e-6, rtol=1e-6)
+        result = gaussian_filter_adaptive(
+            m_0,
+            P_0_sqr,
+            prior,
+            measure,
+            self.SAVE_AT,
+            measurements=self._data(),
+            **kwargs,
+        )
+        timeline = onp.array([0.0, 0.33, 0.5, 1.0, 1.5, 1.71, 2.0])
+        assert_close(result.t, timeline, rtol=0.0)
+        assert bool(result.success)
+        steps = result.steps
+        assert steps is not None
+        landed = onp.asarray(steps.t)[: int(steps.count)]
+        for t in (0.33, 1.71):
+            assert onp.min(onp.abs(landed - t)) < 1e-12
+        # The same solve as on the timeline as a save grid, with the data on it.
+        on_timeline = prepare_observations(self._data(), prior.E0, timeline)
+        assert on_timeline is not None and on_timeline.t is None
+        expected = gaussian_filter_adaptive(
+            m_0, P_0_sqr, prior, measure, timeline, obs_model=on_timeline, **kwargs
+        )
+        assert_close(result.m, expected.m, rtol=0.0)
+        assert_close(result.log_likelihood_obs, expected.log_likelihood_obs, rtol=0.0)
+        assert_close(rts_smoother(result).m, rts_smoother(expected).m, rtol=0.0)
+        # Without the data, the solver lands on the same nodes.
+        free = gaussian_filter_adaptive(
+            m_0, P_0_sqr, prior, measure, self.SAVE_AT, obs_model=obs.without_data()
+        )
+        assert free.log_likelihood_obs is None
+        assert_close(free.t, timeline, rtol=0.0)
+
+    def test_invalid_data_raise(self):
+        prior, m_0, P_0_sqr, measure = _setup_logistic()
+        obs = prepare_observations(self._data(), prior.E0, self.SAVE_AT)
+        with pytest.raises(ValueError, match="not both"):
+            gaussian_filter_adaptive(
+                m_0,
+                P_0_sqr,
+                prior,
+                measure,
+                self.SAVE_AT,
+                obs_model=obs,
+                measurements=self._data(),
+            )
+        with pytest.raises(ValueError, match="belongs to another grid"):
+            gaussian_filter_adaptive(
+                m_0, P_0_sqr, prior, measure, self.SAVE_AT[:-1], obs_model=obs
+            )

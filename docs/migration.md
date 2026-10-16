@@ -163,9 +163,12 @@ and `log_likelihood`.
 
 ## Data
 
-- `prepare_observations` raises `ValueError` when a measurement time is not a
-  grid node; 0.7 dropped such data without a warning. Put the measurement times
-  into the grid with `merge_measurement_times(ts, measurements)`.
+- 0.7 dropped data at times that are not grid nodes without a warning. Now a
+  time between two grid nodes becomes a data-only node, where the filter
+  conditions on the data without an update on the ODE information (see
+  [sharp bits](sharp-bits.md#data-between-grid-nodes-add-nodes-without-ode-information)).
+  To have the ODE information at the data times as well, put them into the
+  grid, e.g. `ts = np.union1d(ts, z_t)`.
 - Measurements at different times work: each row of the data has its own mask.
 
 ## Parameter inference

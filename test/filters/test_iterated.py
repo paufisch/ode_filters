@@ -6,6 +6,7 @@ from functools import partial
 
 import jax
 import jax.numpy as np
+import numpy as onp
 import pytest
 
 from ode_filters import (
@@ -22,6 +23,7 @@ from ode_filters import (
     iterated_smoother,
     prepare_observations,
     rts_smoother,
+    slr_surrogate,
     taylor_mode_initialization,
     taylor_surrogate,
 )
@@ -289,3 +291,77 @@ def test_invalid_arguments_raise(kwargs, match):
     prior, measure, m_0, P_0_sqr = _logistic()
     with pytest.raises(ValueError, match=match):
         iterated_smoother(m_0, P_0_sqr, prior, measure, TS, **kwargs)
+
+
+def _off_grid_measurements():
+    t_obs = onp.array([0.3, 0.77, 1.0, 1.41])  # 1.0 is a grid node
+    z = 0.1 * onp.exp(t_obs) / (0.9 + 0.1 * onp.exp(t_obs)) + 0.02
+    return [Measurement(np.eye(1), z[:, None], t_obs, noise=1e-2)]
+
+
+@pytest.mark.parametrize("linearization", ["taylor", "slr"])
+def test_data_only_nodes_keep_the_linearization_on_the_grid(linearization):
+    """Each pass linearizes at the smoothed marginals of the grid nodes and
+    filters and smooths over the timeline of the data."""
+    prior, measure, m_0, P_0_sqr = _logistic()
+    obs = prepare_observations(_off_grid_measurements(), prior.E0, TS)
+    assert obs is not None and obs.grid_node is not None
+    res = iterated_smoother(
+        m_0,
+        P_0_sqr,
+        prior,
+        measure,
+        TS,
+        linearization=linearization,
+        n_iters=2,
+        n_nodes=3,
+        obs_model=obs,
+    )
+    at_grid = onp.flatnonzero(onp.asarray(obs.grid_node)) + 1
+    correction = None if linearization == "taylor" else QuadratureCorrection(n_nodes=3)
+    one_shot = gaussian_filter(
+        m_0,
+        P_0_sqr,
+        prior,
+        measure,
+        TS,
+        correction=correction,
+        calibration="none",
+        obs_model=obs,
+    )
+    smoothed = rts_smoother(one_shot)
+    for _ in range(2):
+        m, P_sqr = smoothed.m[at_grid], smoothed.P_sqr[at_grid]
+        if linearization == "taylor":
+            surrogate = taylor_surrogate(measure, m, ts=TS[1:])
+        else:
+            surrogate = slr_surrogate(measure, m, P_sqr, ts=TS[1:], n_nodes=3)
+        result = affine_filter(m_0, P_0_sqr, prior, surrogate, TS, obs_model=obs)
+        smoothed = rts_smoother(result)
+    assert_close(res.t, obs.t, rtol=0.0)
+    assert_close(res.filter.t, obs.t, rtol=0.0)
+    # The passes run inside a scan here and in a loop above: round-off differs.
+    assert_close(res.m, smoothed.m, rtol=1e-10)
+    assert res.step.shape == (2,)
+    same = iterated_smoother(
+        m_0,
+        P_0_sqr,
+        prior,
+        measure,
+        TS,
+        linearization=linearization,
+        n_iters=2,
+        n_nodes=3,
+        measurements=_off_grid_measurements(),
+    )
+    assert_close(same.m, res.m, rtol=0.0)
+    with pytest.raises(ValueError, match="not both"):
+        iterated_smoother(
+            m_0,
+            P_0_sqr,
+            prior,
+            measure,
+            TS,
+            obs_model=obs,
+            measurements=_off_grid_measurements(),
+        )

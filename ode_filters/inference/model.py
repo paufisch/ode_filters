@@ -21,7 +21,7 @@ a different linearization scheme (e.g. ``TaylorCorrection(order=0)`` for EK0 or
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import equinox as eqx
@@ -31,7 +31,7 @@ import numpy as onp
 from jax import Array
 
 from ..calibration.policies import Calibration, CalibrationMode
-from ..information import ObsModel, ODEInformation
+from ..information import Measurement, ObsModel, ODEInformation
 from ..linearization import Correction
 from ..priors import BasePrior
 from .likelihood import InferenceProblem, marginal_loglik
@@ -65,8 +65,12 @@ class ODEFilter(eqx.Module):
     calibration: Calibration | CalibrationMode = eqx.field(static=True, default="none")
     correction: Correction | None = eqx.field(static=True, default=None)
 
-    def loglik(self, data: ObsModel) -> Array:
-        """Data marginal log-likelihood at the current parameters."""
+    def loglik(self, data: ObsModel | Sequence[Measurement]) -> Array:
+        """Data marginal log-likelihood at the current parameters.
+
+        ``data`` is an ``ObsModel`` for ``ts`` or a sequence of ``Measurement``
+        objects, as in ``marginal_loglik``.
+        """
 
         def build(params):
             def vf(x, *, t):
@@ -88,7 +92,7 @@ class ODEFilter(eqx.Module):
 
 def fit(
     model: ODEFilter,
-    data: ObsModel,
+    data: ObsModel | Sequence[Measurement],
     optim: Any,
     *,
     steps: int = 200,
@@ -97,7 +101,8 @@ def fit(
 
     Args:
         model: Initial ``ODEFilter``.
-        data: Observations as an ``ObsModel``.
+        data: Observations as an ``ObsModel`` or a sequence of
+            ``Measurement`` objects (see ``marginal_loglik``).
         optim: An Optax ``GradientTransformation`` (anything exposing
             ``init`` / ``update``); the library does not import Optax itself.
         steps: Number of optimization steps.

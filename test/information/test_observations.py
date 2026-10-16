@@ -1,5 +1,4 @@
-"""Data observations: ``Measurement``, ``prepare_observations`` and
-``merge_measurement_times``."""
+"""Data observations: ``Measurement``, ``ObsModel`` and ``prepare_observations``."""
 
 from __future__ import annotations
 
@@ -12,8 +11,8 @@ import pytest
 from ode_filters import gaussian_filter, taylor_mode_initialization
 from ode_filters.information import (
     Measurement,
+    ObsModel,
     ODEInformation,
-    merge_measurement_times,
     prepare_observations,
 )
 from ode_filters.information.observations import MEASUREMENT_TIME_ATOL
@@ -127,7 +126,7 @@ def test_each_sensor_keeps_its_own_rows_noise_data_and_times():
 
 PRIOR = IWP(q=2, d=1)
 TS = np.linspace(0.0, 1.0, 11)
-T_OBS = onp.array([0.33, 0.71])  # off the grid: merged into it in the trace
+T_OBS = onp.array([0.33, 0.71])  # off the grid: data-only nodes
 Z = np.array([[0.7], [0.5]])
 
 
@@ -136,13 +135,12 @@ def _decay(x, *, t):
 
 
 def _data_evidence(z, noise=1e-3):
-    """The data evidence, with the measurement, grid and ObsModel built here."""
+    """The data evidence, with the measurement and ObsModel built here."""
     meas = Measurement(np.eye(1), z, T_OBS, noise=noise)
-    ts = merge_measurement_times(TS, [meas])
-    obs = prepare_observations([meas], PRIOR.E0, ts)
+    obs = prepare_observations([meas], PRIOR.E0, TS)
     m_0, P_0_sqr = taylor_mode_initialization(_decay, np.array([1.0]), q=2)
     measure = ODEInformation(_decay, PRIOR.E0, PRIOR.E1)
-    result = gaussian_filter(m_0, P_0_sqr, PRIOR, measure, ts, obs_model=obs)
+    result = gaussian_filter(m_0, P_0_sqr, PRIOR, measure, TS, obs_model=obs)
     return result.log_likelihood_obs
 
 
@@ -185,75 +183,107 @@ def test_traced_times_raise_naming_the_cause():
         eqx.filter_jit(lambda m: prepare_observations([m], PRIOR.E0, TS))(meas)
     with pytest.raises(TypeError, match="nodes of the grid ts are traced"):
         jax.jit(lambda ts: prepare_observations([meas], PRIOR.E0, ts))(TS)
-    with pytest.raises(TypeError, match="nodes of the grid ts are traced"):
-        jax.jit(lambda ts: merge_measurement_times(ts, [meas]))(TS)
 
 
 # --------------------------------------------------------------------------
-# merge_measurement_times
+# Data-only nodes, shared nodes and repeated times
 # --------------------------------------------------------------------------
 
 GRID = onp.linspace(0.0, 1.0, 5)  # nodes 0, 0.25, 0.5, 0.75, 1
 
 
-def _sensor(times):
+def _sensor(times, values=None):
     times = onp.asarray(times, dtype=float)
-    return Measurement(np.eye(1), np.ones((times.shape[0], 1)), times)
+    z = onp.arange(1.0, times.shape[0] + 1.0) if values is None else values
+    return Measurement(np.eye(1), np.asarray(z, dtype=float)[:, None], times)
 
 
-def test_merge_adds_the_off_grid_times_as_nodes():
-    a, b = _sensor([0.25, 0.6]), _sensor([0.6, 0.9, 1.0])
-    with pytest.raises(ValueError, match="merge_measurement_times"):
-        prepare_observations([a, b], PRIOR.E0, GRID)
-    merged = merge_measurement_times(GRID, [a, b])
-    assert isinstance(merged, onp.ndarray)
-    assert_close(merged, onp.array([0.0, 0.25, 0.5, 0.6, 0.75, 0.9, 1.0]), rtol=0.0)
-    obs = prepare_observations([a, b], PRIOR.E0, merged)
+def _obs(*measurements, grid=GRID) -> ObsModel:
+    obs = prepare_observations(list(measurements), PRIOR.E0, grid)
     assert obs is not None
-    assert int(onp.asarray(obs.mask).sum()) == 5
+    return obs
 
 
-def test_merge_adds_no_node_for_near_duplicate_times():
-    # Within the matching tolerance of a node, and of each other.
+def test_on_grid_data_have_no_timeline():
+    obs = _obs(_sensor([0.25, 1.0]))
+    assert obs.t is None and obs.grid_node is None
+    assert obs.c_seq.shape == (4, 1)
+
+
+def test_off_grid_times_become_data_only_nodes():
+    a, b = _sensor([0.25, 0.6]), _sensor([0.6, 0.9, 1.0])
+    obs = _obs(a, b)
+    assert isinstance(obs.t, onp.ndarray)
+    assert_close(obs.t, onp.array([0.0, 0.25, 0.5, 0.6, 0.75, 0.9, 1.0]), rtol=0.0)
+    assert (onp.asarray(obs.grid_node) == [True, True, False, True, False, True]).all()
+    mask = onp.zeros((6, 2), dtype=bool)
+    c_seq = onp.zeros((6, 2))
+    for step, row, value in [(0, 0, 1.0), (2, 0, 2.0), (2, 1, 1.0), (4, 1, 2.0)]:
+        mask[step, row], c_seq[step, row] = True, -value
+    mask[5, 1], c_seq[5, 1] = True, -3.0
+    assert (onp.asarray(obs.mask) == mask).all()
+    assert_close(obs.c_seq, c_seq, rtol=0.0)
+
+
+def test_near_duplicate_times_share_a_node():
+    # Within the matching tolerance of a grid node, and of each other.
     near = 0.5 * MEASUREMENT_TIME_ATOL
     a, b = _sensor([0.25 + near, 0.6]), _sensor([0.6 + near])
-    merged = merge_measurement_times(GRID, [a, b])
-    assert_close(merged, onp.array([0.0, 0.25, 0.5, 0.6, 0.75, 1.0]), rtol=0.0)
-    obs = prepare_observations([a, b], PRIOR.E0, merged)
-    assert obs is not None
-    # Both sensors' data land on the node at 0.6 (step 2).
-    assert onp.asarray(obs.mask)[2].all()
+    obs = _obs(a, b)
+    assert obs.t is not None
+    assert_close(obs.t, onp.array([0.0, 0.25, 0.5, 0.6, 0.75, 1.0]), rtol=0.0)
+    # Sensor a's datum at 0.25 + near is at the grid node 0.25 (step 0); both
+    # sensors' data at 0.6 share the data-only node 0.6 (step 2).
+    assert onp.asarray(obs.mask)[0, 0] and onp.asarray(obs.mask)[2].all()
 
 
-def test_merge_without_new_times_returns_a_copy_of_the_grid():
-    for measurements in ([], [_sensor(GRID[1:3])]):
-        merged = merge_measurement_times(GRID, measurements)
-        assert merged is not GRID
-        assert_close(merged, GRID, rtol=0.0)
-
-
-def test_merge_rejects_two_times_of_one_measurement_at_one_node():
+def test_repeated_times_of_one_measurement_take_copies_of_its_rows():
     near = 0.5 * MEASUREMENT_TIME_ATOL
-    for times in ([0.6, 0.6 + near], [0.5, 0.5 + near], [0.6, 0.6]):
-        with pytest.raises(ValueError, match="several times at one node"):
-            merge_measurement_times(GRID, [_sensor(times)])
+    meas = Measurement(
+        np.array([[1.0], [2.0]]) @ np.eye(1),
+        np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]]),
+        onp.array([0.5, 0.6, 0.5 + near, 0.5]),
+        noise=np.array([[0.04, 0.01], [0.01, 0.09]]),
+    )
+    obs = _obs(meas)
+    # Three data at the grid node 0.5 (step 1): three copies of the two rows.
+    assert obs.H.shape == (6, 3)
+    assert_close(obs.H, np.tile(np.array([[1.0], [2.0]]) @ PRIOR.E0, (3, 1)), rtol=0.0)
+    R = jax.scipy.linalg.block_diag(*[np.array([[0.04, 0.01], [0.01, 0.09]])] * 3)
+    assert_close(cov(obs.R_sqr), R, rtol=1e-14)
+    assert_close(obs.c_seq[1], -np.array([1.0, 2.0, 5.0, 6.0, 7.0, 8.0]), rtol=0.0)
+    assert onp.asarray(obs.mask)[1].all()
+    # One datum at the data-only node 0.6 (step 2) takes the first copy only.
+    assert (onp.asarray(obs.mask)[2] == [True, True, False, False, False, False]).all()
+    assert_close(obs.c_seq[2, :2], -np.array([3.0, 4.0]), rtol=0.0)
 
 
-def test_merge_rejects_data_at_the_initial_time():
-    with pytest.raises(ValueError, match="initial time"):
-        merge_measurement_times(GRID, [_sensor([0.0, 0.6])])
+def test_without_data_keeps_the_timeline_and_drops_every_row():
+    obs = _obs(_sensor([0.25, 0.6]))
+    free = obs.without_data()
+    assert free.H.shape == (0, 3) and free.R_sqr.shape == (0, 0)
+    assert free.c_seq.shape == (5, 0) and free.mask.shape == (5, 0)
+    assert free.t is obs.t and free.grid_node is obs.grid_node
 
 
-def test_merge_rejects_times_outside_the_grid():
-    for times in ([1.5], [-0.5, 0.6]):
-        with pytest.raises(ValueError, match="outside"):
-            merge_measurement_times(GRID, [_sensor(times)])
+def test_times_at_or_before_the_initial_time_raise():
+    near = 0.5 * MEASUREMENT_TIME_ATOL
+    for times in ([0.0, 0.6], [near], [-0.5, 0.6]):
+        with pytest.raises(ValueError, match="at or before the initial time"):
+            _obs(_sensor(times))
 
 
-def test_merge_validates_the_grid():
+def test_times_after_the_final_time_raise():
+    with pytest.raises(ValueError, match="after the final time"):
+        _obs(_sensor([0.6, 1.5]))
+    # Within the tolerance of the last node, a time is that node.
+    assert _obs(_sensor([1.0 + 0.5 * MEASUREMENT_TIME_ATOL])).t is None
+
+
+def test_the_grid_is_validated():
     with pytest.raises(ValueError, match="1-D array"):
-        merge_measurement_times(onp.zeros((2, 2)), [])
+        _obs(_sensor([0.6]), grid=onp.zeros((2, 2)))
     with pytest.raises(ValueError, match="at least two"):
-        merge_measurement_times(onp.zeros(1), [])
+        _obs(_sensor([0.6]), grid=onp.zeros(1))
     with pytest.raises(ValueError, match="strictly increasing"):
-        merge_measurement_times(onp.array([0.0, 1.0, 0.5]), [])
+        _obs(_sensor([0.6]), grid=onp.array([0.0, 1.0, 0.5]))

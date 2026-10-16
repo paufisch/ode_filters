@@ -72,17 +72,32 @@ consequences:
 - A model can be differentiated (`equinox.filter_grad`) or batched
   (`equinox.filter_vmap`) directly, e.g. over a length scale.
 
-### Data times must be grid nodes
+### Data between grid nodes add nodes without ODE information
 
 `prepare_observations` matches each measurement time `t` to a node of the grid
-(within `1e-7 + 1e-5 |t|`) and raises for a time that is not one. For data off
-the grid, add their times to it with
-`ts = merge_measurement_times(ts, measurements)`, which adds no node for a time
-within this tolerance of another. Every solver accepts non-uniform grids.
+(within `1e-7 + 1e-5 |t|`). A time between two grid nodes becomes a data-only
+node: the filter predicts to it, conditions on the data and continues without
+an update on the ODE information. The ODE information is therefore that of the
+grid `ts` whatever the data times, and the data times do not refine the grid.
+Times within the tolerance of each other share one node. The result lives on the
+timeline, the grid with the data-only nodes, so `result.t` has more nodes than
+`ts`. The `ObsModel` records it in `obs_model.t`, and `obs_model.grid_node`
+marks the steps that end at a grid node.
+
+The diffusion of a grid interval is estimated at the interval's start from the
+prediction over the whole interval, as without data, and every step inside the
+interval propagates with it. An interval without data-only nodes is one step,
+computed as on the grid alone. To condition on the ODE information at a data
+time as well, add the time to the grid, e.g. `ts = np.union1d(ts, z_t)`; every
+solver accepts non-uniform grids. The adaptive solver lands on every data time
+and chooses its steps between them, so there a data time is a full node. For
+`fenrir_loglik` and `conditional_loglik`, run the pass without data on the same
+timeline, with `obs_model=obs_model.without_data()`.
+
 Measurements may have different times, and each step conditions on the rows
-that have data. Data at the initial time `ts[0]` belong in the initial state,
-so `merge_measurement_times` raises for them, and also for times outside the
-grid.
+that have data. Several data of one measurement at one node are all
+conditioned on. Data at the initial time `ts[0]` belong in the initial state,
+so `prepare_observations` raises for them, and also for times after `ts[-1]`.
 
 The matching runs on the host. Inside `jax.jit`, build the `Measurement` from
 concrete times: a NumPy array, Python numbers, or an array that the jitted

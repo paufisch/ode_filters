@@ -16,19 +16,40 @@ module provides the following functions:
 
 Every step calibrates the diffusion with the `calibration=` policy (`"dynamic"`
 by default; see [Diffusion calibration](../../calibration.md)) and conditions on
-the data of an `obs_model`, if any, after the ODE information. A preconditioned
-prior changes how a step is computed, not its result. See
-[How to choose](../../how-to-choose.md).
+the data, if any, after the ODE information. The solvers take the data as an
+`obs_model` from `prepare_observations` or as `measurements=`, a list of
+`Measurement` objects. A preconditioned prior changes how a step is computed,
+not its result. See [How to choose](../../how-to-choose.md).
+
+## Data between the grid nodes
+
+A data time between two grid nodes becomes a data-only node. On the fixed grid
+(`gaussian_filter`, `affine_filter`, `iterated_smoother`), the filter predicts
+to it, conditions on the data and continues without an update on the ODE
+information. The ODE information is that of the grid `ts`. At a data-only node
+the ODE evidence is zero, and the ODE innovation is reported with zero mean and
+an identity factor. The diffusion of a grid interval is estimated
+once, at the interval's start, from the prediction over the whole interval,
+and every step inside the interval propagates with it and reports it in
+`sigma_sqr` and `diffusion`. The update on the ODE information at the
+interval's end linearizes at the prediction that follows the data inside the
+interval. The result lives on the timeline, the grid with the data-only nodes,
+so `rts_smoother`, `sample_posterior` and `interpolate` apply unchanged.
+`iterated_smoother` linearizes at the smoothed marginals of the grid nodes.
+
+`gaussian_filter_adaptive` lands on every data time between the save times and
+chooses its steps between them, so a data time is a full node there. Its result
+also lives on the timeline.
 
 ## The `FilterResult`
 
 Recover a covariance with `P = P_sqr.T @ P_sqr` (see [notation](../../notation.md)).
-On a grid of `K` nodes, per-step fields have `K - 1` entries; entry `n` belongs to
-the step from `t[n]` to `t[n + 1]`.
+On `K` nodes, per-step fields have `K - 1` entries; entry `n` belongs to the step
+from `t[n]` to `t[n + 1]`.
 
 | Field | Meaning |
 | --- | --- |
-| `t` | time grid (the save times on the adaptive path) |
+| `t` | the nodes: the time grid (the save times on the adaptive path), with the data-only nodes of the data, if any |
 | `m`, `P_sqr` | filtered mean and square-root covariance |
 | `log_likelihood` | ODE-information evidence, after calibration (not comparable across calibration policies) |
 | `log_likelihood_obs` | data evidence, each observation conditioned on the ODE information up to its time (`None` without data) |
@@ -36,7 +57,7 @@ the step from `t[n]` to `t[n + 1]`.
 | `diffusion` | the diffusion each step propagated with: `sigma_sqr` under a calibrating policy, ones under `"none"` (`None` on the adaptive path); `interpolate` bridges with it |
 | `m_pred`, `P_pred_sqr` | predictions before each update (`None` on the adaptive path) |
 | `G_back`, `d_back`, `P_back_sqr` | backward conditionals `p(x_n \| x_{n+1})`, consumed by `rts_smoother` |
-| `mz`, `Pz_sqr` | ODE-information innovations |
+| `mz`, `Pz_sqr` | ODE-information innovations; zero mean and identity factor at a data-only node |
 | `mz_obs`, `Pz_obs_sqr` | data innovations; rows without data are zero with unit variance |
 | `success` | adaptive: every save time reached with a finite evidence |
 | `n_accepted`, `n_rejected` | adaptive: steps per save interval |
@@ -87,6 +108,8 @@ See [Linearization schemes](../../corrections.md#iterated-smoothing-iekf-ieks-an
 The step every solver is built from, for building new drivers.
 
 ::: ode_filters.filters.kernel.filter_step
+
+::: ode_filters.filters.kernel.estimate_diffusion
 
 ::: ode_filters.filters.kernel.StepOutput
 

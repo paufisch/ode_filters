@@ -105,9 +105,10 @@ def interpolate(
     *,
     smoothed: bool = True,
 ) -> Gaussian:
-    """Marginals of a fixed-grid result at times between its grid nodes.
+    """Marginals of a fixed-grid result at times between its nodes.
 
-    For ``t`` in ``[t_n, t_{n+1}]`` the prior bridges the two nodes: predict from
+    For ``t`` in ``[t_n, t_{n+1}]`` the prior bridges the two nodes of
+    ``result.t`` (grid nodes or data-only nodes): predict from
     the filtered state at ``t_n`` to ``t``, and, for the smoothed marginal,
     condition on the smoothed state at ``t_{n+1}`` through the backward
     conditional of the remaining step. Each sub-step uses the diffusion its step

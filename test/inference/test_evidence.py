@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as np
+import numpy as onp
 import pytest
 
 from ode_filters import (
@@ -33,7 +34,12 @@ from ode_filters import (
     taylor_mode_initialization,
 )
 from ode_filters.inference.evidence import conditional_state_cov_sqr
-from test.helpers import assert_close, assert_grad_matches_fd, cov
+from test.helpers import (
+    assert_close,
+    assert_grad_matches_fd,
+    cov,
+    surrogate_on_merged_grid,
+)
 
 N = 6
 TS = np.linspace(0.0, 1.2, N + 1)
@@ -355,3 +361,65 @@ def test_one_shot_filters_give_daltons_estimator():
     fenrir = fenrir_loglik(data_free, obs)
     dalton = conditional_loglik(data, data_free)
     assert abs(float(fenrir - dalton)) > 1e-6
+
+
+# --------------------------------------------------------------------------
+# Data between the grid nodes
+# --------------------------------------------------------------------------
+
+T_OFF = onp.array([0.3, 0.4, 0.9, 1.1])  # 0.4 is a grid node
+
+
+def _off_grid_setup(log_xi=0.0):
+    prior, surrogate, m_0, P_0_sqr, _ = _setup(log_xi=log_xi)
+    y = jax.random.normal(jax.random.PRNGKey(7), (T_OFF.shape[0], 1))
+    meas = [Measurement(np.eye(1), y, T_OFF, noise=0.05)]
+    obs = prepare_observations(meas, prior.E0_x, TS)
+    assert obs is not None and obs.t is not None and obs.grid_node is not None
+    merged = prepare_observations(meas, prior.E0_x, obs.t)
+    assert merged is not None and merged.t is None
+    merged_surrogate = surrogate_on_merged_grid(surrogate, obs.grid_node)
+    return prior, surrogate, m_0, P_0_sqr, obs, merged_surrogate, merged
+
+
+def test_off_grid_evidence_equals_the_merged_grid_without_ode_rows():
+    prior, surrogate, m_0, P_0_sqr, obs, merged_surrogate, merged = _off_grid_setup()
+    assert obs.t is not None
+    data_free = affine_filter(
+        m_0, P_0_sqr, prior, surrogate, TS, obs_model=obs.without_data()
+    )
+    data = affine_filter(m_0, P_0_sqr, prior, surrogate, TS, obs_model=obs)
+    fenrir = fenrir_loglik(data_free, obs)
+    # One frozen linearization: Fenrir and Dalton agree exactly.
+    assert_close(conditional_loglik(data, data_free), fenrir, rtol=1e-10)
+    merged_free = affine_filter(m_0, P_0_sqr, prior, merged_surrogate, obs.t)
+    assert_close(fenrir_loglik(merged_free, merged), fenrir, rtol=1e-10)
+
+
+@pytest.mark.parametrize("log_xi", [0.0, np.log(1e-4)])
+def test_off_grid_informations_equal_the_merged_grid_without_ode_rows(log_xi):
+    prior, surrogate, m_0, P_0_sqr, obs, merged_surrogate, merged = _off_grid_setup(
+        log_xi
+    )
+    assert obs.t is not None
+    criteria = information_criteria(m_0, P_0_sqr, prior, surrogate, TS, obs)
+    expected = information_criteria(
+        m_0, P_0_sqr, prior, merged_surrogate, obs.t, merged
+    )
+    for name in InformationCriteria._fields:
+        assert_close(getattr(criteria, name), getattr(expected, name), rtol=1e-10)
+    assert float(criteria.I_UY_given_Z) > 0.0
+
+
+def test_fenrir_needs_the_pass_without_data_on_the_timeline():
+    prior, surrogate, m_0, P_0_sqr, obs, merged_surrogate, _ = _off_grid_setup()
+    on_grid = affine_filter(m_0, P_0_sqr, prior, surrogate, TS)
+    with pytest.raises(ValueError, match="without_data"):
+        fenrir_loglik(on_grid, obs)
+    # As many steps, at other times.
+    assert obs.t is not None
+    shifted = affine_filter(
+        m_0, P_0_sqr, prior, merged_surrogate, onp.asarray(obs.t) * 1.01
+    )
+    with pytest.raises(ValueError, match="other times"):
+        fenrir_loglik(shifted, obs)

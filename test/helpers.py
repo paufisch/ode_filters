@@ -293,6 +293,33 @@ def dense_kalman(
 
 
 # ---------------------------------------------------------------------------
+# Data-only nodes on a merged grid
+# ---------------------------------------------------------------------------
+
+
+def surrogate_on_merged_grid(surrogate, grid_node):
+    """A grid's ``AffineSurrogate`` on the timeline of data, used as a grid.
+
+    Each step of the timeline takes the model of its grid interval. A step that
+    ends at a data-only node (``grid_node`` false) carries no ODE information:
+    zero rows with unit noise, whose update leaves the state unchanged. Filtering
+    the merged grid with it is the independent construction of the filter's
+    data-only nodes.
+    """
+    from ode_filters import AffineSurrogate
+
+    on = onp.asarray(grid_node)
+    steps = on.astype(int)
+    picked = jax.tree.map(lambda a: a[onp.cumsum(steps) - steps], surrogate)
+    k = picked.H.shape[1]
+    return AffineSurrogate(
+        np.where(on[:, None, None], picked.H, 0.0),
+        np.where(on[:, None], picked.c, 0.0),
+        np.where(on[:, None, None], picked.R_sqr, np.eye(k)),
+    )
+
+
+# ---------------------------------------------------------------------------
 # The textbook Matern kernel: an independent oracle for the Matern prior
 # ---------------------------------------------------------------------------
 
