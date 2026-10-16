@@ -106,7 +106,6 @@ The calibration sets the scale of the uncertainty. See
 | **`DynamicCalibration()`** | `"dynamic"` | per-step quasi-MLE, the default of the solvers |
 | **`NoCalibration()`** | `"none"` | the prior's scale is fixed or fitted, e.g. inside a likelihood |
 | **`DiagonalCalibration()`** | `"diagonal"` | per-component scales (needs a diagonal `Xi`) |
-| **`DiagonalCalibration(jacobian="ek0")`** | `"diagonal_ekf0"` | per-component scales without a Jacobian; pair with EK0 |
 | post-hoc (`posthoc_mle_sigma_sqr`) | | a single global scale after a `"none"` run |
 
 The policy objects take a lower bound on the estimate, e.g.

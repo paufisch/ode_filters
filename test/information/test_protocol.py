@@ -25,10 +25,10 @@ from ode_filters import (
 )
 from ode_filters.information import (
     EK0Linearizable,
-    HasLHSSelector,
     HasNoiseCovariance,
     NoiseSettable,
 )
+from ode_filters.information.protocol import HasLHSSelector
 from test.helpers import assert_close
 
 OPTIONAL = (HasLHSSelector, EK0Linearizable, HasNoiseCovariance, NoiseSettable)

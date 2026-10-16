@@ -2,9 +2,8 @@
 
 The ODE information (the residual of the ODE, plus conservation laws) and the
 data observations. Every measurement model implements ``MeasurementModel``;
-the optional protocols ``HasLHSSelector``, ``EK0Linearizable``,
-``HasNoiseCovariance`` and ``NoiseSettable`` declare the members that single
-features call.
+the optional protocols ``EK0Linearizable``, ``HasNoiseCovariance`` and
+``NoiseSettable`` declare the members that single features call.
 """
 
 from .blackbox import BlackBoxMeasurement, TransformedMeasurement
@@ -19,7 +18,6 @@ from .ode_information import (
 )
 from .protocol import (
     EK0Linearizable,
-    HasLHSSelector,
     HasNoiseCovariance,
     MeasurementModel,
     NoiseSettable,
@@ -30,7 +28,6 @@ __all__ = [
     "BlackBoxMeasurement",
     "Conservation",
     "EK0Linearizable",
-    "HasLHSSelector",
     "HasNoiseCovariance",
     "Measurement",
     "MeasurementModel",

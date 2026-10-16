@@ -72,7 +72,8 @@ The internal Python-loop driver `sqr_adaptive_loop` is removed;
 The calibration strings `"none"`, `"dynamic"`, `"diagonal"` and
 `"diagonal_ekf0"` are still accepted; they stand for `NoCalibration()`,
 `DynamicCalibration()`, `DiagonalCalibration()` and
-`DiagonalCalibration(jacobian="ek0")`.
+`DiagonalCalibration(jacobian="ek0")`. Since 0.8.1, `"diagonal_ekf0"` is
+deprecated and will be removed in 0.9; use `"diagonal"`.
 
 ### `FilterResult`
 

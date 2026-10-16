@@ -81,10 +81,10 @@ calibration and the update use that linearization: an EK0 filter estimates
 `sigma^2` with the EK0 Jacobian, an EK1 filter with the EK1 one. (A statistical
 linearization needs the predicted covariance it is calibrating, so a
 `QuadratureCorrection` calibrates with the EK1 linearization at the mean.) The
-per-component policy `DiagonalCalibration(jacobian="ek0")` (shorthand
-`"diagonal_ekf0"`) always uses the ODE's left-hand-side selector (`E1` for a
-first-order ODE, `E2` for a second-order one), whatever the correction. See
-[Diffusion Calibration](calibration.md).
+deprecated per-component policy `DiagonalCalibration(jacobian="ek0")`
+(shorthand `"diagonal_ekf0"`, removed in 0.9) always uses the ODE's
+left-hand-side selector (`E1` for a first-order ODE, `E2` for a second-order
+one), whatever the correction. See [Diffusion Calibration](calibration.md).
 
 ## Statistical linearization
 
