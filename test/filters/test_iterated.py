@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import jax
 import jax.numpy as np
 import pytest
@@ -23,7 +25,11 @@ from ode_filters import (
     taylor_mode_initialization,
     taylor_surrogate,
 )
-from test.helpers import assert_close, assert_grad_matches_fd
+from test.helpers import (
+    assert_close,
+    assert_grad_matches_fd,
+    gradient_is_checkpointed,
+)
 
 TS = np.linspace(0.0, 2.0, 33)
 
@@ -218,6 +224,53 @@ def test_jit_vmap_and_grad():
     assert np.isfinite(jax.jit(ll_obs)(np.array(0.0)))
     assert jax.vmap(ll_obs)(np.array([0.0, 0.5])).shape == (2,)
     assert_grad_matches_fd(ll_obs, np.array(0.2))
+
+
+@pytest.mark.parametrize("linearization", ["taylor", "slr"], ids=["ieks", "ipls"])
+@pytest.mark.parametrize("warm_start", [False, True], ids=["one_shot", "passes"])
+def test_checkpointing_reaches_every_filter(linearization, warm_start):
+    """``checkpoint`` goes to the one-shot filter and to the filter of every pass.
+
+    ``n_iters=0`` runs the one-shot filter only; a warm start runs the passes
+    only. Either way the values are identical, the gradients agree to round-off,
+    and only the checkpointed solve has a checkpoint in its gradient.
+    """
+    _, measure, m_0, P_0_sqr = _logistic(q=2)
+    ts = TS[:9]
+    if warm_start:
+        kwargs = {"n_iters": 2, "init": np.tile(m_0, (8, 1))}
+        if linearization == "slr":
+            kwargs["init_P_sqr"] = np.tile(0.01 * np.eye(3), (8, 1, 1))
+    else:
+        kwargs = {"n_iters": 0}
+
+    def solve(log_xi, *, checkpoint):
+        prior = IWP(q=2, d=1, Xi=np.exp(log_xi) * np.eye(1))
+        return iterated_smoother(
+            m_0,
+            P_0_sqr,
+            prior,
+            measure,
+            ts,
+            linearization=linearization,
+            checkpoint=checkpoint,
+            **kwargs,
+        )
+
+    def loss(log_xi, *, checkpoint):
+        res = solve(log_xi, checkpoint=checkpoint)
+        return res.filter.log_likelihood + np.sum(res.m) + np.sum(res.P_sqr[-1])
+
+    log_xi = np.array(0.2)
+    plain = solve(log_xi, checkpoint=False)
+    checkpointed = solve(log_xi, checkpoint=True)
+    for a, b in zip(jax.tree.leaves(plain), jax.tree.leaves(checkpointed), strict=True):
+        assert np.array_equal(a, b)
+
+    off, on = partial(loss, checkpoint=False), partial(loss, checkpoint=True)
+    assert_close(jax.grad(on)(log_xi), jax.grad(off)(log_xi), rtol=1e-11)
+    assert gradient_is_checkpointed(on, log_xi)
+    assert not gradient_is_checkpointed(off, log_xi)
 
 
 @pytest.mark.parametrize(

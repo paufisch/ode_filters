@@ -7,6 +7,14 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+### Added
+
+- `checkpoint=True` for `gaussian_filter`, `affine_filter` and
+  `iterated_smoother` wraps each step in `jax.checkpoint`, which reduces the
+  memory of reverse-mode differentiation.
+- `gaussian_filter_adaptive(..., h_init="auto")` chooses the first step from
+  the initial state and the tolerances (Hairer, Nørsett & Wanner, Sec. II.4).
+
 ## [0.8.0] - 2026-10-15
 
 A breaking release that rebuilds the package around one filter step and turns it

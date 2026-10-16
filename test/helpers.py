@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from math import comb, factorial
 
 import jax
+import jax.extend as jex
 import jax.numpy as np
 import numpy as onp
 from jax import Array
@@ -62,6 +63,31 @@ def assert_grad_matches_fd(
     fd = float((f_jit(theta + eps) - f_jit(theta - eps)) / (2 * eps))
     assert np.isfinite(g), f"non-finite gradient {g}"
     assert abs(g - fd) <= atol + rtol * abs(fd), f"grad={g:.6e} vs fd={fd:.6e}"
+
+
+def primitive_names(jaxpr: jex.core.Jaxpr) -> set[str]:
+    """Names of the primitives in ``jaxpr`` and in every jaxpr nested in it."""
+    names = set()
+    for eqn in jaxpr.eqns:
+        names.add(eqn.primitive.name)
+        for param in eqn.params.values():
+            for sub in param if isinstance(param, (tuple, list)) else (param,):
+                if isinstance(sub, jex.core.ClosedJaxpr):
+                    names |= primitive_names(sub.jaxpr)
+                elif isinstance(sub, jex.core.Jaxpr):
+                    names |= primitive_names(sub)
+    return names
+
+
+def gradient_is_checkpointed(f: Callable[[Array], Array], theta: Array) -> bool:
+    """Whether the program of ``jax.grad(f)`` contains a ``jax.checkpoint``.
+
+    ``jax.checkpoint`` binds a primitive named ``remat2`` (in JAX 0.8; any name
+    with ``remat`` or ``checkpoint`` matches), which differentiation keeps
+    around the part of the backward pass that it recomputes.
+    """
+    names = primitive_names(jax.make_jaxpr(jax.grad(f))(theta).jaxpr)
+    return any("checkpoint" in name or "remat" in name for name in names)
 
 
 # ---------------------------------------------------------------------------
