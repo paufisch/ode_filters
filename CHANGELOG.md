@@ -32,8 +32,7 @@ minor bump, non-breaking changes in a patch bump).
   and `NoiseSettable`. A model that lacks one raises an error naming it.
 - Docs: sharp bits on an uncertain initial value without data and on the
   smoother's uncertainty, with two rescaling recipes in the calibration guide.
-- Docs: ODEs of order three and higher, and a comparison of the evidence
-  channels of `marginal_loglik`.
+- Docs: ODEs of order three and higher.
 
 ### Changed
 

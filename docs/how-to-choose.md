@@ -125,7 +125,7 @@ demonstrate each of them.
 | the likelihood with adaptive steps between the data times | `InferenceProblem(..., adaptive=AdaptiveSettings(atol=..., rtol=...))` |
 | data off the solver's grid | `measurements=[Measurement(...)]`: data-only nodes (see [sharp bits](sharp-bits.md#data-between-grid-nodes-add-nodes-without-ode-information)) |
 | a hidden input `u(t)` | a `JointPrior` with a `*WithHidden` model; `rts_smoother` / `sample_posterior` |
-| hyperparameters (length scale, `Xi`, an input's magnitude) | the conditional evidence: `channel="fenrir"` or `"dalton"` (see [calibration](calibration.md#selecting-hyperparameters-from-data) and the [comparison of the channels](examples/parameter-estimation.ipynb#comparing-the-evidence-channels)) |
+| hyperparameters (length scale, `Xi`, an input's magnitude) | the conditional evidence: `channel="fenrir"` or `"dalton"` (see [calibration](calibration.md#selecting-hyperparameters-from-data)) |
 | the information that the data carry about a hidden input | `information_criteria` |
 | whether the fitted model is consistent with the data | `nis`, `whitened_residuals`, `residual_autocorrelation` |
 | predictions between grid nodes, or of new observations | `interpolate`, `observation_predictive` |
