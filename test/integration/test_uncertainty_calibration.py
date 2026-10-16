@@ -23,22 +23,32 @@ post hoc        0.35 / 5e-4   0.39 / 4e-3   0.53 / 1e-3   0.26 / 1e-2
 ==============  ============  ============  ============  ============
 
 The post-hoc smoother is the exception, and a property of the method rather
-than a defect: under a constant diffusion the smoothed mean superconverges at
-the grid nodes (on the logistic problem its interior error is 1e-11 -- 1e-13
-against the filter's 1e-7) while its standard deviation is only 1.1 -- 1.6
-times smaller than the filter's, so the smoother is conservative by two to
-three and a half orders of magnitude. A per-step (dynamic) diffusion destroys
-the superconvergence, and the smoother is calibrated like the filter. The
-post-hoc smoother is therefore held to its own band, which still rejects an
-over-confident posterior and a further loss of more than one and a half orders
-of magnitude below the lowest measured value.
+than a defect: under a constant diffusion the smoothed mean converges at a
+higher order than the filtered one, at the grid nodes and between them (on the
+logistic problem its interior error is 1e-11 -- 1e-13 against the filter's
+1e-7), while its standard deviation is only 1.1 -- 1.6 times smaller than the
+filter's, so the smoother is conservative by two to three and a half orders of
+magnitude. Under dynamic calibration at ``q = 3`` the diffusion alternates by
+a factor of 14 to 17 between neighboring steps on three of the four problems.
+That alternation removes the smoother's advantage: its error grows 59 to 2100
+times over the constant-diffusion one and comes within a factor of 1.1 to 1.7
+of the filter's, so the smoother is calibrated like the filter. (At
+``q = 2, 4, 5`` the dynamic smoother stays 3 to 23 times more accurate than
+the filter.) The post-hoc smoother is therefore held to its own band, which
+still rejects an over-confident posterior and a further loss of more than one
+and a half orders of magnitude below the lowest measured value.
 
-The RMS z depends on the order, and ``q = 3`` is where EK1 is best
-calibrated. Over the same problems and policies (post-hoc smoother aside) it
-measures 0.11 -- 4.5 at ``q = 1``, 0.058 -- 0.27 (filter) and 0.023 -- 0.096
-(smoother) at ``q = 2``, and 0.061 -- 0.78 (filter) and 0.022 -- 0.10
-(smoother) at ``q = 4, 5``: there the smoother is conservative by up to 1.7
-orders of magnitude and would fail the lower edge of the band.
+The RMS z depends on the order. ``q = 3`` appears best calibrated because of
+the alternating diffusion above: among ``q = 2 -- 5`` only there does the
+dynamic smoother lose its advantage over the filter, so its RMS z stays close
+to the filter's. The dynamic diffusion also overstates the scale for
+``q >= 2``: a global factor fitted on top of it is about 0.5 at ``q = 2`` and
+0.015 -- 0.26 at ``q = 3 -- 5``. Over the same problems and policies (post-hoc
+smoother aside) the RMS z measures 0.11 -- 4.5 at ``q = 1``, 0.058 -- 0.27
+(filter) and 0.023 -- 0.096 (smoother) at ``q = 2``, and 0.061 -- 0.78
+(filter) and 0.022 -- 0.10 (smoother) at ``q = 4, 5``: there the smoother is
+conservative by up to 1.7 orders of magnitude and would fail the lower edge of
+the band.
 
 **Exact calibration on a model the filter gets exactly right.** The truth is
 drawn from the prior itself (``BasePrior.sample``); the ODE information

@@ -118,7 +118,7 @@ through each.
 | a point estimate of ODE parameters | `marginal_loglik` and `fit_scipy` (L-BFGS-B), or `fit` with an Optax optimizer |
 | a posterior over the parameters | `marginal_loglik` inside NumPyro or BlackJAX |
 | a hidden input `u(t)` | a `JointPrior` with a `*WithHidden` model; `rts_smoother` / `sample_posterior` |
-| hyperparameters (length scale, `Xi`, an input's magnitude) | the conditional evidence: `channel="fenrir"` or `"dalton"` (see [calibration](calibration.md#selecting-hyperparameters-from-data)) |
+| hyperparameters (length scale, `Xi`, an input's magnitude) | the conditional evidence: `channel="fenrir"` or `"dalton"` (see [calibration](calibration.md#selecting-hyperparameters-from-data) and the [comparison of the channels](examples/parameter-estimation.ipynb#comparing-the-evidence-channels)) |
 | how much the data say about a hidden input | `information_criteria` |
 | whether the fitted model is consistent with the data | `nis`, `whitened_residuals`, `residual_autocorrelation` |
 | predictions between grid nodes, or of new observations | `interpolate`, `observation_predictive` |

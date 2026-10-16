@@ -156,6 +156,97 @@ must pass a noise-free `Pz_sqr` to `posthoc_mle_sigma_sqr` — the
 covariances returned by the filter include `R` and must be recomputed from the
 saved `(result.m_pred, result.P_pred_sqr)` first.
 
+## The smoother's uncertainty
+
+Every policy above estimates the diffusion from the filter's innovations, so
+it calibrates the filter, and the smoother inherits the result. We measured
+the consequences on four problems with known solutions (logistic growth, a
+cubic decay, a linear oscillator in 2D and the Hopf normal form), with EK1,
+`IWP(q)` and the step `h = 0.1` on `[0, 10]`. The ranges below span the four
+problems. The measure of calibration is the RMS over the grid nodes of the
+standardized error `z = (mean - truth) / std`. The error of a solver is not a
+draw from its posterior, so an RMS `z` of exactly one is not expected, and a
+value far below one means a band that is too wide.
+
+**Constant diffusion.** Under a constant diffusion (`"none"`, also after a
+post-hoc rescaling) and for `q = 2` to `5`, the smoothed mean is 8.5 to 3400
+times more accurate than the filtered one at the grid nodes, and 15 to 46000
+times more accurate midway between them. In a refinement study (`h = 0.2` to
+`0.025`, `q = 2` to `4`) the smoother's error converges at the order `q + 1.4`
+to `q + 2` and the filter's at `q + 1` (on three of the problems; the cubic
+decay is not in its asymptotic regime at these steps). The smoother's
+standard deviation is only 1.0 to 6.4 times smaller than the filter's. A
+diffusion fitted to the filter's innovations, such as `posthoc_mle_sigma_sqr`,
+therefore gives the filter an RMS `z` of 0.06 to 0.8 and the smoother one of
+3e-4 to 0.03, which is a band too wide by one and a half to three and a half
+orders of magnitude. At `q = 1` filter and smoother are equally accurate
+within a factor of 1.4.
+
+**Dynamic calibration.** The per-step estimate `r.T (H Q H.T)^-1 r / d`
+assigns the whole residual `r` of a step to that step's fresh process noise
+`Q`. It ignores the part `H A P A.T H.T` of the residual's predicted
+covariance that the step carries over from the previous state, and it
+overstates the diffusion for `q >= 2`. The global factor
+`c = posthoc_mle_sigma_sqr(result.mz, result.Pz_sqr)` of a dynamic run is the
+MLE of one constant multiplier on top of the per-step diffusions. It is 1.0 at
+`q = 1`, 0.48 to 0.55 at `q = 2`, 0.10 to 0.26 at `q = 3`, 0.022 to 0.033 at
+`q = 4` and 0.015 to 0.021 at `q = 5`.
+
+**A diffusion that changes from step to step** costs the smoother its
+accuracy. At `q = 3` to `5` the smoothed mean under dynamic calibration is 5
+to 2100 times less accurate than under a constant diffusion, while the
+filtered mean loses a factor of 1.0 to 13. At `q = 3` the dynamic diffusion
+alternates by a factor of 14 to 17 between neighboring steps on three of the
+four problems, and on all four the smoother is only 1.1 to 1.7 times more
+accurate than the filter. The smoother's RMS `z` (0.20 to 0.58) is then close
+to the filter's (0.21 to 0.56). At `q = 2`, `4` and `5` the dynamic smoother
+stays 3 to 23 times more accurate than the filter, and its RMS `z` is 0.02 to
+0.08. The alternation of the diffusion at `q = 3` is therefore the reason that
+`q = 3` appears the best-calibrated order for the smoother.
+
+Two recipes follow from these measurements. Both rescale covariances and
+leave the means of the run unchanged.
+
+**Accurate smoothed means.** For smoothing on a fixed grid, solve with
+`calibration="none"` and rescale with the post-hoc MLE. At `q = 3` to `5` the
+smoothed means are 5 to 2100 times more accurate than under dynamic
+calibration, and the smoother's band stays too wide by the margin above.
+
+```python
+from ode_filters import gaussian_filter, rts_smoother
+from ode_filters.calibration import posthoc_mle_sigma_sqr, rescale_sqr_seq
+
+result = gaussian_filter(m_0, P_0_sqr, prior, measure, ts, calibration="none")
+sigma_sqr_hat = posthoc_mle_sigma_sqr(result.mz, result.Pz_sqr)
+smoothed = rts_smoother(result)
+P_smoothed_sqr = rescale_sqr_seq(smoothed.P_sqr, sigma_sqr_hat)
+```
+
+**Bands that match the errors** ("dynamic times `c`"). Solve with dynamic
+calibration and rescale by the global factor `c`. Rescaling the filtered
+covariances, the backward conditionals and the per-step diffusion makes
+`rts_smoother` and `interpolate` return the rescaled posterior. At `q = 3` to
+`5` the RMS `z` is then 0.51 to 1.09 for the filter and 0.19 to 1.14 for the
+smoother.
+
+```python
+result = gaussian_filter(m_0, P_0_sqr, prior, measure, ts)  # "dynamic"
+c = posthoc_mle_sigma_sqr(result.mz, result.Pz_sqr)
+result = result._replace(  # other covariances, e.g. P_pred_sqr, stay unscaled
+    P_sqr=rescale_sqr_seq(result.P_sqr, c),
+    P_back_sqr=rescale_sqr_seq(result.P_back_sqr, c),
+    diffusion=c * result.diffusion,
+)
+smoothed = rts_smoother(result)
+```
+
+The rescaling is exact only for an exact initial state
+(`taylor_mode_initialization`); with an uncertain one, part of each
+covariance does not scale with the diffusion. For a `JointPrior`, pass
+`prior=` to `rescale_sqr_seq` (see the warning above). Neither recipe
+calibrates the smoother at `q = 2`, where its RMS `z` stays between 0.001 and
+0.06.
+
 ## Selecting hyperparameters from data
 
 The diffusion is one hyperparameter; a prior's length scale, `Xi`, or the
@@ -187,6 +278,9 @@ earlier data, which is the usual case. Two estimators:
 Use the conditional evidence to compare hyperparameters by how well the
 ODE-constrained model explains the data; use the sequential one when the data
 should be judged as they arrive (filtering, online use).
+[Parameter estimation](examples/parameter-estimation.ipynb#comparing-the-evidence-channels)
+compares the three channels on one problem, including a frozen linearization
+on which Fenrir's and Dalton's values coincide.
 
 **Information criteria.** `information_criteria(m_0, P_0_sqr, prior, surrogate,
 ts, obs_model)` returns, at a frozen linearization and for a `JointPrior` with a
