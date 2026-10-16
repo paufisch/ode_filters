@@ -1,10 +1,16 @@
 """Data observations: ``Measurement``, ``ObsModel`` and ``prepare_observations``.
 
-The measurement times are matched to the solver's grid on the host, with NumPy.
-A ``Measurement`` keeps concrete times as a NumPy array, so it can be built and
-``prepare_observations`` called inside ``jax.jit`` (or ``grad``, ``vmap``)
-while its data are traced. ``merge_measurement_times`` adds off-grid times to a
-grid.
+``prepare_observations`` places each datum on the solver's grid ``ts``. A time
+that matches a node of the grid (within ``1e-7 + 1e-5 |t|``) is that node. Any
+other time in ``(ts[0], ts[-1]]`` becomes a *data-only node*: the filter
+predicts to it and conditions on the data there, without an update on the ODE
+information, so the ODE information stays that of the grid. The ``ObsModel``
+then records its *timeline*, the grid with the data-only nodes inserted, and
+the solvers return their results on it.
+
+The matching runs on the host, with NumPy. A ``Measurement`` keeps concrete
+times as a NumPy array, so it can be built and ``prepare_observations`` called
+inside ``jax.jit`` (or ``grad``, ``vmap``) while its data are traced.
 """
 
 from __future__ import annotations
@@ -32,24 +38,65 @@ MEASUREMENT_TIME_ATOL = 1e-7
 
 
 class ObsModel(NamedTuple):
-    """Data observations on a time grid, for the filters' ``obs_model``.
+    """Data observations for the solvers' ``obs_model``.
 
     Linear observations ``y = H x + v`` with a constant ``H`` and noise; only the
-    data vary per step. Built by ``prepare_observations``.
+    data vary per step. Built by ``prepare_observations``. Step ``n`` ends at
+    node ``n + 1`` of the solve. Without data-only nodes these are the nodes of
+    the solver's grid ``ts``, and ``t`` and ``grid_node`` are ``None``. With
+    data-only nodes they are the nodes of the timeline ``t``, the grid with a
+    node at each data time between its nodes; a solver checks that the grid
+    nodes of the timeline are its ``ts``.
+
+    Several data of one measurement at one node occupy copies of the
+    measurement's rows, as many as its largest number of data at one node. At a
+    step the copies without data are masked.
 
     Attributes:
         H: Observation matrix, shape ``[obs_dim, state_dim]``.
         R_sqr: Square-root noise covariance, shape ``[obs_dim, obs_dim]``.
-        c_seq: Offsets per filter step, ``-y`` where a row has data and zero
-            elsewhere, shape ``[N, obs_dim]``.
-        mask: Which rows have data at each step, shape ``[N, obs_dim]``. Rows
+        c_seq: Offsets per step, ``-y`` where a row has data and zero
+            elsewhere, shape ``[E, obs_dim]``.
+        mask: Which rows have data at each step, shape ``[E, obs_dim]``. Rows
             without data are ignored, so measurements can have different times.
+        t: The timeline, shape ``[E + 1]``: the grid with the data-only nodes,
+            a NumPy array unless traced. ``None`` when every datum lies on a
+            node of the grid; the steps are then those of the grid.
+        grid_node: Whether step ``n`` ends at a node of the grid (``True``) or
+            at a data-only node (``False``), shape ``[E]``; ``None`` with ``t``.
     """
 
     H: Array
     R_sqr: Array
     c_seq: Array
     mask: Array
+    t: Array | onp.ndarray | None = None
+    grid_node: Array | onp.ndarray | None = None
+
+    def without_data(self) -> ObsModel:
+        """This ``ObsModel`` without its data: no rows, on the same nodes.
+
+        A solver given it runs the pass without data on the nodes of this
+        ``ObsModel``, its data-only nodes included, and reports no data
+        evidence (``log_likelihood_obs`` is ``None``). This is the pass without
+        data that ``fenrir_loglik(data_free, obs_model)`` and
+        ``conditional_loglik(data, data_free)`` take. With data-only nodes, a
+        pass with ``obs_model=None`` runs on the grid alone and does not match
+        this ``ObsModel``.
+
+        Returns:
+            An ``ObsModel`` with no rows (``obs_dim = 0``) and the same ``t``
+            and ``grid_node``.
+        """
+        n_steps = self.c_seq.shape[0]
+        return ObsModel(
+            H=np.zeros((0, self.H.shape[1]), dtype=self.H.dtype),
+            R_sqr=np.zeros((0, 0), dtype=self.R_sqr.dtype),
+            c_seq=np.zeros((n_steps, 0), dtype=self.c_seq.dtype),
+            mask=np.zeros((n_steps, 0), dtype=bool),
+            t=self.t,
+            grid_node=self.grid_node,
+        )
 
 
 def _host(values: ArrayLike, name: str) -> onp.ndarray:
@@ -67,13 +114,13 @@ def _host(values: ArrayLike, name: str) -> onp.ndarray:
         ) from None
 
 
-def _grid_steps(times: onp.ndarray, steps: onp.ndarray) -> onp.ndarray:
-    """Index of the grid step ending at each time; ``-1`` where none does."""
-    idx = onp.clip(onp.searchsorted(steps, times), 0, len(steps) - 1)
+def _match_nodes(times: onp.ndarray, nodes: onp.ndarray) -> onp.ndarray:
+    """Index of the node that each time matches; ``-1`` where none does."""
+    idx = onp.clip(onp.searchsorted(nodes, times), 0, len(nodes) - 1)
     out = onp.full(times.shape, -1)
-    for candidate in (idx, onp.clip(idx - 1, 0, len(steps) - 1)):
+    for candidate in (idx, onp.clip(idx - 1, 0, len(nodes) - 1)):
         hit = onp.isclose(
-            steps[candidate],
+            nodes[candidate],
             times,
             rtol=MEASUREMENT_TIME_RTOL,
             atol=MEASUREMENT_TIME_ATOL,
@@ -82,46 +129,116 @@ def _grid_steps(times: onp.ndarray, steps: onp.ndarray) -> onp.ndarray:
     return out
 
 
-def merge_measurement_times(
-    ts: ArrayLike, measurements: Sequence[Measurement]
-) -> onp.ndarray:
-    """The grid ``ts`` with the measurement times added as nodes.
+def _timeline(
+    grid: onp.ndarray, own_times: list[onp.ndarray]
+) -> tuple[onp.ndarray, onp.ndarray | None, list[onp.ndarray]]:
+    """The nodes of the solve, and the step that ends at each measurement time.
 
-    A time that ``prepare_observations`` matches to a node of ``ts`` adds no
-    node. The match uses its tolerance, ``|t - node| <= 1e-7 + 1e-5 |t|``. Of
-    new times within this tolerance of each other, only the first becomes a
-    node, so near-duplicate times create no step shorter than the tolerance. On
-    the merged grid, ``prepare_observations(measurements, E0, ts)`` accepts
-    every measurement. The filters accept the non-uniform grid, and
-    ``gaussian_filter_adaptive`` takes it as ``save_at``.
+    Returns ``(nodes, grid_node, steps)``. ``nodes`` is the grid with a node at
+    each time that matches no node of it; ``grid_node`` marks the steps that end
+    at a node of the grid, and is ``None`` when no time is off the grid.
+    ``steps[i]`` is the step index (node index minus one) of each time of
+    measurement ``i``.
+    """
+    times = onp.unique(onp.concatenate([onp.zeros(0), *own_times]))
+    node = _match_nodes(times, grid)
+    early = times[(node == 0) | ((node < 0) & (times < grid[0]))]
+    if early.size:
+        raise ValueError(
+            f"Measurement times {early.tolist()} lie at or before the initial time "
+            f"ts[0] = {grid[0]}. Data at the initial time belong in the initial "
+            "state: condition m_0 and P_0_sqr on them."
+        )
+    late = times[(node < 0) & (times > grid[-1])]
+    if late.size:
+        raise ValueError(
+            f"Measurement times {late.tolist()} lie after the final time ts[-1] = "
+            f"{grid[-1]}; extend ts to cover them."
+        )
+    off = times[node < 0]
+    # An off-grid time within the matching tolerance of the first time of the
+    # previous group joins that group's node.
+    shared = off.copy()
+    for i in range(1, off.shape[0]):
+        if onp.isclose(
+            shared[i - 1],
+            off[i],
+            rtol=MEASUREMENT_TIME_RTOL,
+            atol=MEASUREMENT_TIME_ATOL,
+        ):
+            shared[i] = shared[i - 1]
+    nodes = onp.union1d(grid, shared)
+    position = onp.empty(times.shape, dtype=int)
+    on_grid = node >= 0
+    position[on_grid] = onp.searchsorted(nodes, grid[node[on_grid]])
+    position[~on_grid] = onp.searchsorted(nodes, shared)
+    steps = [position[onp.searchsorted(times, own)] - 1 for own in own_times]
+    grid_node = onp.isin(nodes[1:], grid[1:]) if off.size else None
+    return nodes, grid_node, steps
 
-    A time at the initial time ``ts[0]`` raises, because data at the initial
-    time belong in the initial state (condition ``m_0`` and ``P_0_sqr`` on
-    them). A time outside ``[ts[0], ts[-1]]`` raises as well. The grid is not
-    extended, so the time span of a solve stays the one of ``ts``. Two times of
-    one measurement at the same node raise, because ``prepare_observations``
-    keeps one datum per node and measurement (the last).
 
-    The merge runs on the host, so ``ts`` and the times must be concrete.
-    Inside ``jax.jit`` they are concrete when given as NumPy arrays or closed
-    over (see ``Measurement``).
+def _copies(steps: onp.ndarray) -> tuple[int, onp.ndarray]:
+    """The number of row copies a measurement needs, and the copy of each datum.
+
+    A datum takes the first copy that no earlier datum at its step has taken.
+    """
+    taken: dict[int, int] = {}
+    copy = onp.empty(steps.shape, dtype=int)
+    for i, step in enumerate(steps.tolist()):
+        n = taken.get(step, 0)
+        copy[i] = n
+        taken[step] = n + 1
+    return max(taken.values(), default=1), copy
+
+
+def prepare_observations(
+    observations: Sequence[Measurement],
+    E0: ArrayLike,
+    ts: ArrayLike,
+) -> ObsModel | None:
+    """Build an ``ObsModel`` for the solver's grid ``ts`` from ``Measurement`` objects.
+
+    Every measurement time ``t`` must lie in ``(ts[0], ts[-1]]``. A time that
+    matches a node of ``ts`` within ``1e-7 + 1e-5 |t|`` is conditioned on at
+    that node, after the ODE information. Any other time becomes a data-only
+    node: the filter predicts to it, conditions on the data and continues
+    without an update on the ODE information, so the ODE information is that of
+    the grid ``ts`` whatever the data times. Times within the tolerance of each
+    other share one data-only node. With data-only nodes, the ``ObsModel``
+    records its timeline (``t``, ``grid_node``) and the solvers return their
+    results on it. When every time is a node of ``ts``, ``t`` is ``None``.
+
+    Measurements may have different times: at each step only the rows with
+    data are conditioned on. Several data of one measurement at one node are
+    all conditioned on, through copies of the measurement's rows.
+
+    The time matching runs on the host, so the times and ``ts`` must be
+    concrete, while the data values (and ``A``, the noise and ``E0``) may be
+    traced: the measurements and the ``ObsModel`` can be built inside a jitted,
+    differentiated or vmapped function (see ``Measurement``).
 
     Args:
-        ts: Time grid, shape ``[K]``, strictly increasing; ``ts[0]`` is the time
-            of the initial state.
-        measurements: The measurements whose times to add.
+        observations: The measurements.
+        E0: Selector of the solution ``x`` in the state, shape
+            ``[d, state_dim]``. The ``A`` of a measurement acts on
+            ``E0 @ state`` unless it has ``full_state=True``. Pass
+            ``prior.E0_state``, which for a ``JointPrior`` selects the solution
+            without the input.
+        ts: The solver's time grid, shape ``[N + 1]``, strictly increasing;
+            ``ts[0]`` is the time of the initial state.
 
     Returns:
-        The merged grid, strictly increasing, as a new NumPy array. It stays
-        concrete inside ``jax.jit``, so a solver still sees a uniform grid
-        (no time to add) as uniform.
+        An ``ObsModel``, or ``None`` when ``observations`` is empty.
 
     Raises:
-        ValueError: For an invalid grid, a measurement time at ``ts[0]`` or
-            outside ``[ts[0], ts[-1]]``, or two times of one measurement at the
-            same node.
+        ValueError: For an invalid grid, or a measurement time at or before
+            ``ts[0]`` or after ``ts[-1]``.
         TypeError: If ``ts`` or the measurement times are traced.
     """
+    if not observations:
+        return None
+
+    E0 = np.asarray(E0)
     grid = _host(ts, "The nodes of the grid ts")
     if grid.ndim != 1 or grid.shape[0] < 2:
         raise ValueError(
@@ -129,117 +246,47 @@ def merge_measurement_times(
         )
     if not onp.all(onp.diff(grid) > 0):
         raise ValueError("ts must be strictly increasing.")
-    own_times = [_host(m.z_t, "Measurement times") for m in measurements]
-    times = onp.unique(onp.concatenate([onp.zeros(0), *own_times]))
-    node = _grid_steps(times, grid)
-    initial = times[node == 0]
-    if initial.size:
-        raise ValueError(
-            f"Measurement times {initial.tolist()} are the initial time ts[0]; "
-            "data at the initial time belong in the initial state (m_0, P_0_sqr)."
-        )
-    outside = times[(node < 0) & ((times < grid[0]) | (times > grid[-1]))]
-    if outside.size:
-        raise ValueError(
-            f"Measurement times {outside.tolist()} lie outside [ts[0], ts[-1]] = "
-            f"[{grid[0]}, {grid[-1]}]; extend ts to cover them."
-        )
-    new: list[float] = []
-    for t in times[node < 0]:
-        # The test of _grid_steps, so prepare_observations matches t to new[-1].
-        if not new or not onp.isclose(
-            new[-1], t, rtol=MEASUREMENT_TIME_RTOL, atol=MEASUREMENT_TIME_ATOL
-        ):
-            new.append(float(t))
-    merged = onp.union1d(grid, onp.array(new, dtype=float))
-    for i, own in enumerate(own_times):
-        nodes = _grid_steps(own, merged)
-        if onp.unique(nodes).size < nodes.size:
-            raise ValueError(
-                f"measurements[{i}] has several times at one node of the merged "
-                "grid, and prepare_observations keeps one datum per node and "
-                "measurement. Combine these data, or give them to separate "
-                "measurements."
-            )
-    return merged
-
-
-def prepare_observations(
-    observations: list[Measurement],
-    E0: ArrayLike,
-    ts: ArrayLike,
-) -> ObsModel | None:
-    """Build an ``ObsModel`` on the grid ``ts`` from ``Measurement`` objects.
-
-    Filter step ``n`` updates at ``ts[n + 1]``, so every measurement time must be
-    a node of ``ts[1:]`` (matched with a small tolerance). Measurements may have
-    different times: at each step only the rows with data are conditioned on.
-    For off-grid data, add their times to the grid with
-    ``ts = merge_measurement_times(ts, measurements)``; the filters accept
-    non-uniform grids. The time matching runs on the host, so the times and
-    ``ts`` must be concrete, while the data values (and ``A``, the noise and
-    ``E0``) may be traced: the measurements and the ``ObsModel`` can be built
-    inside a jitted, differentiated or vmapped function (see ``Measurement``).
-
-    Args:
-        observations: The measurements.
-        E0: State extraction matrix, shape ``[d, state_dim]`` (for measurements
-            on ``E0 @ state``).
-        ts: Time grid of shape ``[N + 1]``, the solver's grid.
-
-    Returns:
-        An ``ObsModel``, or ``None`` when ``observations`` is empty.
-
-    Raises:
-        ValueError: If a measurement time is not a node of ``ts[1:]``.
-        TypeError: If ``ts`` or the measurement times are traced.
-    """
-    if not observations:
-        return None
-
-    E0 = np.asarray(E0)
-    steps = _host(ts, "The nodes of the grid ts")[1:]
-    n_steps = steps.shape[0]
+    own_times = [_host(m.z_t, "Measurement times") for m in observations]
+    nodes, grid_node, steps = _timeline(grid, own_times)
+    copies = [_copies(s) for s in steps]
+    n_steps = nodes.shape[0] - 1
     state_dim = E0.shape[1]
-    obs_dim = sum(m.dim for m in observations)
+    obs_dim = sum(n * m.dim for (n, _), m in zip(copies, observations, strict=True))
 
     H = np.zeros((obs_dim, state_dim))
     R = np.zeros((obs_dim, obs_dim))
     c_seq = np.zeros((n_steps, obs_dim))
     mask = onp.zeros((n_steps, obs_dim), dtype=bool)
     offset = 0
-    for m in observations:
-        rows = slice(offset, offset + m.dim)
-        H = H.at[rows, :].set(m.A if m.full_state else m.A @ E0)
-        R = R.at[rows, rows].set(m.R)
-        times = _host(m.z_t, "Measurement times")
-        idx = _grid_steps(times, steps)
-        if onp.any(idx < 0):
-            missing = times[idx < 0]
-            raise ValueError(
-                f"Measurement times {missing.tolist()} are not nodes of the grid "
-                "ts[1:]. Add them to the grid with ts = merge_measurement_times("
-                "ts, measurements) (the filters accept non-uniform grids); data "
-                "at the initial time ts[0] belong in the initial state."
-            )
-        c_seq = c_seq.at[idx, rows].set(-np.asarray(m.z))
-        mask[idx, rows] = True
-        offset += m.dim
+    for m, step, (n_copies, copy) in zip(observations, steps, copies, strict=True):
+        k = m.dim
+        H_m = m.A if m.full_state else m.A @ E0
+        for j in range(n_copies):
+            block = slice(offset + j * k, offset + (j + 1) * k)
+            H = H.at[block, :].set(H_m)
+            R = R.at[block, block].set(m.R)
+        rows = offset + k * copy[:, None] + onp.arange(k)[None, :]
+        c_seq = c_seq.at[step[:, None], rows].set(-np.asarray(m.z))
+        mask[step[:, None], rows] = True
+        offset += n_copies * k
 
     return ObsModel(
         H=H,
         R_sqr=_safe_cholesky_sqr(R, obs_dim),
         c_seq=c_seq,
         mask=np.asarray(mask),
+        t=None if grid_node is None else nodes,
+        grid_node=grid_node,
     )
 
 
 class Measurement(eqx.Module):
     """Noisy linear data ``z[n] = A @ x(z_t[n]) + v`` at the times ``z_t``.
 
-    Passed to the solvers through ``prepare_observations``, which matches the
-    times to the solver's grid with a small tolerance (absorbing the ~1e-8
-    differences between NumPy and JAX ``linspace``).
+    Passed to the solvers as ``measurements=``, or through
+    ``prepare_observations``, which matches the times to the solver's grid with
+    a small tolerance (absorbing the ~1e-8 differences between NumPy and JAX
+    ``linspace``). A time between two grid nodes becomes a data-only node.
 
     The matching runs on the host, so concrete times are kept as a NumPy array.
     They stay concrete when the ``Measurement`` is built inside ``jax.jit`` (or
@@ -251,7 +298,9 @@ class Measurement(eqx.Module):
     raises a ``TypeError`` for them.
 
     Attributes:
-        A: Measurement matrix, shape ``[k, d]`` (on ``x = E0 @ state``) or
+        A: Measurement matrix, shape ``[k, d]``, on the solution
+            ``x = E0 @ state`` with ``E0 = prior.E0_state`` (for a
+            ``JointPrior``, the solution without the input); or
             ``[k, state_dim]`` with ``full_state=True``.
         z: Data, shape ``[n, k]``.
         z_t: Times of the data, shape ``[n]`` (``[n, 1]`` is flattened); a NumPy

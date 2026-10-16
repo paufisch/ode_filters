@@ -144,24 +144,29 @@ def test_a_sensor_without_data_on_the_grid_changes_nothing():
     assert np.isfinite(ll_b) and float(ll_b) != 0.0
 
 
-def test_measurement_times_off_the_grid_raise():
+def test_measurement_times_outside_the_grid_raise():
     prior = IWP(q=2, d=1)
     ts = np.linspace(0.0, 2.0, 11)
-    off = Measurement(np.eye(1), np.ones((1, 1)), np.array([0.33]))
-    with pytest.raises(ValueError, match="not nodes of the grid"):
-        prepare_observations([off], prior.E0, ts)
+    for times, match in [([0.0], "at or before"), ([2.5], "after the final")]:
+        data = Measurement(np.eye(1), np.ones((1, 1)), np.array(times))
+        with pytest.raises(ValueError, match=match):
+            prepare_observations([data], prior.E0, ts)
 
 
-def test_off_grid_data_work_on_a_grid_that_includes_them():
+@pytest.mark.parametrize("merged", [False, True])
+def test_off_grid_data_on_data_only_nodes_or_a_merged_grid(merged):
     def vf(x, *, t):
         return -x
 
     prior = IWP(q=2, d=1)
     t_obs = np.array([0.33, 1.71])
-    ts = np.asarray(onp.union1d(onp.linspace(0.0, 2.0, 11), onp.asarray(t_obs)))
+    ts = onp.linspace(0.0, 2.0, 11)
+    if merged:
+        ts = onp.union1d(ts, onp.asarray(t_obs))
     m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([1.0]), q=2)
     data = Measurement(np.eye(1), np.exp(-t_obs)[:, None], t_obs, noise=1e-4)
     obs_model = prepare_observations([data], prior.E0, ts)
+    assert obs_model is not None and (obs_model.t is None) == merged
     res = gaussian_filter(
         m_0,
         P_0_sqr,
@@ -171,7 +176,8 @@ def test_off_grid_data_work_on_a_grid_that_includes_them():
         obs_model=obs_model,
     )
     assert int(onp.asarray(obs_model.mask).sum()) == 2
-    assert_close(res.m[:, 0], np.exp(-ts), atol=1e-3)
+    assert res.t.shape == (13,)
+    assert_close(res.m[:, 0], np.exp(-res.t), atol=1e-3)
 
 
 def test_adaptive_path_reports_the_data_evidence_separately():

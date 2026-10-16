@@ -277,6 +277,13 @@ about earlier data, which is the usual case. It has two estimators:
   difference is Dalton's estimator (Wu & Lysy, 2024), which in general differs
   from Fenrir's value.
 
+With data between the grid nodes (data-only nodes, see
+[sharp bits](sharp-bits.md#data-between-grid-nodes-add-nodes-without-ode-information)),
+the pass without data runs on the timeline of the data, with
+`obs_model=obs_model.without_data()`. Its ODE information is that of the grid,
+and its backward conditionals reach the data-only nodes. `marginal_loglik` does
+this for both channels.
+
 With adaptive steps (`InferenceProblem(..., adaptive=AdaptiveSettings(...))`),
 `marginal_loglik` computes Fenrir's estimator from the pass without data run
 with `smoother=True`, whose backward conditionals span one save interval each.

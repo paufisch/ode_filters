@@ -33,20 +33,24 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as np
+import numpy as onp
 from jax import Array
 from jax.typing import ArrayLike
 
 from ..filters.fixed_grid import (
+    _concrete,
     check_grid,
-    check_obs_model,
     check_surrogate,
     grid_transitions,
+    resolve_observations,
+    timeline_transitions,
 )
 from ..filters.kernel import mask_rows, observe, scale_gaussian
 from ..filters.result import FilterResult
 from ..gaussian import AffineModel, Gaussian, marginalize
 from ..gaussian.algebra import _safe_qr
 from ..information import ObsModel
+from ..information.observations import MEASUREMENT_TIME_ATOL, MEASUREMENT_TIME_RTOL
 from ..linearization.surrogate import AffineSurrogate
 from ..priors.base import Transition
 from ..priors.joint import JointPrior
@@ -61,11 +65,17 @@ def fenrir_loglik(data_free: FilterResult, obs_model: ObsModel) -> Array:
     of each update (Tronarp, Bosch & Hennig 2022, Prop. 3.1). Observation step
     ``i`` of ``obs_model`` lives at node ``i + 1``; node 0 has none.
 
+    With data-only nodes the pass without data must run on the timeline of
+    ``obs_model``: pass ``obs_model=obs_model.without_data()`` to the solver.
+    Its backward conditionals then reach the data-only nodes, while its ODE
+    information is that of the grid.
+
     Args:
         data_free: A ``FilterResult`` conditioned on the ODE information only,
-            with backward conditionals (``gaussian_filter`` or ``affine_filter``
-            without ``obs_model``).
-        obs_model: The data, on the result's grid.
+            with backward conditionals: ``gaussian_filter`` or
+            ``affine_filter`` without data, or with
+            ``obs_model=obs_model.without_data()``.
+        obs_model: The data, on the result's nodes.
 
     Returns:
         The scalar ``log p(Y | Z)``.
@@ -82,10 +92,18 @@ def fenrir_loglik(data_free: FilterResult, obs_model: ObsModel) -> Array:
         )
     backward = data_free.backward
     n_steps = backward.G.shape[0]
-    if obs_model.c_seq.shape[0] != n_steps:
+    nodes = None if obs_model.t is None else _concrete(data_free.t, float)
+    timeline = None if obs_model.t is None else _concrete(obs_model.t, float)
+    mismatch = obs_model.c_seq.shape[0] != n_steps
+    if not mismatch and nodes is not None and timeline is not None:
+        mismatch = nodes.shape != timeline.shape or not onp.allclose(
+            nodes, timeline, rtol=MEASUREMENT_TIME_RTOL, atol=MEASUREMENT_TIME_ATOL
+        )
+    if mismatch:
         raise ValueError(
             f"obs_model has {obs_model.c_seq.shape[0]} steps but the result has "
-            f"{n_steps}."
+            f"{n_steps}, or they are at other times. With data-only nodes, run "
+            "the pass without data with obs_model=obs_model.without_data()."
         )
 
     def model(c: Array) -> AffineModel:
@@ -236,6 +254,23 @@ def _innovation_logdets(
     return np.sum(logdet_ode), np.sum(logdet_obs)
 
 
+def _on_timeline(
+    surrogate: AffineSurrogate, interval: ArrayLike, grid_node: ArrayLike
+) -> AffineSurrogate:
+    """The surrogate per step of a timeline, switched off at the data-only nodes.
+
+    A step takes the model of its grid interval. At a data-only node every row
+    is absent (``mask_rows``): a zero row with unit noise, whose innovation
+    factor is the identity, so it adds nothing to the log-determinants.
+    """
+    H, c, R_sqr = jax.tree.map(lambda a: a[interval], tuple(surrogate))
+
+    def model(H: Array, c: Array, R_sqr: Array, on: Array) -> AffineModel:
+        return mask_rows(AffineModel(H, c, R_sqr), np.broadcast_to(on, c.shape))
+
+    return AffineSurrogate(*jax.vmap(model)(H, c, R_sqr, np.asarray(grid_node)))
+
+
 def conditional_state_cov_sqr(P_0_sqr: ArrayLike, n_state: int) -> Array:
     """Square root of the state block's covariance given the input block.
 
@@ -289,9 +324,12 @@ def information_criteria(
         m_0: Initial mean of the joint state.
         P_0_sqr: Square root of the joint initial covariance.
         prior: The ``JointPrior`` of state and input.
-        surrogate: The frozen linearization (one affine model per step).
+        surrogate: The frozen linearization (one affine model per step of
+            ``ts``).
         ts: Time grid.
-        obs_model: The data, on the same grid.
+        obs_model: The data for the same grid. With data-only nodes the passes
+            with the data run over its timeline, with the ODE information at
+            the grid nodes only, as in ``affine_filter``.
         P_0_state_sqr: Square root of the state block's initial covariance given
             the input. Defaults to the Schur complement of ``P_0``
             (``conditional_state_cov_sqr``).
@@ -302,7 +340,7 @@ def information_criteria(
     Raises:
         TypeError: If ``prior`` is not a ``JointPrior``.
         ValueError: If the shapes of the surrogate, the data or the initial law
-            do not match the prior.
+            do not match the prior, or ``obs_model`` was built for another grid.
     """
     if not isinstance(prior, JointPrior):
         raise TypeError(f"prior must be a JointPrior, got {type(prior).__name__}.")
@@ -318,7 +356,7 @@ def information_criteria(
     ts = check_grid(ts)
     n_steps = ts.shape[0] - 1
     check_surrogate(surrogate, n_steps, m_0.shape[0])
-    check_obs_model(obs_model, n_steps)
+    _, timeline = resolve_observations(obs_model, ts)
     P_0_state_sqr = (
         conditional_state_cov_sqr(P_0_sqr, D_x)
         if P_0_state_sqr is None
@@ -333,6 +371,15 @@ def information_criteria(
 
     logdet_z, _ = _innovation_logdets(P_0_sqr, joint, surrogate)
     logdet_z_given_u, _ = _innovation_logdets(P_0_state_sqr, given_u, state_surrogate)
+    if timeline is not None:
+        # The passes with the data run over the timeline; its data-only steps
+        # carry the surrogate rows switched off, which add nothing.
+        joint = (None, timeline_transitions(prior, ts, timeline)[1])
+        given_u = (None, timeline_transitions(prior.prior_x, ts, timeline)[1])
+        surrogate = _on_timeline(surrogate, timeline.interval, timeline.grid_node)
+        state_surrogate = _on_timeline(
+            state_surrogate, timeline.interval, timeline.grid_node
+        )
     # With the data: the ODE rows' innovations (now also given the earlier data)
     # and the data's; together they factorize Cov(Z, Y).
     logdet_z_data, logdet_obs = _innovation_logdets(

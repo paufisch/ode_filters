@@ -9,8 +9,12 @@ minor bump, non-breaking changes in a patch bump).
 
 ### Added
 
-- `merge_measurement_times(ts, measurements)` adds off-grid measurement times to
-  a grid, with the matching tolerance of `prepare_observations`.
+- Data between grid nodes: `prepare_observations` accepts times anywhere in
+  `(ts[0], ts[-1]]`, and a time between two nodes becomes a data-only node
+  (data, no ODE update). `ObsModel` records the timeline (`t`, `grid_node`),
+  and `ObsModel.without_data()` gives the pass without data.
+- `measurements=` for the solvers, and a list of `Measurement` objects as the
+  data of `marginal_loglik`.
 - A `Measurement` and its `ObsModel` can be built inside `jax.jit`, `grad` or
   `vmap` when the times are concrete and the data traced.
 - `InferenceProblem(..., adaptive=AdaptiveSettings(...))` runs
@@ -39,6 +43,8 @@ minor bump, non-breaking changes in a patch bump).
 
 ### Fixed
 
+- `prepare_observations` kept only the last of several data of one measurement
+  at one node; it now uses all of them.
 - The work-precision benchmark ran probdiffeq without calibration. Both
   libraries now calibrate at every step.
 

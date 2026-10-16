@@ -143,3 +143,30 @@ def test_dalton_is_not_available_with_adaptive_steps():
     problem, data = _problem(TS, TIGHT)
     with pytest.raises(ValueError, match="not available with adaptive steps"):
         marginal_loglik(THETA, data, model=problem, channel="dalton")
+
+
+# Off both the save grid TS and the fine grid; 1.0 is a node of both.
+T_OFF = onp.array([0.3013, 1.0, 1.7311, 2.6007, 4.4501])
+
+
+def _off_grid_measurements() -> list[Measurement]:
+    noise = onp.random.default_rng(2).standard_normal(T_OFF.shape)
+    y = 2.0 * onp.exp(-0.8 * T_OFF) + 0.02 * noise
+    return [Measurement(np.eye(1), y[:, None], T_OFF, noise=0.02**2)]
+
+
+@pytest.mark.parametrize("channel", ["obs", "fenrir"])
+def test_off_grid_data_agree_with_a_fine_fixed_grid(channel):
+    """The adaptive solver lands on the data times; the fine fixed grid has
+    data-only nodes there. Both approach the same limit."""
+    adaptive = InferenceProblem(_build, PRIOR, TS, adaptive=TIGHT)
+    fine = InferenceProblem(_build, PRIOR, onp.linspace(0.0, 5.0, 2001))
+    data = _off_grid_measurements()
+    value = marginal_loglik(THETA, data, model=adaptive, channel=channel)
+    expected = marginal_loglik(THETA, data, model=fine, channel=channel)
+    assert_close(value, expected, rtol=1e-7)
+    assert_grad_matches_fd(
+        lambda th: marginal_loglik(th, data, model=adaptive, channel=channel),
+        THETA,
+        rtol=1e-4,
+    )

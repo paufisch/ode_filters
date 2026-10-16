@@ -21,6 +21,13 @@ checkpointed while-loop (``equinox.internal.while_loop``), so it is ``jit``-,
 ``vmap``- and reverse-mode differentiable, and cannot raise: ``success``
 reports whether every save time was reached.
 
+Data between the save times (an ``ObsModel`` with data-only nodes, see
+``prepare_observations``) make the solver land on their times as well, and the
+result lives on the timeline of the ``ObsModel``. The solver chooses its steps,
+and with them the times of the ODE information, between any two landing
+points, so a data time is a node like a save time. On the fixed grid, by
+contrast, a data-only node has no ODE update.
+
 With ``smoother=True`` each accepted step's backward conditional is composed
 into one conditional per save interval (Kraemer 2025, "Adaptive Probabilistic
 ODE Solvers Without Adaptive Memory Requirements"), so ``rts_smoother`` works
@@ -29,6 +36,7 @@ on the result with memory independent of the number of steps.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal, NamedTuple
 
 import equinox.internal as eqxi
@@ -41,11 +49,11 @@ from jax.typing import ArrayLike
 from ..calibration.policies import Calibration, CalibrationMode, as_calibration
 from ..gaussian import AffineModel, Conditional, Gaussian, compose
 from ..gaussian.algebra import _safe_sqrt
-from ..information import MeasurementModel, ObsModel
+from ..information import Measurement, MeasurementModel, ObsModel
 from ..linearization.correction import Correction, TaylorCorrection
 from ..priors.base import BasePrior, Transition
 from .adaptive_controller import PIController, StepSizeController
-from .fixed_grid import check_grid, check_obs_model
+from .fixed_grid import check_grid, observations_from, resolve_observations
 from .kernel import OnlineInformation, filter_step, observe
 from .result import FilterResult, StepRecord
 
@@ -215,6 +223,7 @@ def gaussian_filter_adaptive(
     correction: Correction | None = None,
     calibration: Calibration | CalibrationMode = "dynamic",
     obs_model: ObsModel | None = None,
+    measurements: Sequence[Measurement] | None = None,
     atol: ArrayLike = 1e-4,
     rtol: ArrayLike = 1e-2,
     h_init: ArrayLike | Literal["auto"] | None = None,
@@ -238,9 +247,20 @@ def gaussian_filter_adaptive(
         correction: Linearization; ``None`` is EK1.
         calibration: Diffusion calibration policy, or one of ``"dynamic"``
             (default), ``"none"``, ``"diagonal"``, ``"diagonal_ekf0"``.
-        obs_model: Data at the save times, from
-            ``prepare_observations(measurements, E0, save_at)``; conditioned on
-            after landing on each save time.
+        obs_model: Data for the save times, from
+            ``prepare_observations(measurements, prior.E0_state, save_at)``;
+            conditioned on after landing on each save time. Data between the
+            save times give the ``ObsModel`` data-only nodes; the solver then
+            lands on every node of its timeline and conditions on the data
+            there. Between two landing points it chooses its steps, so a data
+            time becomes a node like a save time, unlike a data-only node of
+            the fixed grid, which has no ODE update.
+        measurements: The data as ``Measurement`` objects, in place of
+            ``obs_model``. They are converted with
+            ``prepare_observations(measurements, prior.E0_state, save_at)``, so
+            the ``A`` of a measurement acts on the solution
+            ``x = prior.E0_state @ state`` (for a ``JointPrior``, the solution
+            without the input), or on the full state with ``full_state=True``.
         atol: Absolute tolerance of the local-error estimate.
         rtol: Relative tolerance of the local-error estimate.
         h_init: First trial step. ``None`` (default) takes
@@ -289,7 +309,8 @@ def gaussian_filter_adaptive(
             speed matters, e.g. inside an optimization.
 
     Returns:
-        A ``FilterResult`` on ``save_at``. ``log_likelihood`` and
+        A ``FilterResult`` on ``save_at``, or on the timeline of the data if
+        they have data-only nodes. ``log_likelihood`` and
         ``log_likelihood_obs`` are the ODE-information and data evidence;
         ``n_accepted`` / ``n_rejected`` count the steps per save interval;
         ``m_pred``, ``P_pred_sqr`` and ``sigma_sqr`` are ``None``.
@@ -297,13 +318,15 @@ def gaussian_filter_adaptive(
     Raises:
         ValueError: For an invalid ``save_at``, ``sigma_in_error``,
             ``record_steps`` or ``max_step`` (not a positive scalar), an
-            ``obs_model`` of another length, a calibration the prior does not
-            support, or an ``h_init`` string other than ``"auto"``. Also for
+            ``obs_model`` built for another grid, both ``obs_model`` and
+            ``measurements``, invalid measurement times, a calibration the
+            prior does not support, or an ``h_init`` string other than
+            ``"auto"``. Also for
             ``h_init="auto"`` with a prior of order ``q = 0``, or of order
             ``q = 1`` with a ``measure`` whose number of ODE rows differs from
             the dimension of the solution.
     """
-    save_at = np.asarray(check_grid(save_at))
+    save_grid = check_grid(save_at)
     calibration = as_calibration(calibration)
     calibration.validate(prior)
     if sigma_in_error not in ("per_step", "running_mean"):
@@ -314,8 +337,10 @@ def gaussian_filter_adaptive(
         raise ValueError(f"record_steps must be >= 0, got {record_steps!r}.")
     _check_max_step(max_step)
     _check_h_init(h_init, prior, measure)
-    if obs_model is not None:
-        check_obs_model(obs_model, save_at.shape[0] - 1)
+    obs_model = observations_from(obs_model, measurements, prior, save_grid)
+    data, timeline = resolve_observations(obs_model, save_grid)
+    # With data-only nodes the solver lands on every node of the timeline.
+    save_at = np.asarray(save_grid if timeline is None else timeline.t)
     if controller is None:
         controller = PIController(order=max(int(prior.q), 1))
     information = OnlineInformation(
@@ -438,16 +463,16 @@ def gaussian_filter_adaptive(
         )
 
     def save_interval(c: _Carry, inputs):
-        target, data = inputs
+        target, step_data = inputs
         c = integrate_to(c, target)
         reached = c.t >= target - _landing_tolerance(target)
         innovation_obs = ll_obs = None
         x = c.x
-        if data is not None:
-            assert obs_model is not None
-            y, mask = data
+        if step_data is not None:
+            assert data is not None
+            y, mask = step_data
             x, innovation_obs, ll_obs = observe(
-                x, AffineModel(obs_model.H, y, obs_model.R_sqr), mask
+                x, AffineModel(data.H, y, data.R_sqr), mask
             )
         out = (
             x,
@@ -467,8 +492,8 @@ def gaussian_filter_adaptive(
         )
         return reset, out
 
-    data = None if obs_model is None else (obs_model.c_seq, obs_model.mask)
-    final, out = jax.lax.scan(save_interval, init, (save_at[1:], data))
+    observations = None if data is None else (data.c_seq, data.mask)
+    final, out = jax.lax.scan(save_interval, init, (save_at[1:], observations))
     x, reached, innovation, innovation_obs, ll_obs, composite, n_acc, n_rej = out
 
     def with_initial(first: Array, rest: Array) -> Array:

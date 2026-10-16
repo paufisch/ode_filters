@@ -26,7 +26,7 @@ scale, as with ``calibration="none"``.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Literal, NamedTuple
 
 import jax
@@ -35,12 +35,18 @@ from jax import Array
 from jax.typing import ArrayLike
 
 from ..gaussian import Gaussian
-from ..information import MeasurementModel, ObsModel
+from ..information import Measurement, MeasurementModel, ObsModel
 from ..linearization.correction import QuadratureCorrection, TaylorCorrection
 from ..linearization.statistical import QuadratureRule
 from ..linearization.surrogate import AffineSurrogate, slr_surrogate, taylor_surrogate
 from ..priors.base import BasePrior
-from .fixed_grid import affine_filter, check_grid, gaussian_filter
+from .fixed_grid import (
+    affine_filter,
+    check_grid,
+    gaussian_filter,
+    observations_from,
+    resolve_observations,
+)
 from .result import FilterResult
 from .smoothing import rts_smoother
 
@@ -51,9 +57,11 @@ class IterationState(NamedTuple):
     Attributes:
         surrogate: The linearization of the pass.
         filter_result: Its filter result.
-        m_smooth: Its smoothed means, shape ``[N + 1, D]``.
+        m_smooth: Its smoothed means at the nodes of the solve, shape
+            ``[N + 1, D]``, or ``[E + 1, D]`` on the timeline of data with
+            data-only nodes.
         P_smooth_sqr: Its smoothed square-root covariances.
-        previous_point: The means it linearized at (nodes ``1..N``).
+        previous_point: The means it linearized at (grid nodes ``1..N``).
     """
 
     surrogate: AffineSurrogate
@@ -67,14 +75,16 @@ class IteratedSmootherResult(NamedTuple):
     """Result of ``iterated_smoother``.
 
     Attributes:
-        t: Time grid, shape ``[N + 1]``.
-        m: Smoothed means of the final pass, shape ``[N + 1, D]``.
+        t: The nodes of the solve: the grid, shape ``[N + 1]``, or the timeline
+            of data with data-only nodes, shape ``[E + 1]``.
+        m: Smoothed means of the final pass at ``t``, shape ``[N + 1, D]``
+            (``[E + 1, D]`` on a timeline).
         P_sqr: Smoothed square-root covariances of the final pass.
         filter: ``FilterResult`` of the final pass.
         surrogate: The linearization the final pass used (``None`` when
             ``n_iters == 0``, where the one-shot filter linearized online).
         n_iters: Number of passes.
-        step: RMS change of the smoothed means at nodes ``1..N`` in each pass,
+        step: RMS change of the smoothed means at grid nodes ``1..N`` in each pass,
             shape ``[n_iters]``: a convergence diagnostic.
         diagnostics: The ``diagnostics`` outputs of each pass, stacked along a
             leading axis of length ``n_iters`` (``None`` without a callable).
@@ -102,6 +112,7 @@ def iterated_smoother(
     init: ArrayLike | None = None,
     init_P_sqr: ArrayLike | None = None,
     obs_model: ObsModel | None = None,
+    measurements: Sequence[Measurement] | None = None,
     rule: QuadratureRule = "gauss_hermite",
     n_nodes: int = 4,
     diagnostics: Callable[[IterationState], Any] | None = None,
@@ -117,6 +128,11 @@ def iterated_smoother(
     the smoothed marginals as the next point. ``n_iters=0`` returns the
     one-shot filter and smoother.
 
+    With data-only nodes (data between the grid nodes, see
+    ``prepare_observations``), the surrogates stay on the grid: each pass
+    linearizes at the smoothed marginals of the grid nodes, while its filter
+    and smoother run over the timeline of the data.
+
     Args:
         m_0: Initial mean, shape ``[D]``.
         P_0_sqr: Initial square-root covariance, shape ``[D, D]``.
@@ -131,7 +147,9 @@ def iterated_smoother(
         init_P_sqr: With ``linearization="slr"`` and ``init``: the square-root
             covariances at nodes ``1..N``, shape ``[N, D, D]``. Not accepted for
             Taylor.
-        obs_model: Data on the same grid, from ``prepare_observations``.
+        obs_model: Data for the same grid, from ``prepare_observations``.
+        measurements: The data as ``Measurement`` objects, in place of
+            ``obs_model`` (see ``gaussian_filter``).
         rule: Quadrature rule for ``"slr"``.
         n_nodes: Gauss-Hermite nodes per dimension for ``"slr"``.
         diagnostics: Optional traceable ``IterationState -> PyTree``, called in
@@ -144,7 +162,9 @@ def iterated_smoother(
 
     Raises:
         ValueError: For an unknown ``linearization``, ``n_iters < 0``, ``init``
-            with ``n_iters=0``, or an inconsistent ``init`` / ``init_P_sqr``.
+            with ``n_iters=0``, an inconsistent ``init`` / ``init_P_sqr``, an
+            ``obs_model`` built for another grid, or both ``obs_model`` and
+            ``measurements``.
     """
     if linearization not in ("taylor", "slr"):
         raise ValueError(
@@ -156,6 +176,17 @@ def iterated_smoother(
     m_0 = np.asarray(m_0)
     n_steps = ts.shape[0] - 1
     taylor = linearization == "taylor"
+    obs_model = observations_from(obs_model, measurements, prior, ts)
+    _, timeline = resolve_observations(obs_model, ts)
+    # The grid nodes 1..N among the nodes of the solve.
+    grid_nodes = (
+        np.arange(1, n_steps + 1)
+        if timeline is None
+        else np.flatnonzero(np.asarray(timeline.grid_node), size=n_steps) + 1
+    )
+
+    def at_grid(smoothed: Gaussian) -> Gaussian:
+        return Gaussian(smoothed.m[grid_nodes], smoothed.P_sqr[grid_nodes])
 
     if init is None:
         correction = (
@@ -177,7 +208,7 @@ def iterated_smoother(
         smoothed = rts_smoother(one_shot)
         if n_iters == 0:
             return IteratedSmootherResult(
-                t=np.asarray(ts),
+                t=one_shot.t,
                 m=smoothed.m,
                 P_sqr=smoothed.P_sqr,
                 filter=one_shot,
@@ -186,7 +217,7 @@ def iterated_smoother(
                 step=np.zeros(0),
                 diagnostics=None,
             )
-        point = Gaussian(smoothed.m[1:], smoothed.P_sqr[1:])
+        point = at_grid(smoothed)
     else:
         if n_iters == 0:
             raise ValueError("A warm start (init) needs n_iters >= 1.")
@@ -224,13 +255,13 @@ def iterated_smoother(
             checkpoint=checkpoint,
         )
         smoothed = rts_smoother(result)
-        step = np.sqrt(np.mean((smoothed.m[1:] - point.m) ** 2))
+        next_point = at_grid(smoothed)
+        step = np.sqrt(np.mean((next_point.m - point.m) ** 2))
         extra = None
         if diagnostics is not None:
             extra = diagnostics(
                 IterationState(surrogate, result, smoothed.m, smoothed.P_sqr, point.m)
             )
-        next_point = Gaussian(smoothed.m[1:], smoothed.P_sqr[1:])
         return next_point, (result, surrogate, smoothed), (step, extra)
 
     # The final pass's filter result and surrogate ride in the carry; it starts
@@ -246,7 +277,7 @@ def iterated_smoother(
         body, (point, last_init), None, length=n_iters
     )
     return IteratedSmootherResult(
-        t=np.asarray(ts),
+        t=result.t,
         m=smoothed.m,
         P_sqr=smoothed.P_sqr,
         filter=result,
