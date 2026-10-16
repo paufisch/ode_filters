@@ -7,6 +7,10 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+### Changed
+
+- Docs: improve clarity of writing.
+
 ## [0.8.0] - 2026-10-15
 
 A breaking release that rebuilds the package around one filter step and turns it
