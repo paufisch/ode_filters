@@ -5,7 +5,7 @@ of a probabilistic ODE solver. Its classes form four groups:
 
 - **ODE classes** define the constraint that the dynamical system imposes.
 - **Constraint and data classes** add conservation laws (`Conservation`) and
-  noisy observations (`Measurement`, via an `obs_model`).
+  noisy observations (`Measurement`, passed to a solver as `measurements=`).
 - **Black-box models** accept an arbitrary user-defined measurement function.
 - **Transformed models** apply a nonlinear state transformation and compose its
   Jacobian by the chain rule.
@@ -47,12 +47,16 @@ Further constraints are added with frozen dataclasses:
   the ODE class's `constraints=` argument.
 - **`Measurement`**: Time-varying observations `A @ x = z[t]` at specified times.
   They are not constraints of the measurement model. Pass them to a solver as
-  `measurements=[Measurement(...)]`, or build an observation model with
-  `prepare_observations([Measurement(...)], prior.E0_state, ts)` and pass it as
-  `obs_model=`. `A` acts on the solution `x = prior.E0_state @ state` (for a
-  `JointPrior`, the solution without the input), or on the full state with
-  `full_state=True`. A time between two grid nodes becomes a data-only node,
-  where the filter conditions on the data without an update on the ODE
+  `measurements=[Measurement(...)]`, and to `marginal_loglik`, `fit` or
+  `information_criteria` as the data. These functions convert them into an
+  `ObsModel` with `prepare_observations([Measurement(...)], prior.E0_state, ts)`.
+  Call `prepare_observations` where code needs the `ObsModel` itself
+  (`fenrir_loglik` and `conditional_loglik` called directly, or one conversion
+  reused in several solves), and pass the result as `obs_model=`. `A` acts on
+  the solution `x = prior.E0_state @ state` (for a `JointPrior`, the solution
+  without the input), or on the full state with `full_state=True`. A time
+  between two grid nodes becomes a data-only node, where the filter conditions
+  on the data without an update on the ODE
   information (see [sharp bits](../../sharp-bits.md#data-between-grid-nodes-add-nodes-without-ode-information)). Measurements may have
   different times, and each step conditions on the rows that have data. Built
   inside `jax.jit` from concrete times, a `Measurement` may carry traced data.
@@ -97,7 +101,7 @@ the hidden-state classes:
 import jax
 import jax.numpy as np
 
-from ode_filters import gaussian_filter, prepare_observations
+from ode_filters import gaussian_filter
 from ode_filters.information import Measurement, SecondOrderODEInformationWithHidden
 from ode_filters.priors import IWP, JointPrior
 
@@ -129,16 +133,16 @@ x_true = np.exp(-gamma * obs_times) * (
     np.cos(omega_d * obs_times) + gamma / omega_d * np.sin(omega_d * obs_times)
 )
 
-# Data go through obs_model, not the measure. Measurement.A acts on E0_x @ state
-# (the position x), so it is [n_obs, d_x]; observation times lie on the grid.
+# Data go to the solver as measurements=, not into the measure. Measurement.A
+# acts on prior_joint.E0_state @ state = E0_x @ state (the position x), so it is
+# [n_obs, d_x]; observation times lie on the grid.
 meas = Measurement(A=np.eye(1), z=x_true[:, None], z_t=obs_times, noise=1e-4)
-obs_model = prepare_observations([meas], prior_joint.E0_x, ts)
 
 # State layout [x, x', x'', x''', u]: start at rest at x = 1, u unknown
 m_0 = np.array([1.0, 0.0, -1.0, 0.0, 0.0])
 P_0_sqr = np.diag(np.array([0.0, 0.0, 0.0, 1.0, 1.0]))
 
-result = gaussian_filter(m_0, P_0_sqr, prior_joint, model, ts, obs_model=obs_model)
+result = gaussian_filter(m_0, P_0_sqr, prior_joint, model, ts, measurements=[meas])
 u_hat = prior_joint.E0_hidden @ result.m[-1]  # estimated damping: ~0.297
 ```
 

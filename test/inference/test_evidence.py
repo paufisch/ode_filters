@@ -317,6 +317,8 @@ def test_invalid_arguments_raise():
         information_criteria(m_0, P_0_sqr, prior.prior_x, surrogate, TS, obs)
     with pytest.raises(ValueError, match="joint state"):
         information_criteria(m_0[:2], P_0_sqr, prior, surrogate, TS, obs)
+    with pytest.raises(ValueError, match="requires data"):
+        information_criteria(m_0, P_0_sqr, prior, surrogate, TS, [])
 
     def vf(x, *, t):
         return -x
@@ -409,6 +411,19 @@ def test_off_grid_informations_equal_the_merged_grid_without_ode_rows(log_xi):
     for name in InformationCriteria._fields:
         assert_close(getattr(criteria, name), getattr(expected, name), rtol=1e-10)
     assert float(criteria.I_UY_given_Z) > 0.0
+
+
+@pytest.mark.parametrize("t_obs", [TS[2::2], T_OFF], ids=["on-grid", "off-grid"])
+def test_informations_take_a_list_of_measurements(t_obs):
+    """A list of ``Measurement`` objects gives the values of its ``ObsModel``."""
+    prior, surrogate, m_0, P_0_sqr, _ = _setup()
+    y = jax.random.normal(jax.random.PRNGKey(4), (t_obs.shape[0], 1))
+    meas = [Measurement(np.eye(1), y, t_obs, noise=0.05)]
+    obs = prepare_observations(meas, prior.E0_state, TS)
+    expected = information_criteria(m_0, P_0_sqr, prior, surrogate, TS, obs)
+    criteria = information_criteria(m_0, P_0_sqr, prior, surrogate, TS, meas)
+    for name in InformationCriteria._fields:
+        assert_close(getattr(criteria, name), getattr(expected, name), rtol=0.0)
 
 
 def test_fenrir_needs_the_pass_without_data_on_the_timeline():

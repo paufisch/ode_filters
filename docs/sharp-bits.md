@@ -74,15 +74,17 @@ consequences:
 
 ### Data between grid nodes add nodes without ODE information
 
-`prepare_observations` matches each measurement time `t` to a node of the grid
-(within `1e-7 + 1e-5 |t|`). A time between two grid nodes becomes a data-only
-node: the filter predicts to it, conditions on the data and continues without
-an update on the ODE information. The ODE information is therefore that of the
-grid `ts` whatever the data times, and the data times do not refine the grid.
-Times within the tolerance of each other share one node. The result lives on the
-timeline, the grid with the data-only nodes, so `result.t` has more nodes than
-`ts`. The `ObsModel` records it in `obs_model.t`, and `obs_model.grid_node`
-marks the steps that end at a grid node.
+The data of a solve (`measurements=`, or the data of `marginal_loglik`) pass
+through `prepare_observations`, which matches each measurement time `t` to a
+node of the grid (within `1e-7 + 1e-5 |t|`). A time between two grid nodes
+becomes a data-only node: the filter predicts to it, conditions on the data and
+continues without an update on the ODE information. The ODE information is
+therefore that of the grid `ts` whatever the data times, and the data times do
+not refine the grid. Times within the tolerance of each other share one node.
+The result lives on the timeline, the grid with the data-only nodes, so
+`result.t` has more nodes than `ts`. The `ObsModel` that `prepare_observations`
+returns records it in `obs_model.t`, and `obs_model.grid_node` marks the steps
+that end at a grid node.
 
 The diffusion of a grid interval is estimated at the interval's start from the
 prediction over the whole interval, as without data, and every step inside the
@@ -91,8 +93,10 @@ computed as on the grid alone. To condition on the ODE information at a data
 time as well, add the time to the grid, e.g. `ts = np.union1d(ts, z_t)`; every
 solver accepts non-uniform grids. The adaptive solver lands on every data time
 and chooses its steps between them, so there a data time is a full node. For
-`fenrir_loglik` and `conditional_loglik`, run the pass without data on the same
-timeline, with `obs_model=obs_model.without_data()`.
+`fenrir_loglik` and `conditional_loglik`, build the `ObsModel` with
+`obs_model = prepare_observations(measurements, prior.E0_state, ts)` and run the
+pass without data on the same timeline, with
+`obs_model=obs_model.without_data()`.
 
 Measurements may have different times, and each step conditions on the rows
 that have data. Several data of one measurement at one node are all

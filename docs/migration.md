@@ -133,7 +133,7 @@ dimensions and vector fields are static.
 | `measure.E_constraint` | `measure.E_lhs` |
 | `Conservation.jacobian()` | `Conservation.A` |
 | `Measurement.get_noise_matrix()`, the attribute `Measurement.noise` | `Measurement.R` (the constructor still takes `noise=`) |
-| `Measurement.find_index`, `.residual`, `.jacobian` | removed; `prepare_observations` places the data |
+| `Measurement.find_index`, `.residual`, `.jacobian` | removed; the solvers place the data, passed as `measurements=` |
 | `TransformedMeasurement(base_model, sigma, use_autodiff_jacobian=..., sigma_jacobian=...)` | `TransformedMeasurement(base, sigma, sigma_jacobian=None)`: the keyword is `base`, autodiff when no Jacobian is given, and `base` is a public field |
 
 A custom information model implements the `MeasurementModel` protocol

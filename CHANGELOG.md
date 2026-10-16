@@ -16,7 +16,7 @@ minor bump, non-breaking changes in a patch bump).
   (data, no ODE update). `ObsModel` records the timeline (`t`, `grid_node`),
   and `ObsModel.without_data()` gives the pass without data.
 - `measurements=` for the solvers, and a list of `Measurement` objects as the
-  data of `marginal_loglik`.
+  data of `marginal_loglik`, `fit` and `information_criteria`.
 - A `Measurement` and its `ObsModel` can be built inside `jax.jit`, `grad` or
   `vmap` when the times are concrete and the data traced.
 - `InferenceProblem(..., adaptive=AdaptiveSettings(...))` runs

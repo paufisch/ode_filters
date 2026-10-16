@@ -57,7 +57,6 @@ from ode_filters import (
     PositiveReal,
     fit_scipy,
     marginal_loglik,
-    prepare_observations,
     taylor_mode_initialization,
 )
 
@@ -69,9 +68,7 @@ x = 1.0 / (1.0 + 9.0 * np.exp(-0.8 * ts[1:]))
 y = x + 0.02 * jax.random.normal(jax.random.PRNGKey(0), x.shape)
 
 prior = IWP(q=2, d=1)
-data = prepare_observations(
-    [Measurement(np.eye(1), y[:, None], ts[1:], noise=0.02**2)], prior.E0, ts
-)
+data = [Measurement(np.eye(1), y[:, None], ts[1:], noise=0.02**2)]
 
 
 # The ODE, as a function of the unknown rate r

@@ -198,6 +198,14 @@ def prepare_observations(
 ) -> ObsModel | None:
     """Build an ``ObsModel`` for the solver's grid ``ts`` from ``Measurement`` objects.
 
+    The usual way to pass data is the list of ``Measurement`` objects itself.
+    The solvers take it as ``measurements=``, and ``marginal_loglik``, ``fit``
+    and ``information_criteria`` as their data; each converts it with this
+    function. Call it where code needs the ``ObsModel`` itself: for
+    ``fenrir_loglik`` and ``conditional_loglik`` called directly, with
+    ``obs_model.without_data()`` for the pass without data, or to reuse one
+    conversion in several solves on the same grid.
+
     Every measurement time ``t`` must lie in ``(ts[0], ts[-1]]``. A time that
     matches a node of ``ts`` within ``1e-7 + 1e-5 |t|`` is conditioned on at
     that node, after the ODE information. Any other time becomes a data-only
