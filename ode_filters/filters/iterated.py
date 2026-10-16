@@ -104,6 +104,7 @@ def iterated_smoother(
     rule: QuadratureRule = "gauss_hermite",
     n_nodes: int = 4,
     diagnostics: Callable[[IterationState], Any] | None = None,
+    checkpoint: bool = False,
 ) -> IteratedSmootherResult:
     """Iterated smoother (IEKS / IPLS) over a time grid.
 
@@ -134,6 +135,8 @@ def iterated_smoother(
         n_nodes: Gauss-Hermite nodes per dimension for ``"slr"``.
         diagnostics: Optional traceable ``IterationState -> PyTree``, called in
             every pass; its outputs are stacked in ``result.diagnostics``.
+        checkpoint: Wrap each filter step, of the one-shot filter and of every
+            pass, in ``jax.checkpoint`` (see ``gaussian_filter``).
 
     Returns:
         An ``IteratedSmootherResult``.
@@ -168,6 +171,7 @@ def iterated_smoother(
             correction=correction,
             calibration="none",
             obs_model=obs_model,
+            checkpoint=checkpoint,
         )
         smoothed = rts_smoother(one_shot)
         if n_iters == 0:
@@ -209,7 +213,15 @@ def iterated_smoother(
             surrogate = slr_surrogate(
                 measure, point.m, point.P_sqr, ts=ts[1:], rule=rule, n_nodes=n_nodes
             )
-        result = affine_filter(m_0, P_0_sqr, prior, surrogate, ts, obs_model=obs_model)
+        result = affine_filter(
+            m_0,
+            P_0_sqr,
+            prior,
+            surrogate,
+            ts,
+            obs_model=obs_model,
+            checkpoint=checkpoint,
+        )
         smoothed = rts_smoother(result)
         step = np.sqrt(np.mean((smoothed.m[1:] - point.m) ** 2))
         extra = None

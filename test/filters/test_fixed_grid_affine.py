@@ -7,6 +7,8 @@ random linear-Gaussian model it must reproduce the dense Kalman filter.
 
 from __future__ import annotations
 
+from functools import partial
+
 import jax
 import jax.numpy as np
 import pytest
@@ -35,6 +37,7 @@ from test.helpers import (
     assert_grad_matches_fd,
     cov,
     dense_kalman,
+    gradient_is_checkpointed,
 )
 
 TS = np.linspace(0.0, 2.0, 21)
@@ -182,6 +185,33 @@ def test_jit_vmap_and_gradients():
         ).log_likelihood_obs
 
     assert_grad_matches_fd(by_scale, np.array(0.3))
+
+
+def test_checkpointing_keeps_the_values_and_the_gradients():
+    prior, measure, m_0, P_0_sqr = _logistic()
+    obs = _data(prior.E0)
+    surrogate = taylor_surrogate(measure, np.tile(m_0, (20, 1)), ts=TS[1:])
+
+    def solve(log_xi, *, checkpoint):
+        iwp = IWP(q=2, d=1, Xi=np.exp(log_xi) * np.eye(1))
+        return affine_filter(
+            m_0, P_0_sqr, iwp, surrogate, TS, obs_model=obs, checkpoint=checkpoint
+        )
+
+    def loss(log_xi, *, checkpoint):
+        res = solve(log_xi, checkpoint=checkpoint)
+        return res.log_likelihood + res.log_likelihood_obs + np.sum(res.m[-1])
+
+    log_xi = np.array(0.3)
+    plain = solve(log_xi, checkpoint=False)
+    checkpointed = solve(log_xi, checkpoint=True)
+    for a, b in zip(jax.tree.leaves(plain), jax.tree.leaves(checkpointed), strict=True):
+        assert np.array_equal(a, b)
+
+    off, on = partial(loss, checkpoint=False), partial(loss, checkpoint=True)
+    assert_close(jax.grad(on)(log_xi), jax.grad(off)(log_xi), rtol=1e-12)
+    assert gradient_is_checkpointed(on, log_xi)
+    assert not gradient_is_checkpointed(off, log_xi)
 
 
 def _central_difference(f, s, direction, eps=1e-5):

@@ -16,6 +16,11 @@ minor bump, non-breaking changes in a patch bump).
 - `InferenceProblem(..., adaptive=AdaptiveSettings(...))` runs
   `marginal_loglik` with adaptive steps (channels `"obs"`, `"ode"`, `"both"`
   and `"fenrir"`).
+- `checkpoint=True` for `gaussian_filter`, `affine_filter` and
+  `iterated_smoother` wraps each step in `jax.checkpoint`, which reduces the
+  memory of reverse-mode differentiation.
+- `gaussian_filter_adaptive(..., h_init="auto")` chooses the first step from
+  the initial state and the tolerances (Hairer, Nørsett & Wanner, Sec. II.4).
 
 ### Changed
 

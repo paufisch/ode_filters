@@ -89,6 +89,17 @@ arguments of the jitted function are traced, and `prepare_observations` raises a
 Both `gaussian_filter` (fixed grid) and `gaussian_filter_adaptive` (save-at-grid)
 are `jit`/`grad`/`vmap`-compatible, so any `jax.grad` over a solve works either way.
 
+Reverse-mode differentiation of a fixed-grid solve stores the intermediates of
+every step, so its memory grows with the number of steps. Pass
+`checkpoint=True` to `gaussian_filter`, `affine_filter` or `iterated_smoother`
+to wrap each step in `jax.checkpoint`. The backward pass then stores only the
+state carried between steps and recomputes each step's intermediates, at the
+cost of one more forward pass. For a Lorenz system with `q = 3` on 4000 steps,
+this reduces the temporary memory of the compiled gradient of the
+log-likelihood from 52 MB to 5 MB on a CPU. The values are identical and the
+gradients agree to round-off. The adaptive solver has no such option, because
+its loop is checkpointed already.
+
 ### A system at rest: exact values, but gradients need a floor
 
 Dynamic calibration estimates the diffusion from each step's ODE residual. A

@@ -13,6 +13,11 @@ array or a JAX array that is not traced -- also when a jitted function closes
 over it -- and traced when it is, e.g., an argument of a jitted function. Data
 (an ``ObsModel`` from ``prepare_observations`` on the same grid) are conditioned
 on after the ODE information at each step.
+
+Reverse-mode differentiation of the scan stores the intermediates of every
+step. With ``checkpoint=True`` the step is wrapped in ``jax.checkpoint``, so the
+backward pass stores only the state the scan carries from step to step and
+recomputes the intermediates, at the cost of one more forward pass.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as np
 import numpy as onp
-from jax import Array
+from jax import Array, ad_checkpoint
 from jax.typing import ArrayLike
 
 from ..calibration.policies import (
@@ -124,11 +129,13 @@ def run_filter(
     information: Information | None = None,
     surrogate: AffineSurrogate | None = None,
     obs_model: ObsModel | None = None,
+    checkpoint: bool = False,
 ) -> FilterResult:
     """Scan ``filter_step`` over the grid ``ts``.
 
     The ODE information is either ``information`` (linearized online) or
-    ``surrogate`` (one frozen affine model per step, stacked).
+    ``surrogate`` (one frozen affine model per step, stacked). ``checkpoint``
+    wraps the scan body in ``jax.checkpoint``.
     """
     n_steps = ts.shape[0] - 1
     constant, per_step = grid_transitions(prior, ts)
@@ -163,8 +170,11 @@ def run_filter(
         )
         return out.filtered, out
 
+    # The scan already keeps the recomputation from being merged with the
+    # forward pass, so jax.checkpoint need not prevent CSE (see its docs).
+    step = ad_checkpoint.checkpoint(body, prevent_cse=False) if checkpoint else body
     x_0 = Gaussian(np.asarray(m_0), np.asarray(P_0_sqr))
-    _, out = jax.lax.scan(body, x_0, (ts[1:], per_step, surrogate, observations))
+    _, out = jax.lax.scan(step, x_0, (ts[1:], per_step, surrogate, observations))
 
     def with_initial(first: Array, rest: Array) -> Array:
         return np.concatenate([first[None], rest], axis=0)
@@ -200,6 +210,7 @@ def gaussian_filter(
     correction: Correction | None = None,
     calibration: Calibration | CalibrationMode = "dynamic",
     obs_model: ObsModel | None = None,
+    checkpoint: bool = False,
 ) -> FilterResult:
     """Gaussian ODE filter over the time grid ``ts``.
 
@@ -223,6 +234,11 @@ def gaussian_filter(
             (default), ``"none"``, ``"diagonal"``, ``"diagonal_ekf0"``.
         obs_model: Data on the same grid, from
             ``prepare_observations(measurements, E0, ts)``.
+        checkpoint: Wrap each step in ``jax.checkpoint``. Reverse-mode
+            differentiation then stores only the state carried between steps
+            and recomputes each step's intermediates in the backward pass,
+            which costs one more forward pass. The values are identical and
+            the gradients agree to round-off. Default ``False``.
 
     Returns:
         A ``FilterResult`` over ``ts``.
@@ -245,6 +261,7 @@ def gaussian_filter(
         calibration=calibration,
         information=information,
         obs_model=obs_model,
+        checkpoint=checkpoint,
     )
 
 
@@ -256,6 +273,7 @@ def affine_filter(
     ts: ArrayLike,
     *,
     obs_model: ObsModel | None = None,
+    checkpoint: bool = False,
 ) -> FilterResult:
     """Square-root Kalman filter of a frozen linearization.
 
@@ -275,6 +293,8 @@ def affine_filter(
         ts: Time grid, shape ``[N + 1]``.
         obs_model: Data on the same grid, from
             ``prepare_observations(measurements, E0, ts)``.
+        checkpoint: Wrap each step in ``jax.checkpoint`` (see
+            ``gaussian_filter``). Default ``False``.
 
     Returns:
         A ``FilterResult`` over ``ts``.
@@ -294,4 +314,5 @@ def affine_filter(
         calibration=NoCalibration(),
         surrogate=surrogate,
         obs_model=obs_model,
+        checkpoint=checkpoint,
     )
