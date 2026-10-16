@@ -48,6 +48,7 @@ from .filters import (
 from .gaussian import AffineModel, Conditional, Gaussian
 from .inference import (
     AbstractParameter,
+    AdaptiveSettings,
     InferenceProblem,
     InformationCriteria,
     NonNegativeReal,
@@ -77,6 +78,7 @@ from .information import (
     SecondOrderODEInformation,
     SecondOrderODEInformationWithHidden,
     TransformedMeasurement,
+    merge_measurement_times,
     prepare_observations,
 )
 from .linearization import (
@@ -108,6 +110,7 @@ except PackageNotFoundError:  # pragma: no cover - source checkout without metad
 __all__ = [
     "IWP",
     "AbstractParameter",
+    "AdaptiveSettings",
     "AffineModel",
     "AffineSurrogate",
     "BasePrior",
@@ -163,6 +166,7 @@ __all__ = [
     "iterated_smoother",
     "joint_taylor_initialization",
     "marginal_loglik",
+    "merge_measurement_times",
     "nis",
     "observation_predictive",
     "posthoc_mle_sigma_sqr",

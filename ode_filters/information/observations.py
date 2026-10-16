@@ -1,10 +1,19 @@
-"""Data observations: ``Measurement``, ``ObsModel`` and ``prepare_observations``."""
+"""Data observations: ``Measurement``, ``ObsModel`` and ``prepare_observations``.
+
+The measurement times are matched to the solver's grid on the host, with NumPy.
+A ``Measurement`` keeps concrete times as a NumPy array, so it can be built and
+``prepare_observations`` called inside ``jax.jit`` (or ``grad``, ``vmap``)
+while its data are traced. ``merge_measurement_times`` adds off-grid times to a
+grid.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import NamedTuple
 
 import equinox as eqx
+import jax
 import jax.numpy as np
 import numpy as onp
 from jax import Array
@@ -43,6 +52,21 @@ class ObsModel(NamedTuple):
     mask: Array
 
 
+def _host(values: ArrayLike, name: str) -> onp.ndarray:
+    """``values`` as a new NumPy float array; a ``TypeError`` if they are traced."""
+    try:
+        return onp.array(values, dtype=float)
+    except jax.errors.TracerArrayConversionError:
+        raise TypeError(
+            f"{name} are traced, but the time matching runs on the host and needs "
+            "them concrete. Inside jax.jit, eqx.filter_jit, grad or vmap, give "
+            "them as NumPy arrays, Python numbers or arrays that the traced "
+            "function closes over. Arguments of the traced function, values "
+            "computed in it and the times of a Measurement passed in as an "
+            "argument are traced. The data z may be traced."
+        ) from None
+
+
 def _grid_steps(times: onp.ndarray, steps: onp.ndarray) -> onp.ndarray:
     """Index of the grid step ending at each time; ``-1`` where none does."""
     idx = onp.clip(onp.searchsorted(steps, times), 0, len(steps) - 1)
@@ -58,6 +82,88 @@ def _grid_steps(times: onp.ndarray, steps: onp.ndarray) -> onp.ndarray:
     return out
 
 
+def merge_measurement_times(
+    ts: ArrayLike, measurements: Sequence[Measurement]
+) -> onp.ndarray:
+    """The grid ``ts`` with the measurement times added as nodes.
+
+    A time that ``prepare_observations`` matches to a node of ``ts`` adds no
+    node. The match uses its tolerance, ``|t - node| <= 1e-7 + 1e-5 |t|``. Of
+    new times within this tolerance of each other, only the first becomes a
+    node, so near-duplicate times create no step shorter than the tolerance. On
+    the merged grid, ``prepare_observations(measurements, E0, ts)`` accepts
+    every measurement. The filters accept the non-uniform grid, and
+    ``gaussian_filter_adaptive`` takes it as ``save_at``.
+
+    A time at the initial time ``ts[0]`` raises, because data at the initial
+    time belong in the initial state (condition ``m_0`` and ``P_0_sqr`` on
+    them). A time outside ``[ts[0], ts[-1]]`` raises as well. The grid is not
+    extended, so the time span of a solve stays the one of ``ts``. Two times of
+    one measurement at the same node raise, because ``prepare_observations``
+    keeps one datum per node and measurement (the last).
+
+    The merge runs on the host, so ``ts`` and the times must be concrete.
+    Inside ``jax.jit`` they are concrete when given as NumPy arrays or closed
+    over (see ``Measurement``).
+
+    Args:
+        ts: Time grid, shape ``[K]``, strictly increasing; ``ts[0]`` is the time
+            of the initial state.
+        measurements: The measurements whose times to add.
+
+    Returns:
+        The merged grid, strictly increasing, as a new NumPy array. It stays
+        concrete inside ``jax.jit``, so a solver still sees a uniform grid
+        (no time to add) as uniform.
+
+    Raises:
+        ValueError: For an invalid grid, a measurement time at ``ts[0]`` or
+            outside ``[ts[0], ts[-1]]``, or two times of one measurement at the
+            same node.
+        TypeError: If ``ts`` or the measurement times are traced.
+    """
+    grid = _host(ts, "The nodes of the grid ts")
+    if grid.ndim != 1 or grid.shape[0] < 2:
+        raise ValueError(
+            f"ts must be a 1-D array of at least two times, got shape {grid.shape}."
+        )
+    if not onp.all(onp.diff(grid) > 0):
+        raise ValueError("ts must be strictly increasing.")
+    own_times = [_host(m.z_t, "Measurement times") for m in measurements]
+    times = onp.unique(onp.concatenate([onp.zeros(0), *own_times]))
+    node = _grid_steps(times, grid)
+    initial = times[node == 0]
+    if initial.size:
+        raise ValueError(
+            f"Measurement times {initial.tolist()} are the initial time ts[0]; "
+            "data at the initial time belong in the initial state (m_0, P_0_sqr)."
+        )
+    outside = times[(node < 0) & ((times < grid[0]) | (times > grid[-1]))]
+    if outside.size:
+        raise ValueError(
+            f"Measurement times {outside.tolist()} lie outside [ts[0], ts[-1]] = "
+            f"[{grid[0]}, {grid[-1]}]; extend ts to cover them."
+        )
+    new: list[float] = []
+    for t in times[node < 0]:
+        # The test of _grid_steps, so prepare_observations matches t to new[-1].
+        if not new or not onp.isclose(
+            new[-1], t, rtol=MEASUREMENT_TIME_RTOL, atol=MEASUREMENT_TIME_ATOL
+        ):
+            new.append(float(t))
+    merged = onp.union1d(grid, onp.array(new, dtype=float))
+    for i, own in enumerate(own_times):
+        nodes = _grid_steps(own, merged)
+        if onp.unique(nodes).size < nodes.size:
+            raise ValueError(
+                f"measurements[{i}] has several times at one node of the merged "
+                "grid, and prepare_observations keeps one datum per node and "
+                "measurement. Combine these data, or give them to separate "
+                "measurements."
+            )
+    return merged
+
+
 def prepare_observations(
     observations: list[Measurement],
     E0: ArrayLike,
@@ -68,10 +174,12 @@ def prepare_observations(
     Filter step ``n`` updates at ``ts[n + 1]``, so every measurement time must be
     a node of ``ts[1:]`` (matched with a small tolerance). Measurements may have
     different times: at each step only the rows with data are conditioned on.
-    Off-grid data need the grid to include their times, e.g.
-    ``ts = np.union1d(ts, z_t)``; the filters accept non-uniform grids. The time
-    matching runs on the host, so the times must be concrete, while the data
-    values may be traced (e.g. differentiated).
+    For off-grid data, add their times to the grid with
+    ``ts = merge_measurement_times(ts, measurements)``; the filters accept
+    non-uniform grids. The time matching runs on the host, so the times and
+    ``ts`` must be concrete, while the data values (and ``A``, the noise and
+    ``E0``) may be traced: the measurements and the ``ObsModel`` can be built
+    inside a jitted, differentiated or vmapped function (see ``Measurement``).
 
     Args:
         observations: The measurements.
@@ -84,12 +192,13 @@ def prepare_observations(
 
     Raises:
         ValueError: If a measurement time is not a node of ``ts[1:]``.
+        TypeError: If ``ts`` or the measurement times are traced.
     """
     if not observations:
         return None
 
     E0 = np.asarray(E0)
-    steps = onp.asarray(ts, dtype=float)[1:]
+    steps = _host(ts, "The nodes of the grid ts")[1:]
     n_steps = steps.shape[0]
     state_dim = E0.shape[1]
     obs_dim = sum(m.dim for m in observations)
@@ -103,15 +212,15 @@ def prepare_observations(
         rows = slice(offset, offset + m.dim)
         H = H.at[rows, :].set(m.A if m.full_state else m.A @ E0)
         R = R.at[rows, rows].set(m.R)
-        times = onp.asarray(m.z_t, dtype=float)
+        times = _host(m.z_t, "Measurement times")
         idx = _grid_steps(times, steps)
         if onp.any(idx < 0):
             missing = times[idx < 0]
             raise ValueError(
                 f"Measurement times {missing.tolist()} are not nodes of the grid "
-                "ts[1:]. Include them in the grid (e.g. ts = np.union1d(ts, z_t); "
-                "the filters accept non-uniform grids); data at the initial time "
-                "ts[0] belong in the initial state."
+                "ts[1:]. Add them to the grid with ts = merge_measurement_times("
+                "ts, measurements) (the filters accept non-uniform grids); data "
+                "at the initial time ts[0] belong in the initial state."
             )
         c_seq = c_seq.at[idx, rows].set(-np.asarray(m.z))
         mask[idx, rows] = True
@@ -132,11 +241,21 @@ class Measurement(eqx.Module):
     times to the solver's grid with a small tolerance (absorbing the ~1e-8
     differences between NumPy and JAX ``linspace``).
 
+    The matching runs on the host, so concrete times are kept as a NumPy array.
+    They stay concrete when the ``Measurement`` is built inside ``jax.jit`` (or
+    ``eqx.filter_jit``, ``grad``, ``vmap``) from NumPy arrays, Python numbers or
+    arrays that the traced function closes over, while ``z``, ``A`` and the
+    noise may be traced. Times that are traced (an argument of the traced
+    function, a value computed in it, or the times of a ``Measurement`` passed
+    in as an argument) are kept as they are, and ``prepare_observations``
+    raises a ``TypeError`` for them.
+
     Attributes:
         A: Measurement matrix, shape ``[k, d]`` (on ``x = E0 @ state``) or
             ``[k, state_dim]`` with ``full_state=True``.
         z: Data, shape ``[n, k]``.
-        z_t: Times of the data, shape ``[n]`` (``[n, 1]`` is flattened).
+        z_t: Times of the data, shape ``[n]`` (``[n, 1]`` is flattened); a NumPy
+            array unless traced.
         R: Noise covariance, ``[k, k]``; given as ``noise=`` a variance, per-row
             variances or a covariance.
         full_state: Whether ``A`` acts on the full state instead of ``x``.
@@ -144,7 +263,7 @@ class Measurement(eqx.Module):
 
     A: Array
     z: Array
-    z_t: Array
+    z_t: Array | onp.ndarray
     R: Array
     full_state: bool = eqx.field(static=True, default=False)
 
@@ -156,7 +275,12 @@ class Measurement(eqx.Module):
         noise: ArrayLike = DEFAULT_MEASUREMENT_NOISE,
         full_state: bool = False,
     ):
-        A, z, z_t = np.asarray(A), np.asarray(z), np.asarray(z_t)
+        A, z = np.asarray(A), np.asarray(z)
+        # A new NumPy copy, as check_grid makes of a grid (see there).
+        try:
+            z_t = onp.array(z_t, dtype=float)
+        except jax.errors.TracerArrayConversionError:
+            z_t = np.asarray(z_t, dtype=float)
         if A.ndim != 2:
             raise ValueError(f"'A' must be 2D, got {A.ndim}D.")
         if z.ndim != 2 or z.shape[1] != A.shape[0]:

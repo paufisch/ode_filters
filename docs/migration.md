@@ -165,7 +165,7 @@ and `log_likelihood`.
 
 - `prepare_observations` raises `ValueError` when a measurement time is not a
   grid node; 0.7 dropped such data without a warning. Put the measurement times
-  into the grid.
+  into the grid with `merge_measurement_times(ts, measurements)`.
 - Measurements at different times work: each row of the data has its own mask.
 
 ## Parameter inference

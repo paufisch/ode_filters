@@ -68,11 +68,21 @@ orders, dimensions and vector fields are static. So:
 
 ### Data times must be grid nodes
 
-`prepare_observations` matches each measurement time to a node of the grid (with
-a small tolerance) and raises for a time that is not one. For data off a uniform
-grid, add their times to it, e.g. `ts = np.union1d(ts, z_t)`; every solver
-accepts non-uniform grids. Measurements may have different times: each step
-conditions on the rows that have data.
+`prepare_observations` matches each measurement time `t` to a node of the grid
+(within `1e-7 + 1e-5 |t|`) and raises for a time that is not one. For data off
+the grid, add their times to it with
+`ts = merge_measurement_times(ts, measurements)`, which adds no node for a time
+within this tolerance of another. Every solver accepts non-uniform grids.
+Measurements may have different times: each step conditions on the rows that
+have data. Data at the initial time `ts[0]` belong in the initial state, so
+`merge_measurement_times` raises for them, and also for times outside the grid.
+
+The matching runs on the host. Inside `jax.jit`, build the `Measurement` from
+concrete times: a NumPy array, Python numbers, or an array that the jitted
+function closes over. Its data `z`, its matrix `A` and its noise may be traced,
+so the evidence can be differentiated and batched over the data. Times that are
+arguments of the jitted function are traced, and `prepare_observations` raises a
+`TypeError` for them.
 
 ### A solve is differentiable on both stepping modes
 
