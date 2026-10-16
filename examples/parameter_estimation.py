@@ -18,7 +18,7 @@ import jax.random as jrandom
 import optax
 
 from ode_filters import ODEFilter, fit
-from ode_filters.information import Measurement, prepare_observations
+from ode_filters.information import Measurement
 from ode_filters.priors import IWP
 
 jax.config.update("jax_enable_x64", True)
@@ -37,9 +37,7 @@ def main() -> None:
     z = (x_true + NOISE_STD * jrandom.normal(jrandom.PRNGKey(0), (N,))).reshape(-1, 1)
 
     prior = IWP(q=2, d=1, Xi=np.eye(1))
-    data = prepare_observations(
-        [Measurement(np.eye(1), z, ts[1:], noise=NOISE_STD**2)], prior.E0, ts
-    )
+    data = [Measurement(np.eye(1), z, ts[1:], noise=NOISE_STD**2)]
 
     # --- A fittable first-order ODE solver: dx/dt = -lam * x ---
     def vf(x, params, *, t):

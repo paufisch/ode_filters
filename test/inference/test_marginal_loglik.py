@@ -11,6 +11,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as np
 import jax.random as jrandom
+import numpy as onp
 import pytest
 
 from ode_filters import InferenceProblem, gaussian_filter, marginal_loglik
@@ -240,3 +241,99 @@ def test_marginal_loglik_requires_data():
     )
     with pytest.raises(ValueError, match="requires observations"):
         marginal_loglik({}, None, model=problem)
+
+
+# --------------------------------------------------------------------------
+# Data as Measurement objects, between the grid nodes
+# --------------------------------------------------------------------------
+
+TS_COARSE = onp.linspace(0.0, 5.0, 21)
+T_OFF = onp.array([0.4, 1.0, 1.9, 2.5, 3.33, 4.1])  # 1.0 and 2.5 are grid nodes
+
+
+def _off_grid_problem(prior_fn=None):
+    prior = IWP(q=2, d=1)
+    y = X0 * onp.exp(-LAM_TRUE * T_OFF) + 0.01 * onp.sin(11.0 * T_OFF)
+    measurements = [Measurement(np.eye(1), y[:, None], T_OFF, noise=0.01**2)]
+
+    def build(theta):
+        def vf(x, *, t):
+            return -theta * x
+
+        m_0 = np.array([X0, -theta * X0, theta**2 * X0])
+        return (
+            m_0,
+            np.diag(np.array([1e-3, 1e-2, 1e-1])),
+            ODEInformation(vf, prior.E0, prior.E1),
+        )
+
+    problem = InferenceProblem(build, prior, TS_COARSE, prior_fn=prior_fn)
+    obs = prepare_observations(measurements, prior.E0_state, TS_COARSE)
+    assert obs is not None and obs.t is not None
+    return problem, measurements, obs
+
+
+@pytest.mark.parametrize("channel", ["obs", "ode", "both", "fenrir", "dalton"])
+def test_a_measurement_list_gives_the_value_of_its_obs_model(channel):
+    problem, measurements, obs = _off_grid_problem()
+    theta = np.array(0.7)
+    value = marginal_loglik(theta, measurements, model=problem, channel=channel)
+    expected = marginal_loglik(theta, obs, model=problem, channel=channel)
+    assert_close(value, expected, rtol=0.0)
+    assert_close(
+        jax.jit(
+            lambda th: marginal_loglik(th, measurements, model=problem, channel=channel)
+        )(theta),
+        expected,
+        rtol=1e-12,
+    )
+
+
+@pytest.mark.parametrize("channel", ["obs", "fenrir", "dalton"])
+def test_off_grid_channels_are_differentiable(channel):
+    problem, measurements, _ = _off_grid_problem()
+    assert_grad_matches_fd(
+        lambda th: marginal_loglik(th, measurements, model=problem, channel=channel),
+        np.array(0.7),
+        rtol=1e-5,
+    )
+
+
+@pytest.mark.parametrize("channel", ["obs", "fenrir"])
+def test_vmap_over_theta_with_off_grid_data(channel):
+    problem, measurements, _ = _off_grid_problem()
+    thetas = np.array([0.6, 0.9])
+
+    def loglik(theta):
+        return marginal_loglik(theta, measurements, model=problem, channel=channel)
+
+    expected = np.stack([loglik(theta) for theta in thetas])
+    assert_close(jax.vmap(loglik)(thetas), expected, rtol=1e-12)
+
+
+def test_fenrir_equals_dalton_for_a_linear_ode_with_off_grid_data():
+    """EK1 is exact for a linear ODE, so both estimate the same log p(Y | Z)."""
+    problem, _, obs = _off_grid_problem()
+    theta = np.array(0.7)
+    fenrir = marginal_loglik(theta, obs, model=problem, channel="fenrir")
+    dalton = marginal_loglik(theta, obs, model=problem, channel="dalton")
+    assert_close(fenrir, dalton, rtol=1e-10)
+
+
+def test_a_measurement_list_takes_the_selector_of_prior_fn():
+    def prior_fn(theta):
+        return IWP(q=2, d=1, Xi=np.exp(theta) * np.eye(1))
+
+    problem, measurements, obs = _off_grid_problem(prior_fn)
+    theta = np.array(0.3)
+    value = marginal_loglik(theta, measurements, model=problem)
+    assert_close(value, marginal_loglik(theta, obs, model=problem), rtol=0.0)
+
+
+def test_an_empty_measurement_list_has_no_data():
+    problem, _, _ = _off_grid_problem()
+    theta = np.array(0.7)
+    with pytest.raises(ValueError, match="requires observations"):
+        marginal_loglik(theta, [], model=problem)
+    ll_ode = marginal_loglik(theta, [], model=problem, channel="ode")
+    assert_close(ll_ode, marginal_loglik(theta, None, model=problem, channel="ode"))

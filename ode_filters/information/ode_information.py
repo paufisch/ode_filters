@@ -279,9 +279,9 @@ def _init_ode_information(
     for c in model.constraints:
         if isinstance(c, Measurement):
             raise TypeError(
-                "Data are not part of the ODE information: build an obs_model with "
-                "prepare_observations([Measurement(...)], E0, ts) and pass "
-                "obs_model= to the solver. constraints= takes Conservation laws."
+                "Data are not part of the ODE information: pass them to the solver "
+                "as measurements=[Measurement(...)]. constraints= takes "
+                "Conservation laws."
             )
         if not isinstance(c, Conservation):
             raise TypeError(

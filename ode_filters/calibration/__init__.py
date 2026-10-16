@@ -6,11 +6,11 @@ Online: the policies ``NoCalibration``, ``DynamicCalibration`` and
 
 Post hoc, from a finished run's innovations:
 
-- ``quasi_mle_sigma_sqr`` -- per-step quasi-MLE (Bosch et al. 2021).
-- ``posthoc_mle_sigma_sqr`` -- closed-form MLE over a full trajectory.
-- ``aggregate_sigma_sqr`` -- aggregate a per-step trace into a global
+- ``quasi_mle_sigma_sqr``: the per-step quasi-MLE (Bosch et al. 2021).
+- ``posthoc_mle_sigma_sqr``: the closed-form MLE over a full trajectory.
+- ``aggregate_sigma_sqr``: aggregates a per-step trace into a global
   estimate or its running cumulative mean.
-- ``rescale_sqr`` / ``rescale_sqr_seq`` -- apply an estimate to stored
+- ``rescale_sqr`` / ``rescale_sqr_seq``: apply an estimate to stored
   covariances.
 """
 

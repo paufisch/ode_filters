@@ -2,10 +2,11 @@
 
 ``ODEFilter`` bundles the problem structure (vector field, prior, grid) with
 the differentiable parameters as a single ``equinox.Module``, and ``fit``
-optimizes it against data -- the GPJax ``fit(model, ...)`` pattern. This is sugar
-over the pure Layer-1 core (``marginal_loglik``): ``ODEFilter.loglik`` builds
-an ``InferenceProblem`` from the module and calls the core, so there is a
-single source of truth for the likelihood.
+optimizes it against data, following the GPJax ``fit(model, ...)`` pattern.
+The object API is a wrapper around the pure Layer-1 core
+(``marginal_loglik``): ``ODEFilter.loglik`` builds an ``InferenceProblem`` from
+the module and calls the core, so both APIs evaluate the same likelihood
+function.
 
 ``fit`` trains ``ode_params`` only; the vector field, prior, grid and
 calibration stay fixed, and the initial Gaussian is produced by a static
@@ -20,7 +21,7 @@ a different linearization scheme (e.g. ``TaylorCorrection(order=0)`` for EK0 or
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import equinox as eqx
@@ -30,7 +31,7 @@ import numpy as onp
 from jax import Array
 
 from ..calibration.policies import Calibration, CalibrationMode
-from ..information import ObsModel, ODEInformation
+from ..information import Measurement, ObsModel, ODEInformation, prepare_observations
 from ..linearization import Correction
 from ..priors import BasePrior
 from .likelihood import InferenceProblem, marginal_loglik
@@ -64,8 +65,20 @@ class ODEFilter(eqx.Module):
     calibration: Calibration | CalibrationMode = eqx.field(static=True, default="none")
     correction: Correction | None = eqx.field(static=True, default=None)
 
-    def loglik(self, data: ObsModel) -> Array:
-        """Data marginal log-likelihood at the current parameters."""
+    def loglik(self, data: ObsModel | Sequence[Measurement]) -> Array:
+        """Data marginal log-likelihood at the current parameters.
+
+        ``data`` is an ``ObsModel`` for ``ts`` or a sequence of ``Measurement``
+        objects, as in ``marginal_loglik``.
+        """
+        if not isinstance(data, ObsModel):
+            # The grid is static, so the times are matched to it on the host,
+            # also inside the jitted step of ``fit``.
+            converted = prepare_observations(
+                data, self.prior.E0_state, onp.asarray(self.ts)
+            )
+            if converted is not None:  # for no data, marginal_loglik raises
+                data = converted
 
         def build(params):
             def vf(x, *, t):
@@ -87,7 +100,7 @@ class ODEFilter(eqx.Module):
 
 def fit(
     model: ODEFilter,
-    data: ObsModel,
+    data: ObsModel | Sequence[Measurement],
     optim: Any,
     *,
     steps: int = 200,
@@ -96,7 +109,8 @@ def fit(
 
     Args:
         model: Initial ``ODEFilter``.
-        data: Observations as an ``ObsModel``.
+        data: Observations as an ``ObsModel`` or a sequence of
+            ``Measurement`` objects (see ``marginal_loglik``).
         optim: An Optax ``GradientTransformation`` (anything exposing
             ``init`` / ``update``); the library does not import Optax itself.
         steps: Number of optimization steps.

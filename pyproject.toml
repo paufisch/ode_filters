@@ -9,7 +9,7 @@ packages = ["ode_filters"]
 [project]
 name = "ode-filters"
 authors = [{name="Paul Fischer"}]
-version = "0.8.0"
+version = "0.8.1"
 description = "Probabilistic ODE solvers using square-root Gaussian filtering and smoothing in JAX."
 readme = "README.md"
 license = "MIT"
@@ -89,7 +89,17 @@ testpaths = ["test"]
 addopts = "-n auto --dist worksteal --cov=ode_filters --cov-report=term-missing --cov-fail-under=100"
 # Every warning fails the test. Ignore a dependency's warning here only when it
 # cannot be fixed on this side, with a comment saying why.
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # With a persistent compilation cache (JAX_COMPILATION_CACHE_DIR, as in CI),
+    # one xdist worker can read an entry that another is still writing. JAX then
+    # warns and compiles the function anew, so the result is unaffected.
+    "ignore:Error reading persistent compilation cache entry:UserWarning",
+    "ignore:Error writing persistent compilation cache entry:UserWarning",
+    # The deprecated DiagonalCalibration(jacobian="ek0") stays tested until its
+    # removal in 0.9; test_policies.py checks that it warns.
+    'ignore:DiagonalCalibration\(jacobian="ek0"\):FutureWarning',
+]
 markers = [
     "slow: long-running tests (MCMC runs of the example scripts); deselect with -m 'not slow'",
     "wrong_input_types: passes wrongly typed input on purpose to test an error message; skipped under ODE_FILTERS_TYPECHECK=1, whose checker rejects the input first",

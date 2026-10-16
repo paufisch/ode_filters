@@ -1,4 +1,4 @@
-"""The steps of ``gaussian_filter_adaptive``: ``max_step`` and the controller.
+"""The steps of ``gaussian_filter_adaptive``: the controller, ``max_step``, the first step.
 
 The controller tests rebuild every accepted step of a solve from its record
 (``record_steps=``) and the documented formulas alone. With ``rtol=0`` the
@@ -11,6 +11,9 @@ so the recorded diffusions determine it: per step, it is the step's own; with
 ``sigma_in_error="running_mean"`` the mean over the accepted steps before it,
 which also fixes the error of every rejected attempt. The replay continues
 from each recorded step, so round-off cannot compound along the sequence.
+
+The first step of ``h_init="auto"`` is checked against the documented rule,
+evaluated in NumPy.
 """
 
 from __future__ import annotations
@@ -26,14 +29,20 @@ import pytest
 
 from ode_filters import (
     IWP,
+    BlackBoxMeasurement,
+    JointPrior,
+    MaternPrior,
     ODEInformation,
+    ODEInformationWithHidden,
     PController,
     PIController,
+    PrecondIWP,
     QuadratureCorrection,
     gaussian_filter,
     gaussian_filter_adaptive,
     taylor_mode_initialization,
 )
+from ode_filters.filters.adaptive import _initial_step
 from test.helpers import assert_close, assert_grad_matches_fd, cov
 
 Q = 2
@@ -449,3 +458,277 @@ def test_quadrature_correction_solves_adaptively_and_matches_the_fixed_grid():
     ek1 = gaussian_filter(m_0, P_0_sqr, prior, measure, grid)
     scale = float(np.max(np.abs(fixed.m[1:])))
     assert float(np.max(np.abs(ek1.m[1:] - fixed.m[1:]))) > 1e-6 * scale
+
+
+# --------------------------------------------------------------------------- #
+# h_init="auto"
+# --------------------------------------------------------------------------- #
+
+
+def _documented_first_step(x0, dx0, ddx0, *, q, atol, rtol, rhs=None, t0=0.0):
+    """The rule of the docstring in NumPy; for ``q = 1`` pass ``rhs(x, t)``."""
+    x0, dx0 = onp.asarray(x0), onp.asarray(dx0)
+    sc = atol + rtol * onp.abs(x0)
+
+    def rms(v):
+        return math.sqrt(onp.mean((onp.asarray(v) / sc) ** 2))
+
+    d0, d1 = rms(x0), rms(dx0)
+    h0 = 1e-6 if d0 < 1e-5 or d1 < 1e-5 else 0.01 * d0 / d1
+    if ddx0 is None:  # q = 1: explicit-Euler difference of the vector field
+        assert rhs is not None
+        ddx0 = (rhs(x0 + h0 * dx0, t0 + h0) - rhs(x0, t0)) / h0
+    d2 = rms(ddx0)
+    d_max = max(d1, d2)
+    h1 = max(1e-6, 1e-3 * h0) if d_max <= 1e-15 else (0.01 / d_max) ** (1 / (q + 1))
+    return min(100 * h0, h1)
+
+
+def _documented_for(prior, vf, m_0, *, atol=1e-4, rtol=1e-2, t0=0.0, **vf_kwargs):
+    """The documented first step for ``x' = vf(x, **vf_kwargs, t)`` from ``m_0``."""
+    m = onp.asarray(m_0)
+    E2 = prior.E2
+
+    def rhs(x, t):
+        return onp.asarray(vf(np.asarray(x), **vf_kwargs, t=t))
+
+    return _documented_first_step(
+        onp.asarray(prior.E0_state) @ m,
+        onp.asarray(prior.E1) @ m,
+        None if E2 is None else onp.asarray(E2) @ m,
+        q=prior.q,
+        atol=atol,
+        rtol=rtol,
+        rhs=rhs,
+        t0=t0,
+    )
+
+
+def _auto_step(prior, measure, m_0, *, atol=1e-4, rtol=1e-2, t0=0.0):
+    h = _initial_step(m_0, prior, measure, t=np.array(t0), atol=atol, rtol=rtol)
+    return float(h)
+
+
+def _decay(rate):
+    def vf(x, *, t):
+        return -rate * x
+
+    return vf
+
+
+def _constant(x, *, t):
+    return np.ones_like(x)
+
+
+@pytest.mark.parametrize("q", [1, 2, 3])
+@pytest.mark.parametrize(
+    ("vf", "x0"),
+    [(logistic, [0.1]), (lotka_volterra, [1.0, 1.0]), (_decay(30.0), [2.0])],
+    ids=["logistic", "lotka_volterra", "fast_decay"],
+)
+def test_the_auto_first_step_follows_the_documented_rule(vf, x0, q):
+    """The step, and a solve from it identical to one from that explicit step."""
+    prior = IWP(q=q, d=len(x0))
+    measure = ODEInformation(vf, prior.E0, prior.E1)
+    t0 = 0.5
+    m_0, P_0_sqr = taylor_mode_initialization(vf, np.array(x0), q=q, t0=t0)
+    tol = {"atol": 1e-6, "rtol": 1e-3}
+    h = _auto_step(prior, measure, m_0, t0=t0, **tol)
+    assert h == pytest.approx(_documented_for(prior, vf, m_0, t0=t0, **tol), rel=1e-12)
+
+    def solve(h_init):
+        return gaussian_filter_adaptive(
+            m_0, P_0_sqr, prior, measure, np.array([t0, 1.0, 2.0]), h_init=h_init, **tol
+        )
+
+    auto, explicit = solve("auto"), solve(h)
+    assert bool(auto.success)
+    for a, b in zip(jax.tree.leaves(auto), jax.tree.leaves(explicit), strict=True):
+        assert np.array_equal(a, b)
+
+
+@pytest.mark.parametrize("q_x", [1, 2])
+def test_the_auto_first_step_of_a_joint_prior_reads_the_state_block(q_x):
+    """``E0_state``, ``E1`` and ``E2`` select ``x``; the input enters ``f`` only."""
+    joint = JointPrior(IWP(q=q_x, d=1), MaternPrior(q=1, d=1, length_scale=1.0))
+
+    def vf(x, u, *, t):
+        return -0.8 * x + x * u
+
+    measure = ODEInformationWithHidden(vf, joint.E0_x, joint.E1, joint.E0_hidden)
+    # x0 = 1 and u = 0.2 with u' = 0, so x' = -0.6 x and x'' = 0.36 x.
+    m_0 = np.array([*[1.0, -0.6, 0.36][: q_x + 1], 0.2, 0.0])
+    h = _auto_step(joint, measure, m_0)
+    expected = _documented_for(joint, vf, m_0, u=np.array([0.2]))
+    assert h == pytest.approx(expected, rel=1e-12)
+    P_0_sqr = 0.01 * np.eye(m_0.shape[0])
+    res = gaussian_filter_adaptive(m_0, P_0_sqr, joint, measure, SAVE, h_init="auto")
+    assert bool(res.success)
+
+
+def test_a_preconditioned_prior_has_the_same_auto_first_step():
+    prior, m_0, P_0_sqr, measure = _problem(lotka_volterra, [1.0, 1.0])
+    precond = PrecondIWP(q=Q, d=2)
+    assert _auto_step(precond, measure, m_0) == _auto_step(prior, measure, m_0)
+    a = gaussian_filter_adaptive(m_0, P_0_sqr, prior, measure, SAVE, h_init="auto")
+    b = gaussian_filter_adaptive(m_0, P_0_sqr, precond, measure, SAVE, h_init="auto")
+    assert_close(b.m, a.m, rtol=1e-9)
+    assert np.array_equal(a.n_accepted, b.n_accepted)
+
+
+def test_auto_solves_reach_the_tolerance():
+    prior, m_0, P_0_sqr, measure = _problem(logistic, [0.5])
+    save_at = np.linspace(0.0, 2.0, 5)
+    res = gaussian_filter_adaptive(
+        m_0, P_0_sqr, prior, measure, save_at, atol=1e-8, rtol=1e-8, h_init="auto"
+    )
+    assert bool(res.success)
+    exact = 1.0 / (1.0 + np.exp(-save_at))
+    assert float(np.max(np.abs(res.m[:, 0] - exact))) < 1e-6
+
+    prior, m_0, P_0_sqr, measure = _problem(lotka_volterra, [1.0, 1.0], q=3)
+    args = (m_0, P_0_sqr, prior, measure, SAVE)
+    auto = gaussian_filter_adaptive(*args, atol=1e-6, rtol=1e-6, h_init="auto")
+    reference = gaussian_filter_adaptive(*args, atol=1e-10, rtol=1e-10)
+    assert bool(auto.success) and bool(reference.success)
+    assert float(np.max(np.abs(auto.m[:, :2] - reference.m[:, :2]))) < 1e-4
+
+
+@pytest.mark.parametrize(("q", "exponent"), [(1, 1.0), (2, 2.0 / 3.0)])
+def test_the_auto_first_step_follows_the_time_scale(q, exponent):
+    """Decays at the rates 1 and 100 over the same span.
+
+    For ``x' = -k x`` the norms are ``d1 = k d0`` and ``d2 = k^2 d0``, so
+    ``h1`` scales as ``k^(-2 / (q + 1))``: the rate ratio 100 for ``q = 1``
+    and ``100^(2/3)`` for ``q = 2``. The default, a fraction of the span, is
+    the same for both rates. Each auto step is accepted at the first attempt;
+    the default step is accepted for the slow decay and rejected for the fast.
+    """
+    steps = {}
+    for rate in (1.0, 100.0):
+        prior, m_0, P_0_sqr, measure = _problem(_decay(rate), [1.0], q=q)
+        args = (m_0, P_0_sqr, prior, measure, np.array([0.0, 10.0]))
+        steps[rate] = _auto_step(prior, measure, m_0)
+        auto = gaussian_filter_adaptive(*args, h_init="auto", record_steps=1)
+        default = gaussian_filter_adaptive(*args, record_steps=1)
+        assert bool(auto.success) and bool(default.success)
+        assert float(auto.steps.h[0]) == steps[rate]
+        if rate == 1.0:
+            assert float(default.steps.h[0]) == pytest.approx(0.1, rel=1e-12)
+        else:
+            assert float(default.steps.h[0]) < 0.1
+    assert steps[1.0] / steps[100.0] == pytest.approx(100.0**exponent, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    ("vf", "x0", "expected"),
+    [
+        # x0 = 0: d0 = 0, so h0 = 1e-6; d1 = 1 / atol = 1e4 and d2 = 0, so
+        # h1 = (0.01 / 1e4)^(1/3) = 1e-2, and the step is 100 h0 = 1e-4.
+        (_constant, 0.0, 1e-4),
+        # The equilibrium x0 = 1: d1 = d2 = 0, so h0 = 1e-6 and
+        # h1 = max(1e-6, 1e-3 h0) = 1e-6.
+        (logistic, 1.0, 1e-6),
+        # The equilibrium x0 = 0: all three norms vanish.
+        (logistic, 0.0, 1e-6),
+    ],
+    ids=["zero_value", "zero_derivatives", "all_zero"],
+)
+def test_the_auto_first_step_guards(vf, x0, expected):
+    """The fallback steps, with finite derivatives, and a solve from them."""
+    prior, m_0, P_0_sqr, measure = _problem(vf, [x0])
+    h = _auto_step(prior, measure, m_0)
+    assert h == pytest.approx(expected, rel=1e-12)
+    assert h == pytest.approx(_documented_for(prior, vf, m_0), rel=1e-12)
+
+    def step(m):
+        return _initial_step(m, prior, measure, t=np.array(0.0), atol=1e-4, rtol=1e-2)
+
+    assert bool(np.all(np.isfinite(jax.grad(step)(m_0))))
+    res = gaussian_filter_adaptive(
+        m_0, P_0_sqr, prior, measure, SAVE, h_init="auto", record_steps=1
+    )
+    assert bool(res.success)
+    assert float(res.steps.h[0]) == pytest.approx(expected, rel=1e-12)
+
+
+def test_max_step_and_the_save_times_bound_the_auto_first_step():
+    """At a tolerance that accepts any step, the first step is the bounded one."""
+    prior, m_0, P_0_sqr, measure = _problem(_decay(1.0), [1.0])
+    loose = {"atol": 1e3, "rtol": 1e3}
+    h = _auto_step(prior, measure, m_0, **loose)
+    assert h > 0.3
+
+    def first_step(save_at, **kwargs):
+        res = gaussian_filter_adaptive(
+            m_0,
+            P_0_sqr,
+            prior,
+            measure,
+            save_at,
+            h_init="auto",
+            record_steps=1,
+            **loose,
+            **kwargs,
+        )
+        assert int(res.n_rejected[0]) == 0
+        return float(res.steps.h[0])
+
+    assert first_step(np.array([0.0, 10.0])) == h
+    assert first_step(np.array([0.0, 10.0]), max_step=0.3) == 0.3
+    assert first_step(np.array([0.0, 0.01, 10.0])) == pytest.approx(0.01, rel=1e-12)
+
+
+def test_auto_under_jit_vmap_and_grad():
+    prior, _, _, measure = _problem(logistic, [0.5])
+
+    def solve(x0):
+        m_0, P_0_sqr = taylor_mode_initialization(logistic, x0, q=Q)
+        return gaussian_filter_adaptive(
+            m_0, P_0_sqr, prior, measure, SAVE, h_init="auto"
+        )
+
+    x0s = np.array([[0.3], [0.5]])
+    eager = [solve(x0) for x0 in x0s]
+    batched = eqx.filter_jit(jax.vmap(solve))(x0s)
+    for i, res in enumerate(eager):
+        assert np.allclose(batched.m[i], res.m, rtol=1e-10)
+        assert np.array_equal(batched.n_accepted[i], res.n_accepted)
+
+    def endpoint(theta):
+        def vf(x, *, t):
+            return theta * x * (1.0 - x)
+
+        m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([0.5]), q=Q)
+        measure = ODEInformation(vf, prior.E0, prior.E1)
+        res = gaussian_filter_adaptive(
+            m_0, P_0_sqr, prior, measure, SAVE, atol=1e-7, rtol=1e-7, h_init="auto"
+        )
+        return res.m[-1, 0]
+
+    assert_grad_matches_fd(endpoint, np.array(1.3))
+
+
+@pytest.mark.wrong_input_types
+def test_an_unknown_h_init_string_raises():
+    prior, m_0, P_0_sqr, measure = _problem(logistic, [0.5])
+    with pytest.raises(ValueError, match="h_init must be"):
+        gaussian_filter_adaptive(m_0, P_0_sqr, prior, measure, SAVE, h_init="fast")
+
+
+def _identity_residual(state, *, t):
+    return state
+
+
+def test_auto_without_the_derivatives_it_reads_raises():
+    measure = BlackBoxMeasurement(_identity_residual, state_dim=1, obs_dim=1)
+    with pytest.raises(ValueError, match="q >= 1"):
+        gaussian_filter_adaptive(
+            np.ones(1), np.zeros((1, 1)), IWP(q=0, d=1), measure, SAVE, h_init="auto"
+        )
+    # For q = 1 the ODE rows give x'', so they must match the solution.
+    measure = BlackBoxMeasurement(_identity_residual, state_dim=2, obs_dim=2)
+    with pytest.raises(ValueError, match="one row per solution component"):
+        gaussian_filter_adaptive(
+            np.ones(2), np.zeros((2, 2)), IWP(q=1, d=1), measure, SAVE, h_init="auto"
+        )

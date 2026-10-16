@@ -1,56 +1,56 @@
 # Benchmarks
 
-Cross-library **performance studies** of `ode_filters` (vs probdiffeq and Diffrax).
-Each script is runnable standalone (the `benchmarks` extra pulls in Diffrax,
-probdiffeq, matplotlib and tueplots):
+Performance studies of `ode_filters` against probdiffeq and Diffrax. Each
+script runs on its own; the `benchmarks` extra installs Diffrax, probdiffeq,
+matplotlib and tueplots:
 
 ```bash
 uv run --extra benchmarks python benchmarks/<name>.py
 ```
 
-> Calibration / UQ studies (which are *internal* ode_filters comparisons, not
-> cross-library) live with the documentation, not here — see
+> Studies of the calibration and the uncertainty compare `ode_filters` with
+> itself, not with other libraries, so they are part of the documentation:
 > [`docs/examples/calibration-modes.ipynb`](../docs/examples/calibration-modes.ipynb)
 > and the [calibration guide](../docs/calibration.md).
 
 ## Inventory
 
-- **`work_precision.py`** — The headline **work-precision** study: *accuracy vs
-  runtime*, not just wallclock. Accuracy is the relative **trajectory RMSE**
-  (averaged over the solution path, not a single endpoint — the endpoint is noisy
-  and phase-sensitive on oscillatory problems). Compares `ode_filters` (EK1 / EK0
-  via the pluggable `TaylorCorrection`), `probdiffeq` (ts1 / ts0), and **Diffrax**
-  Tsit5 (the classical JAX solver, the speed baseline) against a high-accuracy
-  Diffrax `Dopri8` reference (rtol=1e-12), on logistic / Lotka-Volterra / van der
-  Pol. The script enables float64 itself (standalone scripts do not see
-  `conftest.py`; in float32 the probabilistic solvers hit a ~1e-6 round-off floor
-  that *grows* with step count, producing spurious "error increases with runtime"
-  curves). To keep the comparison apples-to-apples the stepping strategy is held
-  fixed across *all* solvers within each figure (rather than mixing fixed-grid
-  probabilistic solvers with an adaptive classical one). Produces two figures:
-  - `work_precision.{pdf,svg}` — **all adaptive** (headline): every solver sweeps
-    its tolerance and runs its own step-size controller (ode_filters via
-    `gaussian_filter_adaptive`, probdiffeq via `solve_adaptive_save_at`,
-    Diffrax via its PID controller). This is what a user actually runs. The
-    probabilistic solvers track each other; Diffrax sets the speed/accuracy frontier.
-  - `work_precision_fixed.{pdf,svg}` — **all fixed grid**: every solver runs the
-    same uniform `N`-step grid, including Diffrax forced onto a constant step
-    (`ConstantStepSize`). Isolates per-step accuracy/cost with no controller in the loop.
+- **`work_precision.py`**: the work-precision study, accuracy against runtime.
+  Accuracy is the relative trajectory RMSE, averaged over the solution path
+  rather than taken at the endpoint, which is noisy and sensitive to the phase
+  on oscillatory problems. It compares `ode_filters` (EK1 and EK0 through
+  `TaylorCorrection`), probdiffeq (ts1 and ts0) and Diffrax's Tsit5, the
+  classical JAX solver, against a Diffrax `Dopri8` reference (rtol=1e-12), on
+  the logistic, Lotka–Volterra and van der Pol problems. The script enables
+  float64 itself, since standalone scripts do not read `conftest.py`. In
+  float32 the probabilistic solvers reach a round-off floor of about 1e-6 that
+  grows with the number of steps, which would show as an error that increases
+  with runtime. Within each figure all solvers use the same stepping strategy,
+  and both probabilistic libraries calibrate the diffusion at every step
+  (`calibration="dynamic"` in `ode_filters`, `solver_dynamic` in probdiffeq),
+  so on a fixed grid they compute the same solution. The script produces two
+  figures:
+  - `work_precision.{pdf,svg}`, adaptive steps: every solver sweeps its
+    tolerance and runs its own step-size controller (`gaussian_filter_adaptive`,
+    probdiffeq's `solve_adaptive_save_at`, Diffrax's PID controller). probdiffeq
+    is faster than `ode_filters`, and Diffrax is faster than both.
+  - `work_precision_fixed.{pdf,svg}`, fixed grid: every solver runs the same
+    uniform grid of `N` steps, Diffrax with `ConstantStepSize`. This isolates
+    the accuracy and cost per step from the step-size controller.
 
-  Points where a solver diverges (relative trajectory RMSE > 1, e.g. a probabilistic
-  solver at the loosest tolerance / coarsest grid) are dropped — a work-precision
-  diagram shows the convergent branch — so a curve may have fewer markers than the
-  sweep length. The table printed at the end marks them with `*`.
+  Points where a solver diverges (relative trajectory RMSE above 1, e.g. a
+  probabilistic solver at the loosest tolerance or the coarsest grid) are left
+  out of the figures, so a curve can have fewer markers than the sweep has
+  settings. The table printed at the end marks them with `*`.
 
 ## `work_precision.py`
 
 ### Outputs
 
-Everything goes to `benchmarks/results/` next to the script, whatever the working
-directory (`--out-dir PATH` to change it). The folder is git-ignored: the timings
-are specific to the machine and the moment, so they are regenerated rather than
-versioned. Only the copies shown in the docs (`docs/assets/work-precision*.svg`)
-are committed, see step 6 below.
+The outputs go to `benchmarks/results/` next to the script, independent of the
+working directory (`--out-dir PATH` changes it). The folder is git-ignored,
+since the timings depend on the machine and its load; they are regenerated, not
+versioned.
 
 | File | Content |
 | --- | --- |
@@ -74,58 +74,53 @@ and at the end, and the sweep settings.
 | --- | --- |
 | `--out-dir PATH` | write the outputs to `PATH` (default `benchmarks/results/`) |
 | `--repeats R` | interleaved timing rounds (default 20; 3 with `--quick`) |
-| `--quick` | smoke run: two tolerances, two grids, 3 rounds; well under a minute. Exercises every solver, problem and output, but its timings are not for publication |
+| `--quick` | smoke run with two tolerances, two grids and 3 rounds, under a minute; it runs every solver, problem and output, but its timings are not for publication |
 | `--replot` | redraw the figures from the JSON in `--out-dir` without running the benchmark (e.g. to restyle) |
 
 ### How the timing works
 
-Each configuration (problem x solver x tolerance or grid) is compiled and run
-once first; that call gives the error and the step counts. The adaptive solvers
-take the tolerance as a traced argument, so one compilation serves the whole
-tolerance sweep. Then the timing runs in rounds: each round visits *every*
-configuration in a fresh random order (seeded) and times one warm-up call and
-five timed calls (`jax.block_until_ready`, Python's garbage collector off),
-keeping their median. A slow drift in the machine load therefore hits all
-solvers and settings alike instead of whichever ran last. Each point in a figure
-is the median over the rounds; its horizontal bar is the interquartile range.
+Each configuration (problem, solver, and tolerance or grid) is compiled and
+run once first. That call gives the error and the step counts. The adaptive
+solvers take the tolerance as a traced argument, so one compilation serves the
+whole tolerance sweep. The timing then runs in rounds. Each round visits every
+configuration in a new random order (seeded) and times one warm-up call and
+five timed calls (`jax.block_until_ready`, with Python's garbage collector
+off), of which it keeps the median. A slow drift in the machine load therefore
+affects all solvers and settings equally, not only the ones that ran last. Each
+point in a figure is the median over the rounds, and its horizontal bar is the
+interquartile range.
 
 ### Producing the final figures
 
-Timings are only meaningful on a quiet machine. The script prints a warning when
-the load average is above a quarter of the CPU count; check the load trace in the
-JSON afterwards.
+Timings are comparable only on an idle machine. The script prints a warning
+when the load average exceeds a quarter of the CPU count, and the JSON records
+the load after every round.
 
-1. Close other heavy work (builds, browsers, other benchmarks); on a laptop, plug
-   in the power and keep it awake.
-2. Check that the machine is idle: `uptime` should show a load average well
-   below the number of cores.
-3. Run the full sweep (a few minutes; the compilation takes about half):
+1. Stop other CPU-heavy work (builds, test suites, other benchmarks). On a
+   laptop, connect the power supply and keep it awake.
+2. Check that the machine is idle: the load average from `uptime` should stay
+   below about a quarter of the number of cores.
+3. Run the full sweep (about two minutes on an Apple M4 Pro, half of it
+   compilation):
 
    ```bash
    uv run --extra benchmarks python benchmarks/work_precision.py
    ```
 
-4. Check the printed table and the interquartile ranges in the JSON: wide bars
-   mean the machine was disturbed; rerun, or raise `--repeats`.
-5. The figures are in `benchmarks/results/`. To restyle them later without
-   timing again, edit the plotting code and run with `--replot`.
-6. For a release, copy the two SVGs to the docs, where the comparison page
-   shows them, and update the measurement note below them in
-   `docs/comparison.md` (date, machine, versions, commit; all in the JSON):
-
-   ```bash
-   cp benchmarks/results/work_precision.svg docs/assets/work-precision.svg
-   cp benchmarks/results/work_precision_fixed.svg docs/assets/work-precision-fixed.svg
-   ```
+4. Check the printed table and the interquartile ranges in the JSON. An
+   interquartile range above about 10 % of the median means the machine was
+   disturbed; rerun, or raise `--repeats`.
+5. The figures are in `benchmarks/results/`. To restyle them without timing
+   again, edit the plotting code and run with `--replot`.
 
 ### Suggested captions
 
-The figures carry no title; their description belongs in the caption, e.g.:
+The figures have no title. Their description belongs in the caption, e.g.:
 
 > **Work-precision, all adaptive.** Relative trajectory RMSE against the median
 > runtime of one solve, sweeping the tolerance (atol = rtol) on three problems.
-> Colour: library (ode_filters, probdiffeq, Diffrax); solid circles: first-order
-> linearization (EK1, ts1), dashed triangles: zeroth order (EK0, ts0); squares:
+> Color: library (ode_filters, probdiffeq, Diffrax). Solid circles: first-order
+> linearization (EK1, ts1). Dashed triangles: zeroth order (EK0, ts0). Squares:
 > the classical Tsit5. Horizontal bars: interquartile range of the runtime over
 > the timing rounds. Lower left is better.
 

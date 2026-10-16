@@ -5,7 +5,7 @@ in square-root form throughout. The public API is re-exported here; the
 subpackages are organized by layer:
 
 - ``priors``: Gauss-Markov priors over the solution and its derivatives.
-- ``information``: what the filters condition on -- the ODE information
+- ``information``: what the filters condition on, namely the ODE information
   (plus conservation laws) and data observations.
 - ``linearization``: Taylor and statistical linearization (the corrections),
   and frozen linearizations along a trajectory.
@@ -48,6 +48,7 @@ from .filters import (
 from .gaussian import AffineModel, Conditional, Gaussian
 from .inference import (
     AbstractParameter,
+    AdaptiveSettings,
     InferenceProblem,
     InformationCriteria,
     NonNegativeReal,
@@ -108,6 +109,7 @@ except PackageNotFoundError:  # pragma: no cover - source checkout without metad
 __all__ = [
     "IWP",
     "AbstractParameter",
+    "AdaptiveSettings",
     "AffineModel",
     "AffineSurrogate",
     "BasePrior",

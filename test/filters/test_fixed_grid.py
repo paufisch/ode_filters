@@ -4,6 +4,8 @@ Values are pinned by the reference outputs and the dense oracle in
 ``test/integration``; these tests cover behaviour and configuration.
 """
 
+from functools import partial
+
 import jax
 import jax.numpy as np
 import numpy as onp
@@ -26,7 +28,12 @@ from ode_filters import (
 )
 from ode_filters.filters.fixed_grid import check_grid, grid_transitions
 from ode_filters.information import Measurement
-from test.helpers import assert_close, assert_grad_matches_fd, cov
+from test.helpers import (
+    assert_close,
+    assert_grad_matches_fd,
+    cov,
+    gradient_is_checkpointed,
+)
 
 TSPAN = (0.0, 2.0)
 N = 40
@@ -214,3 +221,60 @@ def test_jit_and_grad():
     theta = np.array(1.0)
     assert_close(jax.jit(endpoint)(theta), endpoint(theta), rtol=1e-13)
     assert_grad_matches_fd(endpoint, theta)
+
+
+@pytest.mark.parametrize(
+    ("calibration", "with_data"),
+    [("dynamic", False), ("none", False), ("diagonal", False), ("dynamic", True)],
+    ids=["dynamic", "none", "diagonal", "dynamic-data"],
+)
+def test_checkpointing_keeps_the_values_and_the_gradients(calibration, with_data):
+    """``checkpoint=True`` recomputes each step in the backward pass.
+
+    The forward pass is the same computation, so every field is identical; the
+    backward pass orders its operations differently, so the gradient agrees to
+    round-off. Only the checkpointed solve has a checkpoint in its gradient.
+    """
+    prior = IWP(q=2, d=1)
+    obs = None
+    if with_data:
+        t_obs = TS[5::5]
+        z = (1.0 / (1.0 + np.exp(-t_obs)) + 0.01 * np.sin(9.0 * t_obs))[:, None]
+        obs = prepare_observations(
+            [Measurement(np.eye(1), z, t_obs, noise=1e-3)], prior.E0, TS
+        )
+
+    def solve(theta, *, checkpoint):
+        def vf(x, *, t):
+            return theta * x * (1.0 - x)
+
+        m_0, P_0_sqr = taylor_mode_initialization(vf, np.array([0.5]), q=2)
+        measure = ODEInformation(vf, prior.E0, prior.E1)
+        return gaussian_filter(
+            m_0,
+            P_0_sqr,
+            prior,
+            measure,
+            TS,
+            calibration=calibration,
+            obs_model=obs,
+            checkpoint=checkpoint,
+        )
+
+    def loss(theta, *, checkpoint):
+        res = solve(theta, checkpoint=checkpoint)
+        ll_obs = 0.0 if res.log_likelihood_obs is None else res.log_likelihood_obs
+        return res.log_likelihood + ll_obs + res.m[-1, 0] + np.sum(res.P_sqr[-1])
+
+    theta = np.array(1.3)
+    plain = solve(theta, checkpoint=False)
+    checkpointed = solve(theta, checkpoint=True)
+    leaves = jax.tree.leaves(plain)
+    assert len(leaves) == len(jax.tree.leaves(checkpointed))
+    for a, b in zip(leaves, jax.tree.leaves(checkpointed), strict=True):
+        assert np.array_equal(a, b)
+
+    off, on = partial(loss, checkpoint=False), partial(loss, checkpoint=True)
+    assert_close(jax.grad(on)(theta), jax.grad(off)(theta), rtol=1e-12)
+    assert gradient_is_checkpointed(on, theta)
+    assert not gradient_is_checkpointed(off, theta)

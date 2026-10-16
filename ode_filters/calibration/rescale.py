@@ -50,9 +50,9 @@ def rescale_sqr(
             ``prior.apply_state_sigma_to_cov_sqr`` so that joint /
             latent-force priors scale only the ODE-state block and leave the
             hidden/input block unchanged. For non-joint priors this is identical
-            to the default whole-covariance scaling. **Pass this for any
-            ``JointPrior`` result** -- omitting it scales
-            the input block too, which is incorrect.
+            to the default whole-covariance scaling. Pass it for every
+            ``JointPrior`` result: without it the input block is scaled too,
+            which is incorrect.
 
     Returns:
         Rescaled square-root covariance, same shape as ``P_sqr``.

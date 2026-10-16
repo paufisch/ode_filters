@@ -7,6 +7,54 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-16
+
+### Added
+
+- Data between grid nodes: `prepare_observations` accepts times anywhere in
+  `(ts[0], ts[-1]]`, and a time between two nodes becomes a data-only node
+  (data, no ODE update). `ObsModel` records the timeline (`t`, `grid_node`),
+  and `ObsModel.without_data()` gives the pass without data.
+- `measurements=` for the solvers, and a list of `Measurement` objects as the
+  data of `marginal_loglik`, `fit` and `information_criteria`.
+- A `Measurement` and its `ObsModel` can be built inside `jax.jit`, `grad` or
+  `vmap` when the times are concrete and the data traced.
+- `InferenceProblem(..., adaptive=AdaptiveSettings(...))` runs
+  `marginal_loglik` with adaptive steps (channels `"obs"`, `"ode"`, `"both"`
+  and `"fenrir"`).
+- `checkpoint=True` for `gaussian_filter`, `affine_filter` and
+  `iterated_smoother` wraps each step in `jax.checkpoint`, which reduces the
+  memory of reverse-mode differentiation.
+- `gaussian_filter_adaptive(..., h_init="auto")` chooses the first step from
+  the initial state and the tolerances (Hairer, Nørsett & Wanner, Sec. II.4).
+- `ode_filters.information` protocols for the optional members of a
+  measurement model: `EK0Linearizable`, `HasNoiseCovariance` and
+  `NoiseSettable`. A model that lacks one raises an error naming it.
+- Docs: sharp bits on an uncertain initial value without data and on the
+  smoother's uncertainty, with two rescaling recipes in the calibration guide.
+- Docs: ODEs of order three and higher.
+
+### Changed
+
+- Docs: improve clarity of writing.
+
+### Deprecated
+
+- `DiagonalCalibration(jacobian="ek0")` and its shorthand `"diagonal_ekf0"`
+  (a `FutureWarning`; removed in 0.9). Use `"diagonal"`: with an EK0 correction
+  it is identical, and with EK1 it calibrates to within a few percent.
+
+### Removed
+
+- Docs: the comparison page and the benchmark figures.
+
+### Fixed
+
+- `prepare_observations` kept only the last of several data of one measurement
+  at one node; it now uses all of them.
+- The work-precision benchmark ran probdiffeq without calibration. Both
+  libraries now calibrate at every step.
+
 ## [0.8.0] - 2026-10-15
 
 A breaking release that rebuilds the package around one filter step and turns it
@@ -600,7 +648,8 @@ single consolidated solver API and a differentiable parameter-inference layer.
 part of the public API and is not jit/grad-able. Prefer `gaussian_filter_adaptive`.
 
 [res]: https://paufisch.github.io/ode_filters/api/filters/
-[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/paufisch/ode_filters/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/paufisch/ode_filters/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/paufisch/ode_filters/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/paufisch/ode_filters/compare/v0.7.1...v0.7.2

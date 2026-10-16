@@ -1,7 +1,8 @@
 """``FilterResult``: what every filter returns, and the adaptive step record.
 
-A ``FilterResult`` holds the filtered marginals at the grid nodes (or save
-times), the evidence, the diffusion estimates, and per step the prediction,
+A ``FilterResult`` holds the filtered marginals at the nodes of the solve (the
+grid nodes or save times, and the data-only nodes of the data, if any), the
+evidence, the diffusion estimates, and per step the prediction,
 the backward conditional and the innovations (on the adaptive path some of
 these are per save interval or ``None``). Every field is in the original state
 coordinates, whatever the prior's preconditioning. ``StepRecord`` lists
@@ -41,12 +42,13 @@ class StepRecord(NamedTuple):
 class FilterResult(NamedTuple):
     """Result of a Gaussian ODE filter, in the original state coordinates.
 
-    The time grid has ``K`` nodes; per-step arrays have ``K - 1`` entries, entry
+    The solve has ``K`` nodes; per-step arrays have ``K - 1`` entries, entry
     ``n`` belonging to the step from ``t[n]`` to ``t[n + 1]``. Covariances are
     square-root factors: ``P = P_sqr.T @ P_sqr``.
 
     Attributes:
-        t: Time grid, shape ``[K]``.
+        t: The nodes, shape ``[K]``: the time grid (the save times on the
+            adaptive path), or the timeline of data with data-only nodes.
         m: Filtered means, shape ``[K, D]``.
         P_sqr: Filtered square-root covariances, shape ``[K, D, D]``.
         log_likelihood: ODE-information evidence,
@@ -74,8 +76,10 @@ class FilterResult(NamedTuple):
         d_back: Offsets of the backward conditionals.
         P_back_sqr: Square-root covariances of the backward conditionals.
         mz: Means of the ODE-information innovations per step (the residual at
-            the predicted mean).
-        Pz_sqr: Square-root covariances of the ODE-information innovations.
+            the predicted mean). Zero at a step that ends at a data-only node,
+            which has no ODE update.
+        Pz_sqr: Square-root covariances of the ODE-information innovations;
+            the identity at a step that ends at a data-only node.
         mz_obs: Means of the data innovations per step, ``h(m) - y`` at the
             state after the ODE update (``None`` without data). Rows without
             data at a step are zero.

@@ -13,7 +13,7 @@ from jax.typing import ArrayLike
 from ..gaussian.algebra import _safe_cholesky_sqr
 from .noise import noise_matrix
 from .ode_information import BaseODEInformation, check_state
-from .protocol import MeasurementModel
+from .protocol import HasNoiseCovariance, MeasurementModel, NoiseSettable
 
 
 class BlackBoxMeasurement(eqx.Module):
@@ -165,8 +165,18 @@ class TransformedMeasurement(eqx.Module):
 
     @property
     def R(self) -> Array:
-        """The base model's noise covariance."""
-        return self.base.R  # type: ignore[attr-defined]
+        """The base model's noise covariance.
+
+        Raises:
+            AttributeError: If the base stores no noise covariance (see
+                ``HasNoiseCovariance``).
+        """
+        if not isinstance(self.base, HasNoiseCovariance):
+            raise AttributeError(
+                f"{type(self.base).__name__} base has no 'R': it stores no noise "
+                "covariance."
+            )
+        return self.base.R
 
     @property
     def E_args(self) -> Array:
@@ -205,8 +215,18 @@ class TransformedMeasurement(eqx.Module):
         return self.base.noise_sqr(t=t)
 
     def with_noise(self, noise: ArrayLike) -> TransformedMeasurement:
-        """A copy whose base model carries the noise ``noise``."""
-        return eqx.tree_at(lambda m: m.base, self, self.base.with_noise(noise))  # type: ignore[attr-defined]
+        """A copy whose base model carries the noise ``noise``.
+
+        Raises:
+            AttributeError: If the base has no ``with_noise`` (see
+                ``NoiseSettable``).
+        """
+        if not isinstance(self.base, NoiseSettable):
+            raise AttributeError(
+                f"{type(self.base).__name__} base has no 'with_noise': it offers no "
+                "copy with another noise."
+            )
+        return eqx.tree_at(lambda m: m.base, self, self.base.with_noise(noise))
 
     def linearize(self, state: Array, *, t: ArrayLike) -> tuple[Array, Array]:
         """First-order linearization of the composed residual.

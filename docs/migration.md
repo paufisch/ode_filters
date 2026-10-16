@@ -1,9 +1,10 @@
 # Migrating from 0.7 to 0.8
 
 Release 0.8.0 reorganizes the package around one filter step and makes the
-models JAX pytrees. It breaks the 0.7 API in one go, with no deprecation
-period: this page lists every change a 0.7 user can hit, old on the left and
-new on the right. The [changelog](https://github.com/paufisch/ode_filters/blob/main/CHANGELOG.md)
+models JAX pytrees. It breaks the 0.7 API in a single release, with no
+deprecation period. This page lists every change that affects code written for
+0.7, with the old form on the left and the new one on the right. The
+[changelog](https://github.com/paufisch/ode_filters/blob/main/CHANGELOG.md)
 lists the additions.
 
 Most code needs three edits: pass a time grid instead of `tspan, N`, call
@@ -71,7 +72,8 @@ The internal Python-loop driver `sqr_adaptive_loop` is removed;
 The calibration strings `"none"`, `"dynamic"`, `"diagonal"` and
 `"diagonal_ekf0"` are still accepted; they stand for `NoCalibration()`,
 `DynamicCalibration()`, `DiagonalCalibration()` and
-`DiagonalCalibration(jacobian="ek0")`.
+`DiagonalCalibration(jacobian="ek0")`. Since 0.8.1, `"diagonal_ekf0"` is
+deprecated and will be removed in 0.9; use `"diagonal"`.
 
 ### `FilterResult`
 
@@ -132,7 +134,7 @@ dimensions and vector fields are static.
 | `measure.E_constraint` | `measure.E_lhs` |
 | `Conservation.jacobian()` | `Conservation.A` |
 | `Measurement.get_noise_matrix()`, the attribute `Measurement.noise` | `Measurement.R` (the constructor still takes `noise=`) |
-| `Measurement.find_index`, `.residual`, `.jacobian` | removed; `prepare_observations` places the data |
+| `Measurement.find_index`, `.residual`, `.jacobian` | removed; the solvers place the data, passed as `measurements=` |
 | `TransformedMeasurement(base_model, sigma, use_autodiff_jacobian=..., sigma_jacobian=...)` | `TransformedMeasurement(base, sigma, sigma_jacobian=None)`: the keyword is `base`, autodiff when no Jacobian is given, and `base` is a public field |
 
 A custom information model implements the `MeasurementModel` protocol
@@ -162,9 +164,12 @@ and `log_likelihood`.
 
 ## Data
 
-- `prepare_observations` raises `ValueError` when a measurement time is not a
-  grid node; it dropped such data silently. Put the measurement times into the
-  grid.
+- 0.7 dropped data at times that are not grid nodes without a warning. Now a
+  time between two grid nodes becomes a data-only node, where the filter
+  conditions on the data without an update on the ODE information (see
+  [sharp bits](sharp-bits.md#data-between-grid-nodes-add-nodes-without-ode-information)).
+  To have the ODE information at the data times as well, put them into the
+  grid, e.g. `ts = np.union1d(ts, z_t)`.
 - Measurements at different times work: each row of the data has its own mask.
 
 ## Parameter inference
@@ -202,6 +207,6 @@ numbers in these cases:
   the usual one: an old `l_old` corresponds to `length_scale=sqrt(l_old)`.
   `length_scale=1` is unchanged.
 - **Preconditioned priors** run in the original coordinates with a change of
-  variables per step. Solutions agree with 0.7 to rounding; at very high order
-  (`q >= 8`) on fine grids the ODE-information log-likelihood is dominated by
-  rounding in both versions, and the two can differ there.
+  variables per step. Solutions agree with 0.7 to rounding. At order `q >= 8`
+  on fine grids, rounding dominates the ODE-information log-likelihood in both
+  versions, and the two can differ there.

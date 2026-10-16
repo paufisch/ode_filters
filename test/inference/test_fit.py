@@ -20,6 +20,7 @@ from ode_filters import (
 )
 from ode_filters.information import Measurement, prepare_observations
 from ode_filters.priors import IWP
+from test.helpers import assert_close
 
 optax = pytest.importorskip("optax")
 
@@ -116,3 +117,20 @@ def test_fit_only_trains_ode_params():
     assert np.allclose(fitted.prior.xi, model.prior.xi)  # the prior is not trained
     assert fitted.ts == model.ts
     assert not np.allclose(fitted.ode_params, model.ode_params)  # params moved
+
+
+@pytest.mark.standard_promotion
+@pytest.mark.parametrize("offset", [0.0, 0.01], ids=["on-grid", "off-grid"])
+def test_fit_takes_a_list_of_measurements(offset):
+    """Inside the jitted step, the list is matched to the static grid on the host."""
+    model, _ = _model_and_data(0.4)
+    ts = np.asarray(model.ts)
+    t_obs = ts[1::10] + offset
+    z = (X0 * np.exp(-LAM_TRUE * t_obs))[:, None]
+    meas = [Measurement(np.eye(1), z, t_obs, noise=NOISE_STD**2)]
+    obs = prepare_observations(meas, model.prior.E0_state, ts)
+    assert obs is not None and (obs.t is None) == (offset == 0.0)
+    fitted, losses = fit(model, meas, optax.adam(0.05), steps=3)
+    expected, expected_losses = fit(model, obs, optax.adam(0.05), steps=3)
+    assert_close(losses, expected_losses, rtol=1e-12)
+    assert_close(fitted.ode_params, expected.ode_params, rtol=1e-12)

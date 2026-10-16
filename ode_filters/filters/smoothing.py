@@ -59,8 +59,9 @@ def sample_posterior(key: Array, result: FilterResult) -> Array:
     """A sample path from the smoothing posterior of a filter result.
 
     Draws the last state from its filtered marginal, then each earlier state
-    from the backward conditional ``p(x_n | x_{n+1})`` -- an exact joint sample,
-    not a sample from the marginals. The key is split into one key per node.
+    from the backward conditional ``p(x_n | x_{n+1})``. The result is an exact
+    sample of the joint posterior over all nodes, whereas independent draws
+    from the marginals would not be. The key is split into one key per node.
     Vmap over keys for many paths.
 
     With exact ODE information (zero noise ``R``) the posterior is singular and
@@ -104,9 +105,10 @@ def interpolate(
     *,
     smoothed: bool = True,
 ) -> Gaussian:
-    """Marginals of a fixed-grid result at times between its grid nodes.
+    """Marginals of a fixed-grid result at times between its nodes.
 
-    For ``t`` in ``[t_n, t_{n+1}]`` the prior bridges the two nodes: predict from
+    For ``t`` in ``[t_n, t_{n+1}]`` the prior bridges the two nodes of
+    ``result.t`` (grid nodes or data-only nodes): predict from
     the filtered state at ``t_n`` to ``t``, and, for the smoothed marginal,
     condition on the smoothed state at ``t_{n+1}`` through the backward
     conditional of the remaining step. Each sub-step uses the diffusion its step

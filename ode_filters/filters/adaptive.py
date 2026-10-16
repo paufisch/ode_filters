@@ -11,12 +11,22 @@ the standard deviation the step's calibrated process noise adds to each
 solution component, weighted by the tolerances. A step is accepted when
 ``err <= 1``; the controller proposes the next step size either way, capped at
 ``max_step`` if one is given. The last step of each save interval is shortened
-to land on the save time.
+to land on the save time. The first trial step is
+``(save_at[-1] - save_at[0]) / 100`` by default; with ``h_init="auto"`` it is
+the starting step size of Hairer, Norsett & Wanner (1993, Sec. II.4), computed
+from the initial state and the tolerances.
 
 The solve is a ``jax.lax.scan`` over the save times whose body is a
 checkpointed while-loop (``equinox.internal.while_loop``), so it is ``jit``-,
 ``vmap``- and reverse-mode differentiable, and cannot raise: ``success``
 reports whether every save time was reached.
+
+Data between the save times (an ``ObsModel`` with data-only nodes, see
+``prepare_observations``) make the solver land on their times as well, and the
+result lives on the timeline of the ``ObsModel``. The solver chooses its steps,
+and with them the times of the ODE information, between any two landing
+points, so a data time is a node like a save time. On the fixed grid, by
+contrast, a data-only node has no ODE update.
 
 With ``smoother=True`` each accepted step's backward conditional is composed
 into one conditional per save interval (Kraemer 2025, "Adaptive Probabilistic
@@ -26,6 +36,7 @@ on the result with memory independent of the number of steps.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal, NamedTuple
 
 import equinox.internal as eqxi
@@ -38,11 +49,11 @@ from jax.typing import ArrayLike
 from ..calibration.policies import Calibration, CalibrationMode, as_calibration
 from ..gaussian import AffineModel, Conditional, Gaussian, compose
 from ..gaussian.algebra import _safe_sqrt
-from ..information import MeasurementModel, ObsModel
+from ..information import Measurement, MeasurementModel, ObsModel
 from ..linearization.correction import Correction, TaylorCorrection
 from ..priors.base import BasePrior, Transition
 from .adaptive_controller import PIController, StepSizeController
-from .fixed_grid import check_grid, check_obs_model
+from .fixed_grid import check_grid, observations_from, resolve_observations
 from .kernel import OnlineInformation, filter_step, observe
 from .result import FilterResult, StepRecord
 
@@ -51,6 +62,14 @@ SigmaInError = Literal["per_step", "running_mean"]
 # A previous error of -1 tells the controller there is none (the first step of
 # a solve, or right after a rejection), which drops its integral term.
 _NO_PREVIOUS_ERROR = -1.0
+
+# Guards of h_init="auto", with the values of Hairer, Norsett & Wanner's code.
+# With d0 or d1 below _TINY_NORM, h0 = _FALLBACK_STEP replaces 0.01 d0 / d1.
+# With max(d1, d2) at or below _FLAT_NORM, h1 = max(_FALLBACK_STEP, 1e-3 h0)
+# replaces (0.01 / max(d1, d2))^(1 / (q + 1)).
+_TINY_NORM = 1e-5
+_FLAT_NORM = 1e-15
+_FALLBACK_STEP = 1e-6
 
 
 def _landing_tolerance(target: Array) -> Array:
@@ -70,6 +89,90 @@ def _check_max_step(max_step: ArrayLike | None) -> None:
         return  # traced (e.g. a jit argument): trusted, like a traced save_at
     if not value > 0.0:
         raise ValueError(f"max_step must be > 0, got {value!r}.")
+
+
+def _check_h_init(
+    h_init: ArrayLike | Literal["auto"] | None,
+    prior: BasePrior,
+    measure: MeasurementModel,
+) -> None:
+    """Raise for a string other than ``"auto"``, or ``"auto"`` without its inputs."""
+    if not isinstance(h_init, str):
+        return
+    if h_init != "auto":
+        raise ValueError(f'h_init must be None, a step size or "auto", got {h_init!r}.')
+    if prior.q < 1:
+        raise ValueError('h_init="auto" needs a prior with q >= 1, got q = 0.')
+    d = prior.E0_state.shape[0]
+    if prior.q == 1 and measure.ode_dim != d:
+        raise ValueError(
+            "h_init=\"auto\" with q = 1 estimates x'' from the ODE rows of the "
+            f"residual, which must have one row per solution component ({d}); "
+            f"the measurement model has {measure.ode_dim}."
+        )
+
+
+def _rms(v: Array) -> Array:
+    """Root-mean-square norm, with a finite reverse-mode derivative at zero."""
+    return _safe_sqrt(np.mean(v * v))
+
+
+def _initial_step(
+    m_0: Array,
+    prior: BasePrior,
+    measure: MeasurementModel,
+    *,
+    t: Array,
+    atol: ArrayLike,
+    rtol: ArrayLike,
+) -> Array:
+    """The first trial step of ``h_init="auto"``.
+
+    The starting step size of Hairer, Norsett & Wanner (1993, Sec. II.4) for the
+    order ``q``. With ``x0``, ``x0'`` and ``x0''`` the solution and its first two
+    derivatives at ``t``, the scale ``sc = atol + rtol |x0|`` and RMS norms,
+
+        d0 = ||x0 / sc||,   d1 = ||x0' / sc||,   d2 = ||x0'' / sc||,
+        h0 = 0.01 d0 / d1,  or 1e-6 if d0 < 1e-5 or d1 < 1e-5,
+        h1 = (0.01 / max(d1, d2))^(1 / (q + 1)),
+                            or max(1e-6, 1e-3 h0) if max(d1, d2) <= 1e-15,
+        h  = min(100 h0, h1).
+
+    ``x0`` and ``x0'`` are read from ``m_0`` with ``E0_state`` and ``E1``, and
+    for ``q >= 2`` also ``x0''`` with ``E2``. For ``q = 1``, ``x0''`` is the
+    explicit-Euler difference of the ODE rows of the residual. The solution
+    part of ``m_0`` moves by ``h0 x0'`` and the time by ``h0``, which changes
+    the rows ``x' - f(x, t)`` of a first-order ODE by
+    ``-(f(x0 + h0 x0', t + h0) - f(x0, t))``. ``np.where`` computes both
+    branches of every guard, with the division of the unused branch kept off
+    zero, so the step is traceable and has finite derivatives.
+    """
+    q = prior.q
+    E0 = prior.E0_state
+    x0 = E0 @ m_0
+    dx0 = prior.E1 @ m_0
+    scale = atol + rtol * np.abs(x0)
+    d0 = _rms(x0 / scale)
+    d1 = _rms(dx0 / scale)
+    tiny = (d0 < _TINY_NORM) | (d1 < _TINY_NORM)
+    h0 = np.where(tiny, _FALLBACK_STEP, 0.01 * d0 / np.where(tiny, 1.0, d1))
+    E2 = prior.E2
+    if E2 is not None:
+        d2 = _rms(E2 @ m_0 / scale)
+    else:
+        k = measure.ode_dim
+        m_1 = m_0 + E0.T @ (h0 * dx0)
+        r_0 = measure.g(m_0, t=t)[:k]
+        r_1 = measure.g(m_1, t=t + h0)[:k]
+        d2 = _rms((r_1 - r_0) / scale) / h0
+    d_max = np.maximum(d1, d2)
+    flat = d_max <= _FLAT_NORM
+    h1 = np.where(
+        flat,
+        np.maximum(_FALLBACK_STEP, 1e-3 * h0),
+        (0.01 / np.where(flat, 1.0, d_max)) ** (1.0 / (q + 1)),
+    )
+    return np.minimum(100.0 * h0, h1)
 
 
 class _Carry(NamedTuple):
@@ -120,9 +223,10 @@ def gaussian_filter_adaptive(
     correction: Correction | None = None,
     calibration: Calibration | CalibrationMode = "dynamic",
     obs_model: ObsModel | None = None,
+    measurements: Sequence[Measurement] | None = None,
     atol: ArrayLike = 1e-4,
     rtol: ArrayLike = 1e-2,
-    h_init: ArrayLike | None = None,
+    h_init: ArrayLike | Literal["auto"] | None = None,
     max_step: ArrayLike | None = None,
     controller: StepSizeController | None = None,
     sigma_in_error: SigmaInError = "per_step",
@@ -142,13 +246,42 @@ def gaussian_filter_adaptive(
             time, where the initial state is returned unchanged.
         correction: Linearization; ``None`` is EK1.
         calibration: Diffusion calibration policy, or one of ``"dynamic"``
-            (default), ``"none"``, ``"diagonal"``, ``"diagonal_ekf0"``.
-        obs_model: Data at the save times, from
-            ``prepare_observations(measurements, E0, save_at)``; conditioned on
-            after landing on each save time.
+            (default), ``"none"``, ``"diagonal"``, ``"diagonal_ekf0"`` (deprecated).
+        obs_model: Data for the save times, from
+            ``prepare_observations(measurements, prior.E0_state, save_at)``;
+            conditioned on after landing on each save time. Data between the
+            save times give the ``ObsModel`` data-only nodes; the solver then
+            lands on every node of its timeline and conditions on the data
+            there. Between two landing points it chooses its steps, so a data
+            time becomes a node like a save time, unlike a data-only node of
+            the fixed grid, which has no ODE update.
+        measurements: The data as ``Measurement`` objects, in place of
+            ``obs_model``. They are converted with
+            ``prepare_observations(measurements, prior.E0_state, save_at)``, so
+            the ``A`` of a measurement acts on the solution
+            ``x = prior.E0_state @ state`` (for a ``JointPrior``, the solution
+            without the input), or on the full state with ``full_state=True``.
         atol: Absolute tolerance of the local-error estimate.
         rtol: Relative tolerance of the local-error estimate.
-        h_init: First trial step; defaults to ``(save_at[-1] - save_at[0]) / 100``.
+        h_init: First trial step. ``None`` (default) takes
+            ``(save_at[-1] - save_at[0]) / 100``. ``"auto"`` computes it from
+            ``m_0`` and the tolerances by the starting step-size rule of
+            Hairer, Norsett & Wanner (1993, Sec. II.4). With the scale
+            ``sc = atol + rtol |x0|`` and the RMS norms ``d0 = ||x0 / sc||``,
+            ``d1 = ||x0' / sc||`` and ``d2 = ||x0'' / sc||``, the step is
+            ``min(100 h0, h1)`` with ``h0 = 0.01 d0 / d1`` and
+            ``h1 = (0.01 / max(d1, d2))^(1 / (q + 1))``. If ``d0`` or ``d1`` is
+            below ``1e-5``, ``h0`` is ``1e-6``; if ``max(d1, d2) <= 1e-15``,
+            ``h1`` is ``max(1e-6, 1e-3 h0)``. Both fallbacks are in the time
+            unit of ``save_at``; a zero ``x0`` or ``x0'`` limits the step to at
+            most ``1e-4``.
+            The rule reads ``x0'`` (``E1``) and, for ``q >= 2``, ``x0''``
+            (``E2``) from ``m_0``, which must therefore carry the derivatives,
+            as ``taylor_mode_initialization`` provides. For ``q = 1``, ``x0''``
+            is the explicit-Euler difference
+            ``(f(x0 + h0 x0', t0 + h0) - f(x0, t0)) / h0`` of the first-order
+            ODE rows of ``measure``. ``max_step`` and the next save time bound
+            the first step as they bound every step.
         max_step: Upper bound on every step, the first trial step included;
             ``None`` (default) leaves the next save time as the only bound. A
             loose tolerance can step over a feature much shorter than its
@@ -161,9 +294,10 @@ def gaussian_filter_adaptive(
             traced loop, so a custom controller must use ``jax.numpy``.
         sigma_in_error: The diffusion in the error estimate. ``"per_step"``
             (default) uses the step's own estimate (Bosch et al. 2021);
-            ``"running_mean"`` the mean over the accepted steps so far, whose
-            noise vanishes after a few steps, so the step sizes vary more
-            smoothly -- but it lags an abrupt change in the problem's stiffness.
+            ``"running_mean"`` the mean over the accepted steps so far. The
+            noise of this mean decreases with the number of steps, so the step
+            sizes vary more smoothly, but the mean lags an abrupt change in the
+            problem's stiffness.
         max_steps: Cap on attempts per save interval (it bounds the
             checkpointed while-loop). Raise it, or loosen the tolerances, if
             ``result.success`` is ``False``.
@@ -175,7 +309,8 @@ def gaussian_filter_adaptive(
             speed matters, e.g. inside an optimization.
 
     Returns:
-        A ``FilterResult`` on ``save_at``. ``log_likelihood`` and
+        A ``FilterResult`` on ``save_at``, or on the timeline of the data if
+        they have data-only nodes. ``log_likelihood`` and
         ``log_likelihood_obs`` are the ODE-information and data evidence;
         ``n_accepted`` / ``n_rejected`` count the steps per save interval;
         ``m_pred``, ``P_pred_sqr`` and ``sigma_sqr`` are ``None``.
@@ -183,10 +318,15 @@ def gaussian_filter_adaptive(
     Raises:
         ValueError: For an invalid ``save_at``, ``sigma_in_error``,
             ``record_steps`` or ``max_step`` (not a positive scalar), an
-            ``obs_model`` of another length, or a calibration the prior does not
-            support.
+            ``obs_model`` built for another grid, both ``obs_model`` and
+            ``measurements``, invalid measurement times, a calibration the
+            prior does not support, or an ``h_init`` string other than
+            ``"auto"``. Also for
+            ``h_init="auto"`` with a prior of order ``q = 0``, or of order
+            ``q = 1`` with a ``measure`` whose number of ODE rows differs from
+            the dimension of the solution.
     """
-    save_at = np.asarray(check_grid(save_at))
+    save_grid = check_grid(save_at)
     calibration = as_calibration(calibration)
     calibration.validate(prior)
     if sigma_in_error not in ("per_step", "running_mean"):
@@ -196,8 +336,11 @@ def gaussian_filter_adaptive(
     if record_steps < 0:
         raise ValueError(f"record_steps must be >= 0, got {record_steps!r}.")
     _check_max_step(max_step)
-    if obs_model is not None:
-        check_obs_model(obs_model, save_at.shape[0] - 1)
+    _check_h_init(h_init, prior, measure)
+    obs_model = observations_from(obs_model, measurements, prior, save_grid)
+    data, timeline = resolve_observations(obs_model, save_grid)
+    # With data-only nodes the solver lands on every node of the timeline.
+    save_at = np.asarray(save_grid if timeline is None else timeline.t)
     if controller is None:
         controller = PIController(order=max(int(prior.q), 1))
     information = OnlineInformation(
@@ -209,7 +352,10 @@ def gaussian_filter_adaptive(
     x_0 = Gaussian(np.asarray(m_0, dtype=float), np.asarray(P_0_sqr, dtype=float))
     D = x_0.m.shape[0]
     span = save_at[-1] - save_at[0]
-    h_0 = span / 100.0 if h_init is None else np.asarray(h_init, dtype=float)
+    if isinstance(h_init, str):
+        h_0 = _initial_step(x_0.m, prior, measure, t=save_at[0], atol=atol, rtol=rtol)
+    else:
+        h_0 = span / 100.0 if h_init is None else np.asarray(h_init, dtype=float)
 
     def bounded(h: Array) -> Array:
         return h if max_step is None else np.minimum(h, max_step)
@@ -317,16 +463,16 @@ def gaussian_filter_adaptive(
         )
 
     def save_interval(c: _Carry, inputs):
-        target, data = inputs
+        target, step_data = inputs
         c = integrate_to(c, target)
         reached = c.t >= target - _landing_tolerance(target)
         innovation_obs = ll_obs = None
         x = c.x
-        if data is not None:
-            assert obs_model is not None
-            y, mask = data
+        if step_data is not None:
+            assert data is not None
+            y, mask = step_data
             x, innovation_obs, ll_obs = observe(
-                x, AffineModel(obs_model.H, y, obs_model.R_sqr), mask
+                x, AffineModel(data.H, y, data.R_sqr), mask
             )
         out = (
             x,
@@ -346,8 +492,8 @@ def gaussian_filter_adaptive(
         )
         return reset, out
 
-    data = None if obs_model is None else (obs_model.c_seq, obs_model.mask)
-    final, out = jax.lax.scan(save_interval, init, (save_at[1:], data))
+    observations = None if data is None else (data.c_seq, data.mask)
+    final, out = jax.lax.scan(save_interval, init, (save_at[1:], observations))
     x, reached, innovation, innovation_obs, ll_obs, composite, n_acc, n_rej = out
 
     def with_initial(first: Array, rest: Array) -> Array:

@@ -30,43 +30,45 @@ from jax.typing import ArrayLike
 
 from .types import AffineModel, Conditional, Gaussian
 
-# Jitter that lets the Cholesky through noise-free channels: a zero row/column
-# of R (e.g. the noise-free ODE-defect rows) becomes a ~1e-16 diagonal entry.
-# It is far below float64 resolution for any nonzero variance, so it does not
-# rescue a singular R whose zero-variance direction mixes channels -- that is
-# rejected up front by ``_check_noise_covariance``.
+# Jitter that lets the Cholesky factorization pass noise-free channels: a zero
+# row/column of R (e.g. the noise-free ODE-defect rows) becomes a ~1e-16
+# diagonal entry. It is far below float64 resolution for any nonzero variance,
+# so it does not regularize a singular R whose zero-variance direction mixes
+# channels. ``_check_noise_covariance`` rejects such an R up front.
 _JITTER = 1e-32
 
 
 def _safe_qr(C: Array) -> Array:
     """Upper-triangular ``R`` factor of ``C``, differentiable at ``C = 0``.
 
-    ``np.linalg.qr`` has an *undefined derivative* at a rank-deficient input: its
-    JVP solves with ``R``, whose diagonal has a zero. The value is fine (``R = 0``
-    for ``C = 0``) but reverse mode returns ``NaN``, and since a zero cotangent
-    times ``NaN`` is still ``NaN``, one degenerate factor poisons the gradient of
-    everything downstream -- even quantities that do not depend on it.
+    ``np.linalg.qr`` has an undefined derivative at a rank-deficient input: its
+    JVP solves with ``R``, whose diagonal has a zero. The value is correct
+    (``R = 0`` for ``C = 0``), but reverse mode returns ``NaN``. A zero cotangent
+    times ``NaN`` is still ``NaN``, so one degenerate factor makes the gradient
+    of every downstream quantity ``NaN``, including quantities that do not
+    depend on the factor.
 
-    An exactly-zero ``C`` is not a corner case here: it is what the first backward
-    conditional of a filter started from a deterministic initial condition *is*.
-    ``taylor_mode_initialization`` returns a zero
-    ``P_0_sqr``, so at the first step ``invert`` sees a zero cross-term, a
-    zero gain, and hence a zero stacked factor.
+    An exactly zero ``C`` occurs in every filter started from a deterministic
+    initial condition, as the factor of its first backward conditional.
+    ``taylor_mode_initialization`` returns a zero ``P_0_sqr``, so at the first
+    step ``invert`` sees a zero cross-term, a zero gain, and hence a zero
+    stacked factor.
 
-    Defining the derivative to be **zero** there is not a fudge, it is the correct
-    value. Covariances are what the caller ultimately consumes, and
-    ``P = P_sqr.T @ P_sqr`` is smooth even where ``P_sqr`` is not: ``P`` is
-    quadratic in the factor, so ``dP = 2 P_sqr.T d(P_sqr)`` vanishes at
-    ``P_sqr = 0`` whatever finite value ``d(P_sqr)`` takes. The ``NaN`` is the
-    ``0 * inf`` of a cancellation that AD cannot see through; substituting a
-    well-conditioned stand-in on the degenerate branch (the standard double-``where``
-    idiom) lets the cancellation happen.
+    A derivative of zero at this point is the correct value. The caller
+    consumes covariances, and ``P = P_sqr.T @ P_sqr`` is smooth even where
+    ``P_sqr`` is not: ``P`` is quadratic in the factor, so
+    ``dP = 2 P_sqr.T d(P_sqr)`` vanishes at ``P_sqr = 0`` for every finite
+    ``d(P_sqr)``. The ``NaN`` is the ``0 * inf`` of a cancellation that AD
+    cannot see through. Substituting a well-conditioned stand-in on the
+    degenerate branch (the standard double-``where`` idiom) lets the
+    cancellation happen.
 
-    Two boundaries. Only an *exactly* zero ``C`` is handled -- a merely
-    rank-deficient one (a structurally singular ``Q``, say) still has an undefined
-    QR derivative, which needs a rank-revealing factorization. And this repairs a
-    degenerate *output* factor, not a degenerate *innovation* covariance:
-    ``invert`` divides by the innovation factor in a triangular solve. It gives
+    The repair has two limits. It handles only an exactly zero ``C``. A
+    rank-deficient nonzero ``C`` (from a structurally singular ``Q``, say) still
+    has an undefined QR derivative, which needs a rank-revealing factorization.
+    It also repairs a degenerate output factor, not a degenerate innovation
+    covariance. ``invert`` divides by the innovation factor in a triangular
+    solve. It gives
     components of ``z`` with exactly zero variance unit variance first (see
     ``_unit_variance_where_zero``), but an innovation that is singular in a
     direction mixing components stays ``NaN``.

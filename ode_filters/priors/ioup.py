@@ -33,9 +33,10 @@ class IOUPPrior(BasePrior):
 
     Note:
         The diffusion fit by ``calibration="dynamic"/"diagonal"`` is estimated on the
-        IOUP residual -- the *nonlinear remainder*, not the full vector field as under
-        ``IWP`` -- so the calibrated diffusion has a different scale than under ``IWP``
-        (matters only when comparing/porting calibration across priors). A full matrix
+        IOUP residual, which is the nonlinear remainder and not the full vector field
+        as under ``IWP``. The calibrated diffusion therefore has a different scale
+        than under ``IWP``, which matters only when a calibration is compared or
+        transferred across priors. A full matrix
         rate couples the output dimensions, so ``A``/``Q`` are not Kronecker-separable
         (a dense ``(q+1)*d`` matrix exponential); scalar/diagonal rates are separable in
         principle but are assembled densely here for a single uniform implementation.
@@ -43,9 +44,9 @@ class IOUPPrior(BasePrior):
     Args:
         q: Number of derivatives (smoothness order), as for ``IWP``.
         d: State dimension.
-        rate: OU rate of the highest derivative -- scalar (uniform), length-``d`` vector
-            (per-dimension diagonal rate), or ``d x d`` matrix (couples dimensions, e.g.
-            the linear part / a reference Jacobian of the ODE).
+        rate: OU rate of the highest derivative: a scalar (uniform), a length-``d``
+            vector (a diagonal rate per dimension), or a ``d x d`` matrix that couples
+            the dimensions (e.g. the linear part or a reference Jacobian of the ODE).
         Xi: Optional component-correlation matrix of the driving noise (shape [d, d]).
         n_quad: Number of Gauss-Legendre nodes for the square-root matrix-fraction
             decomposition used by ``Q_sqr``.

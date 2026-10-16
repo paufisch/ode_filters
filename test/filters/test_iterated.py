@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import jax
 import jax.numpy as np
+import numpy as onp
 import pytest
 
 from ode_filters import (
@@ -20,10 +23,15 @@ from ode_filters import (
     iterated_smoother,
     prepare_observations,
     rts_smoother,
+    slr_surrogate,
     taylor_mode_initialization,
     taylor_surrogate,
 )
-from test.helpers import assert_close, assert_grad_matches_fd
+from test.helpers import (
+    assert_close,
+    assert_grad_matches_fd,
+    gradient_is_checkpointed,
+)
 
 TS = np.linspace(0.0, 2.0, 33)
 
@@ -220,6 +228,53 @@ def test_jit_vmap_and_grad():
     assert_grad_matches_fd(ll_obs, np.array(0.2))
 
 
+@pytest.mark.parametrize("linearization", ["taylor", "slr"], ids=["ieks", "ipls"])
+@pytest.mark.parametrize("warm_start", [False, True], ids=["one_shot", "passes"])
+def test_checkpointing_reaches_every_filter(linearization, warm_start):
+    """``checkpoint`` goes to the one-shot filter and to the filter of every pass.
+
+    ``n_iters=0`` runs the one-shot filter only; a warm start runs the passes
+    only. Either way the values are identical, the gradients agree to round-off,
+    and only the checkpointed solve has a checkpoint in its gradient.
+    """
+    _, measure, m_0, P_0_sqr = _logistic(q=2)
+    ts = TS[:9]
+    if warm_start:
+        kwargs = {"n_iters": 2, "init": np.tile(m_0, (8, 1))}
+        if linearization == "slr":
+            kwargs["init_P_sqr"] = np.tile(0.01 * np.eye(3), (8, 1, 1))
+    else:
+        kwargs = {"n_iters": 0}
+
+    def solve(log_xi, *, checkpoint):
+        prior = IWP(q=2, d=1, Xi=np.exp(log_xi) * np.eye(1))
+        return iterated_smoother(
+            m_0,
+            P_0_sqr,
+            prior,
+            measure,
+            ts,
+            linearization=linearization,
+            checkpoint=checkpoint,
+            **kwargs,
+        )
+
+    def loss(log_xi, *, checkpoint):
+        res = solve(log_xi, checkpoint=checkpoint)
+        return res.filter.log_likelihood + np.sum(res.m) + np.sum(res.P_sqr[-1])
+
+    log_xi = np.array(0.2)
+    plain = solve(log_xi, checkpoint=False)
+    checkpointed = solve(log_xi, checkpoint=True)
+    for a, b in zip(jax.tree.leaves(plain), jax.tree.leaves(checkpointed), strict=True):
+        assert np.array_equal(a, b)
+
+    off, on = partial(loss, checkpoint=False), partial(loss, checkpoint=True)
+    assert_close(jax.grad(on)(log_xi), jax.grad(off)(log_xi), rtol=1e-11)
+    assert gradient_is_checkpointed(on, log_xi)
+    assert not gradient_is_checkpointed(off, log_xi)
+
+
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [
@@ -236,3 +291,77 @@ def test_invalid_arguments_raise(kwargs, match):
     prior, measure, m_0, P_0_sqr = _logistic()
     with pytest.raises(ValueError, match=match):
         iterated_smoother(m_0, P_0_sqr, prior, measure, TS, **kwargs)
+
+
+def _off_grid_measurements():
+    t_obs = onp.array([0.3, 0.77, 1.0, 1.41])  # 1.0 is a grid node
+    z = 0.1 * onp.exp(t_obs) / (0.9 + 0.1 * onp.exp(t_obs)) + 0.02
+    return [Measurement(np.eye(1), z[:, None], t_obs, noise=1e-2)]
+
+
+@pytest.mark.parametrize("linearization", ["taylor", "slr"])
+def test_data_only_nodes_keep_the_linearization_on_the_grid(linearization):
+    """Each pass linearizes at the smoothed marginals of the grid nodes and
+    filters and smooths over the timeline of the data."""
+    prior, measure, m_0, P_0_sqr = _logistic()
+    obs = prepare_observations(_off_grid_measurements(), prior.E0, TS)
+    assert obs is not None and obs.grid_node is not None
+    res = iterated_smoother(
+        m_0,
+        P_0_sqr,
+        prior,
+        measure,
+        TS,
+        linearization=linearization,
+        n_iters=2,
+        n_nodes=3,
+        obs_model=obs,
+    )
+    at_grid = onp.flatnonzero(onp.asarray(obs.grid_node)) + 1
+    correction = None if linearization == "taylor" else QuadratureCorrection(n_nodes=3)
+    one_shot = gaussian_filter(
+        m_0,
+        P_0_sqr,
+        prior,
+        measure,
+        TS,
+        correction=correction,
+        calibration="none",
+        obs_model=obs,
+    )
+    smoothed = rts_smoother(one_shot)
+    for _ in range(2):
+        m, P_sqr = smoothed.m[at_grid], smoothed.P_sqr[at_grid]
+        if linearization == "taylor":
+            surrogate = taylor_surrogate(measure, m, ts=TS[1:])
+        else:
+            surrogate = slr_surrogate(measure, m, P_sqr, ts=TS[1:], n_nodes=3)
+        result = affine_filter(m_0, P_0_sqr, prior, surrogate, TS, obs_model=obs)
+        smoothed = rts_smoother(result)
+    assert_close(res.t, obs.t, rtol=0.0)
+    assert_close(res.filter.t, obs.t, rtol=0.0)
+    # The passes run inside a scan here and in a loop above: round-off differs.
+    assert_close(res.m, smoothed.m, rtol=1e-10)
+    assert res.step.shape == (2,)
+    same = iterated_smoother(
+        m_0,
+        P_0_sqr,
+        prior,
+        measure,
+        TS,
+        linearization=linearization,
+        n_iters=2,
+        n_nodes=3,
+        measurements=_off_grid_measurements(),
+    )
+    assert_close(same.m, res.m, rtol=0.0)
+    with pytest.raises(ValueError, match="not both"):
+        iterated_smoother(
+            m_0,
+            P_0_sqr,
+            prior,
+            measure,
+            TS,
+            obs_model=obs,
+            measurements=_off_grid_measurements(),
+        )

@@ -130,15 +130,15 @@ class IWP(BasePrior):
 class PrecondIWP(IWP):
     """``IWP`` computed in step-size-preconditioned coordinates.
 
-    The same process as ``IWP`` -- ``A(h)``, ``Q(h)`` and ``Q_sqr(h)`` are
-    ``IWP``'s -- but the filters compute each step in the coordinates
-    ``x_bar = T(h)^-1 x``, in which the transition and the process noise no
-    longer depend on the step size; all of the ``h`` dependence sits in the
-    diagonal ``T(h)`` (Kraemer & Hennig 2020). Results are reported in the
+    The process is the same as ``IWP``, and ``A(h)``, ``Q(h)`` and ``Q_sqr(h)``
+    are those of ``IWP``. The filters, however, compute each step in the
+    coordinates ``x_bar = T(h)^-1 x``, in which the transition and the process
+    noise do not depend on the step size. The whole dependence on ``h`` sits in
+    the diagonal ``T(h)`` (Kraemer & Hennig 2020). Results are reported in the
     original coordinates.
 
     Args:
-        q: Number of modelled derivatives (the order of the method).
+        q: Number of modeled derivatives (the order of the method).
         d: Dimension of the solution ``x``.
         Xi: Component-correlation matrix of the driving noise, shape ``[d, d]``;
             defaults to the identity.

@@ -12,12 +12,13 @@ from .evidence import (
     fenrir_loglik,
     information_criteria,
 )
-from .likelihood import InferenceProblem, marginal_loglik
+from .likelihood import AdaptiveSettings, InferenceProblem, marginal_loglik
 from .model import ODEFilter, fit, fit_scipy
 from .parameters import AbstractParameter, NonNegativeReal, PositiveReal, Real, unwrap
 
 __all__ = [
     "AbstractParameter",
+    "AdaptiveSettings",
     "InferenceProblem",
     "InformationCriteria",
     "NonNegativeReal",

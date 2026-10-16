@@ -19,7 +19,7 @@ import jax.numpy as np
 import jax.random as jr
 
 from ode_filters import InferenceProblem, marginal_loglik
-from ode_filters.information import Measurement, ODEInformation, prepare_observations
+from ode_filters.information import Measurement, ODEInformation
 from ode_filters.priors import IWP
 
 jax.config.update("jax_enable_x64", True)
@@ -32,9 +32,7 @@ def _problem_and_data():
     x_true = X0 * np.exp(-LAM_TRUE * ts[1:])
     z = (x_true + NOISE * jr.normal(jr.PRNGKey(0), (N,))).reshape(-1, 1)
     prior = IWP(q=2, d=1, Xi=np.eye(1))
-    data = prepare_observations(
-        [Measurement(np.eye(1), z, ts[1:], noise=NOISE**2)], prior.E0, ts
-    )
+    data = [Measurement(np.eye(1), z, ts[1:], noise=NOISE**2)]
 
     def build(theta):
         lam = theta["lam"]

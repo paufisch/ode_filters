@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from math import comb, factorial
 
 import jax
+import jax.extend as jex
 import jax.numpy as np
 import numpy as onp
 from jax import Array
@@ -62,6 +63,31 @@ def assert_grad_matches_fd(
     fd = float((f_jit(theta + eps) - f_jit(theta - eps)) / (2 * eps))
     assert np.isfinite(g), f"non-finite gradient {g}"
     assert abs(g - fd) <= atol + rtol * abs(fd), f"grad={g:.6e} vs fd={fd:.6e}"
+
+
+def primitive_names(jaxpr: jex.core.Jaxpr) -> set[str]:
+    """Names of the primitives in ``jaxpr`` and in every jaxpr nested in it."""
+    names = set()
+    for eqn in jaxpr.eqns:
+        names.add(eqn.primitive.name)
+        for param in eqn.params.values():
+            for sub in param if isinstance(param, (tuple, list)) else (param,):
+                if isinstance(sub, jex.core.ClosedJaxpr):
+                    names |= primitive_names(sub.jaxpr)
+                elif isinstance(sub, jex.core.Jaxpr):
+                    names |= primitive_names(sub)
+    return names
+
+
+def gradient_is_checkpointed(f: Callable[[Array], Array], theta: Array) -> bool:
+    """Whether the program of ``jax.grad(f)`` contains a ``jax.checkpoint``.
+
+    ``jax.checkpoint`` binds a primitive named ``remat2`` (in JAX 0.8; any name
+    with ``remat`` or ``checkpoint`` matches), which differentiation keeps
+    around the part of the backward pass that it recomputes.
+    """
+    names = primitive_names(jax.make_jaxpr(jax.grad(f))(theta).jaxpr)
+    return any("checkpoint" in name or "remat" in name for name in names)
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +289,33 @@ def dense_kalman(
         sigma_sqr=np.stack(sigmas),
         m_smooth=np.stack(m_smooth[::-1]),
         P_smooth=np.stack(P_smooth[::-1]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Data-only nodes on a merged grid
+# ---------------------------------------------------------------------------
+
+
+def surrogate_on_merged_grid(surrogate, grid_node):
+    """A grid's ``AffineSurrogate`` on the timeline of data, used as a grid.
+
+    Each step of the timeline takes the model of its grid interval. A step that
+    ends at a data-only node (``grid_node`` false) carries no ODE information:
+    zero rows with unit noise, whose update leaves the state unchanged. Filtering
+    the merged grid with it is the independent construction of the filter's
+    data-only nodes.
+    """
+    from ode_filters import AffineSurrogate
+
+    on = onp.asarray(grid_node)
+    steps = on.astype(int)
+    picked = jax.tree.map(lambda a: a[onp.cumsum(steps) - steps], surrogate)
+    k = picked.H.shape[1]
+    return AffineSurrogate(
+        np.where(on[:, None, None], picked.H, 0.0),
+        np.where(on[:, None], picked.c, 0.0),
+        np.where(on[:, None, None], picked.R_sqr, np.eye(k)),
     )
 
 

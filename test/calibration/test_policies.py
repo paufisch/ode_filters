@@ -118,6 +118,13 @@ def test_string_shorthands(name, expected):
     assert as_calibration(expected) is expected
 
 
+def test_the_ek0_jacobian_of_the_diagonal_policy_is_deprecated():
+    with pytest.warns(FutureWarning, match="removed in ode-filters 0.9"):
+        DiagonalCalibration(jacobian="ek0")
+    with pytest.warns(FutureWarning, match='"diagonal_ekf0" are deprecated'):
+        as_calibration("diagonal_ekf0")
+
+
 @pytest.mark.wrong_input_types
 def test_invalid_specifications_raise():
     with pytest.raises(ValueError, match="calibration must be"):
