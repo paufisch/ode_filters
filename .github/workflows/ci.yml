@@ -37,6 +37,16 @@ jobs:
   test:
     name: Tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    # A persistent JAX compilation cache, restored from the latest run with the
+    # same lock file and saved under the commit: a run whose code is unchanged
+    # compiles almost nothing (locally 31 s instead of 120 s for the suite). JAX
+    # keys every entry by the compiled program, the compile options and the
+    # jaxlib version, so a stale entry is never used; the size bound evicts the
+    # least recently used entries.
+    env:
+      JAX_COMPILATION_CACHE_DIR: ${{ github.workspace }}/../jax-cache
+      JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS: "0"
+      JAX_COMPILATION_CACHE_MAX_SIZE: "1000000000"
     strategy:
       fail-fast: false
       matrix:
@@ -50,6 +60,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Sync dependencies
         run: uv sync --group dev
+      - name: Restore the JAX compilation cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../jax-cache
+          key: jax-py${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}-${{ github.sha }}
+          restore-keys: jax-py${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}-
       # Parallel over the runner's cores (-n auto in [tool.pytest.ini_options]);
       # pytest-cov combines the workers' coverage.
       - name: Run tests
@@ -65,8 +81,35 @@ jobs:
           slug: paufisch/ode_filters
 
   strict:
-    name: Tests (strict promotion, runtime type checks)
+    name: Tests (${{ matrix.mode }})
     runs-on: ubuntu-latest
+    # A persistent JAX compilation cache, restored from the latest run with the
+    # same lock file and saved under the commit: a run whose code is unchanged
+    # compiles almost nothing (locally 31 s instead of 120 s for the suite). JAX
+    # keys every entry by the compiled program, the compile options and the
+    # jaxlib version, so a stale entry is never used; the size bound evicts the
+    # least recently used entries.
+    env:
+      JAX_COMPILATION_CACHE_DIR: ${{ github.workspace }}/../jax-cache
+      JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS: "0"
+      JAX_COMPILATION_CACHE_MAX_SIZE: "1000000000"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Implicit dtype promotion (int with float, float32 with float64) and
+          # implicit rank promotion (broadcasting arrays of different rank)
+          # raise instead of passing silently.
+          - mode: strict promotion
+            dtype_promotion: strict
+            rank_promotion: raise
+            typecheck: ""
+          # jaxtyping + beartype check the annotations on every call (see
+          # test/conftest.py).
+          - mode: runtime type checks
+            dtype_promotion: standard
+            rank_promotion: allow
+            typecheck: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -76,21 +119,30 @@ jobs:
           python-version: "3.13"
       - name: Sync dependencies
         run: uv sync --group dev
-      # Implicit dtype promotion (int with float, float32 with float64) and
-      # implicit rank promotion (broadcasting arrays of different rank) raise
-      # instead of passing silently. Coverage is the test job's concern.
-      - name: Strict dtype and rank promotion
+      - name: Restore the JAX compilation cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../jax-cache
+          key: jax-${{ matrix.typecheck == '1' && 'typecheck' || 'strict' }}-${{ hashFiles('uv.lock') }}-${{ github.sha }}
+          restore-keys: jax-${{ matrix.typecheck == '1' && 'typecheck' || 'strict' }}-${{ hashFiles('uv.lock') }}-
+      # Coverage is the test job's concern.
+      - name: Run tests
         env:
-          JAX_NUMPY_DTYPE_PROMOTION: strict
-          JAX_NUMPY_RANK_PROMOTION: raise
+          JAX_NUMPY_DTYPE_PROMOTION: ${{ matrix.dtype_promotion }}
+          JAX_NUMPY_RANK_PROMOTION: ${{ matrix.rank_promotion }}
+          ODE_FILTERS_TYPECHECK: ${{ matrix.typecheck }}
         run: uv run pytest --no-cov
-      # jaxtyping + beartype check the annotations on every call (see
-      # test/conftest.py); runs even when the step above failed.
-      - name: Runtime type checks
-        if: ${{ !cancelled() }}
-        env:
-          ODE_FILTERS_TYPECHECK: "1"
-        run: uv run pytest --no-cov
+
+  # The two modes run in parallel; this job keeps the check name that branch
+  # protection requires and passes only if both passed.
+  strict-summary:
+    name: Tests (strict promotion, runtime type checks)
+    needs: strict
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Both modes passed
+        run: test "${{ needs.strict.result }}" = "success"
 
   benchmark:
     name: Benchmark smoke run
