@@ -44,7 +44,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as np
 import numpy as onp
-from jax import Array, ad_checkpoint
+from jax import Array
 from jax.typing import ArrayLike
 
 from ..calibration.policies import (
@@ -74,6 +74,11 @@ from .kernel import (
     predict,
 )
 from .result import FilterResult
+
+# ``jax.checkpoint`` is the public name in every supported JAX version (0.11
+# removed ``jax.ad_checkpoint.checkpoint``), but the type stubs of JAX 0.8 do
+# not list it as exported.
+_checkpoint = jax.checkpoint  # pyright: ignore[reportPrivateImportUsage]
 
 
 def check_grid(ts: ArrayLike) -> Array | onp.ndarray:
@@ -397,7 +402,7 @@ def run_filter(
 
     # The scan already keeps the recomputation from being merged with the
     # forward pass, so jax.checkpoint need not prevent CSE (see its docs).
-    step = ad_checkpoint.checkpoint(body, prevent_cse=False) if checkpoint else body
+    step = _checkpoint(body, prevent_cse=False) if checkpoint else body
     x_0 = Gaussian(np.asarray(m_0), np.asarray(P_0_sqr))
     _, out = jax.lax.scan(step, x_0, (ts[1:], per_step, surrogate, observations))
     return _result(ts, x_0, out)
@@ -503,7 +508,7 @@ def run_timeline(
             )
         return (filtered, sigma_sqr, diffusion), out
 
-    step = ad_checkpoint.checkpoint(body, prevent_cse=False) if checkpoint else body
+    step = _checkpoint(body, prevent_cse=False) if checkpoint else body
     init = (
         x_0,
         *(np.zeros(s.shape, s.dtype) for s in diffusion_shape),
