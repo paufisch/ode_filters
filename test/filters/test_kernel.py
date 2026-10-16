@@ -6,10 +6,11 @@ import jax
 import jax.numpy as np
 import pytest
 
-from ode_filters import IWP, PrecondIWP
+from ode_filters import IWP, BlackBoxMeasurement, PrecondIWP, TaylorCorrection
 from ode_filters.calibration import DiagonalCalibration
 from ode_filters.filters.kernel import (
     FrozenInformation,
+    OnlineInformation,
     filter_step,
     observe,
     predict,
@@ -76,6 +77,20 @@ def test_a_frozen_model_has_no_left_hand_side_selector():
             _random_gaussian(2),
             prior.transition(0.1),
             FrozenInformation(model),
+            t=0.1,
+            calibration=DiagonalCalibration(jacobian="ek0"),
+            scale_noise=prior.apply_state_sigma_sqr,
+        )
+
+
+def test_a_measurement_model_without_a_left_hand_side_selector_names_it():
+    prior = IWP(q=1, d=1)
+    measure = BlackBoxMeasurement(lambda s, *, t: s[1:] + s[:1], state_dim=2, obs_dim=1)
+    with pytest.raises(AttributeError, match="BlackBoxMeasurement has no 'E_lhs'"):
+        filter_step(
+            _random_gaussian(2),
+            prior.transition(0.1),
+            OnlineInformation(measure, TaylorCorrection()),
             t=0.1,
             calibration=DiagonalCalibration(jacobian="ek0"),
             scale_noise=prior.apply_state_sigma_sqr,

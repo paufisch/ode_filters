@@ -21,6 +21,9 @@ minor bump, non-breaking changes in a patch bump).
   memory of reverse-mode differentiation.
 - `gaussian_filter_adaptive(..., h_init="auto")` chooses the first step from
   the initial state and the tolerances (Hairer, Nørsett & Wanner, Sec. II.4).
+- `ode_filters.information` protocols for the optional members of a
+  measurement model: `HasLHSSelector`, `EK0Linearizable`, `HasNoiseCovariance`
+  and `NoiseSettable`. A model that lacks one raises an error naming it.
 
 ### Changed
 

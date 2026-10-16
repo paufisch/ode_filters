@@ -253,8 +253,32 @@ model = TransformedMeasurement(base_model, softmax_transform, sigma_jacobian=sig
 ## Custom measurement models
 
 Any object with the `MeasurementModel` interface works as a solver's `measure`.
+Four further members are optional. One feature needs each of them, and each has
+its own protocol, which the feature checks with `isinstance` before the call:
+
+| Protocol             | Member          | Needed by                             |
+| -------------------- | --------------- | ------------------------------------- |
+| `HasLHSSelector`     | `E_lhs`         | `DiagonalCalibration(jacobian="ek0")` |
+| `EK0Linearizable`    | `linearize_ek0` | `TaylorCorrection(order=0)`           |
+| `HasNoiseCovariance` | `R`             | `TransformedMeasurement.R`            |
+| `NoiseSettable`      | `with_noise`    | `TransformedMeasurement.with_noise`   |
+
+A model without an optional member works with every feature that does not need
+it. A feature whose member is missing raises an error that names the member
+(`TypeError` for `TaylorCorrection(order=0)`, `AttributeError` for the others).
+The ODE-information models implement all four protocols. `BlackBoxMeasurement`
+implements `HasNoiseCovariance` and `NoiseSettable`, and
+`TransformedMeasurement` forwards both to its base model.
 
 ::: ode_filters.information.MeasurementModel
+
+::: ode_filters.information.HasLHSSelector
+
+::: ode_filters.information.EK0Linearizable
+
+::: ode_filters.information.HasNoiseCovariance
+
+::: ode_filters.information.NoiseSettable
 
 ::: ode_filters.information.BaseODEInformation
 
