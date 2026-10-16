@@ -295,9 +295,6 @@ evidences condition on ODE information at different times.
 Use the conditional evidence to compare hyperparameters by the probability
 that the ODE-constrained model assigns to the data. Use the sequential one when
 the data are to be judged as they arrive (filtering, online use).
-[Parameter estimation](examples/parameter-estimation.ipynb#comparing-the-evidence-channels)
-compares the three channels on one problem, including a frozen linearization
-on which Fenrir's and Dalton's values coincide.
 
 **Information criteria.** `information_criteria(m_0, P_0_sqr, prior, surrogate,
 ts, obs_model)` returns, at a frozen linearization and for a `JointPrior` with a
