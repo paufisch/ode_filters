@@ -118,6 +118,40 @@ Set a floor, `calibration=DynamicCalibration(min_sigma_sqr=1e-8)`, or use
 `calibration="none"` with a deliberately chosen `Xi` (the usual choice for
 inference).
 
+### An uncertain initial value without data shrinks towards zero
+
+The ODE information alone pulls an uncertain initial value towards the zero
+solution. We solve `x' = -x` on `np.linspace(0.0, 5.0, 51)` with `IWP(q=2)`
+and the initial value `x(0) ~ N(1.5, 0.5^2)`, placed along the direction that
+moves all derivatives consistently:
+
+```python
+J = jax.jacfwd(lambda x0: taylor_mode_initialization(vf, x0, q=2)[0])(x0)
+P_0_sqr = np.zeros((3, 3)).at[0].set(0.5 * J[:, 0])
+```
+
+After `rts_smoother`, the smoothed `x(0)` has mean `2e-7` and standard
+deviation `2e-4` under the default dynamic calibration, and mean `1.33` and
+standard deviation `0.47` under `calibration="none"`.
+
+The posterior is correct under the model. Every `x = A exp(-t)` solves the
+ODE, but zero residuals are most likely for the trivial solution `x = 0`,
+which an `IWP` prior predicts with no discretization error. The ODE
+information therefore favors small amplitudes `A`. Under `"none"` the size of
+the pull follows from the prior: an `IWP` of order `q` drives `x^(q+1)` with
+white noise of intensity `Xi`, so for `x' = -k x` on a long horizon the ODE
+information weighs `A` by `exp(-A^2 k^(2q+1) / (4 Xi))`. This factor turns
+`N(1.5, 0.5^2)` into the `N(1.33, 0.47^2)` above. Dynamic calibration
+strengthens the pull: it estimates each step's diffusion from that step's
+residual, which shrinks with the mean, and a smaller diffusion gives the
+prior's preference for `x = 0` more weight.
+
+Give an uncertain initial value data to pin it, or keep the initial value
+exact (`taylor_mode_initialization`). One measurement of `x(1)` with noise
+standard deviation 0.01 brings the smoothed `x(0)` back to within one
+standard deviation of the true value, under either calibration.
+`calibration="none"` weakens the effect but does not remove it.
+
 ### Sample paths depend on the factorization when the ODE information is exact
 
 With exact ODE information (zero noise `R`, the default) the smoothing posterior
@@ -137,6 +171,17 @@ Diffusion calibration sizes the uncertainty, but a *dynamic* calibration absorbs
 model–data misfit into `sigma^2`. When you want the misfit to stay visible (e.g. in
 a likelihood), use `calibration="none"` and set the prior scale matrix `Xi` deliberately.
 See [Diffusion calibration](calibration.md).
+
+### The smoother's band is calibrated for the filter
+
+Every calibration policy fits the diffusion to the filter's innovations, and
+the smoother inherits it. Under a constant diffusion the smoothed mean is 8.5
+to 3400 times more accurate than the filtered one in our tests (`q = 2` to
+`5`), while its standard deviation is at most 6.4 times smaller, so the
+smoother's band is too wide. Dynamic calibration overstates the diffusion for
+`q >= 2`, and its changes from step to step cost the smoother part or all of
+its accuracy. See [The smoother's uncertainty](calibration.md#the-smoothers-uncertainty)
+for the measurements and two recipes.
 
 ## FAQ
 
