@@ -31,7 +31,7 @@ import numpy as onp
 from jax import Array
 
 from ..calibration.policies import Calibration, CalibrationMode
-from ..information import Measurement, ObsModel, ODEInformation
+from ..information import Measurement, ObsModel, ODEInformation, prepare_observations
 from ..linearization import Correction
 from ..priors import BasePrior
 from .likelihood import InferenceProblem, marginal_loglik
@@ -71,6 +71,14 @@ class ODEFilter(eqx.Module):
         ``data`` is an ``ObsModel`` for ``ts`` or a sequence of ``Measurement``
         objects, as in ``marginal_loglik``.
         """
+        if not isinstance(data, ObsModel):
+            # The grid is static, so the times are matched to it on the host,
+            # also inside the jitted step of ``fit``.
+            converted = prepare_observations(
+                data, self.prior.E0_state, onp.asarray(self.ts)
+            )
+            if converted is not None:  # for no data, marginal_loglik raises
+                data = converted
 
         def build(params):
             def vf(x, *, t):

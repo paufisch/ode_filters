@@ -29,6 +29,7 @@ say about a hidden input, at a frozen linearization.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import NamedTuple
 
 import jax
@@ -49,7 +50,7 @@ from ..filters.kernel import mask_rows, observe, scale_gaussian
 from ..filters.result import FilterResult
 from ..gaussian import AffineModel, Gaussian, marginalize
 from ..gaussian.algebra import _safe_qr
-from ..information import ObsModel
+from ..information import Measurement, ObsModel, prepare_observations
 from ..information.observations import MEASUREMENT_TIME_ATOL, MEASUREMENT_TIME_RTOL
 from ..linearization.surrogate import AffineSurrogate
 from ..priors.base import Transition
@@ -295,7 +296,7 @@ def information_criteria(
     prior: JointPrior,
     surrogate: AffineSurrogate,
     ts: ArrayLike,
-    obs_model: ObsModel,
+    obs_model: ObsModel | Sequence[Measurement],
     *,
     P_0_state_sqr: ArrayLike | None = None,
 ) -> InformationCriteria:
@@ -327,8 +328,11 @@ def information_criteria(
         surrogate: The frozen linearization (one affine model per step of
             ``ts``).
         ts: Time grid.
-        obs_model: The data for the same grid. With data-only nodes the passes
-            with the data run over its timeline, with the ODE information at
+        obs_model: The data, as a sequence of ``Measurement`` objects, which
+            are converted with
+            ``prepare_observations(obs_model, prior.E0_state, ts)``, or as an
+            ``ObsModel`` for the same grid. With data-only nodes the passes
+            with the data run over the timeline, with the ODE information at
             the grid nodes only, as in ``affine_filter``.
         P_0_state_sqr: Square root of the state block's initial covariance given
             the input. Defaults to the Schur complement of ``P_0``
@@ -338,12 +342,22 @@ def information_criteria(
         The ``InformationCriteria``.
 
     Raises:
-        TypeError: If ``prior`` is not a ``JointPrior``.
+        TypeError: If ``prior`` is not a ``JointPrior``, or if measurement times
+            are traced.
         ValueError: If the shapes of the surrogate, the data or the initial law
-            do not match the prior, or ``obs_model`` was built for another grid.
+            do not match the prior, if ``obs_model`` was built for another grid,
+            if it is an empty sequence, or for invalid measurement times.
     """
     if not isinstance(prior, JointPrior):
         raise TypeError(f"prior must be a JointPrior, got {type(prior).__name__}.")
+    if not isinstance(obs_model, ObsModel):
+        converted = prepare_observations(obs_model, prior.E0_state, ts)
+        if converted is None:
+            raise ValueError(
+                "information_criteria requires data; got an empty sequence of "
+                "measurements."
+            )
+        obs_model = converted
     m_0 = np.asarray(m_0)
     P_0_sqr = np.asarray(P_0_sqr)
     D_x = prior.prior_x.state_dim

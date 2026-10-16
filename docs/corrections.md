@@ -3,8 +3,8 @@
 A step of a probabilistic ODE filter involves two independent choices: what to
 observe, and how to linearize it for the Gaussian update. The measurement model
 defines what is observed, namely the ODE residual and conservation laws.
-External data form a separate observation model (`obs_model`), built with
-`prepare_observations`. `ode_filters` separates the two choices. The
+External data form a separate observation model, passed to the solvers as
+`measurements=`. `ode_filters` separates the two choices. The
 measurement model owns the residual `g` and its Jacobian, and a
 **`Correction`** owns the transition from the predicted mean to the updated
 posterior. Any measurement model composes with any correction.
@@ -181,10 +181,10 @@ moment-matched Gaussian.
 ```python
 from ode_filters import iterated_smoother
 
-# obs_model: data from prepare_observations, or None for the ODE alone
+# measurements: a list of Measurement objects, or None for the ODE alone
 result = iterated_smoother(
     m_0, P_0_sqr, prior, measure, ts,
-    linearization="taylor", n_iters=5, obs_model=obs_model,
+    linearization="taylor", n_iters=5, measurements=measurements,
 )
 result.m, result.P_sqr   # smoothed trajectory of the final pass
 result.filter            # its FilterResult (evidence, innovations)

@@ -121,7 +121,7 @@ and the same smoother recovers it, as in
 | Forward filtering pass | `gaussian_filter(...)` (or `gaussian_filter_adaptive(...)`) |
 | Backward smoothing pass | `rts_smoother(result)` |
 | Size the error bars | `calibration=` / `ode_filters.calibration` |
-| Data | `measurements=[Measurement(...)]`, or `prepare_observations(...)` passed as `obs_model=` |
+| Data | `measurements=[Measurement(...)]` for the solvers, the same list as the data of `marginal_loglik` |
 | Fit parameters to data | `marginal_loglik` with `fit_scipy` / `fit` |
 
 The symbols (`q`, `d`, `E0`/`E1`, `Xi`, `sigma^2`, the square-root convention) are

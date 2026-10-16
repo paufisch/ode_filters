@@ -16,10 +16,11 @@ module provides the following functions:
 
 Every step calibrates the diffusion with the `calibration=` policy (`"dynamic"`
 by default; see [Diffusion calibration](../../calibration.md)) and conditions on
-the data, if any, after the ODE information. The solvers take the data as an
-`obs_model` from `prepare_observations` or as `measurements=`, a list of
-`Measurement` objects. A preconditioned prior changes how a step is computed,
-not its result. See [How to choose](../../how-to-choose.md).
+the data, if any, after the ODE information. The solvers take the data as
+`measurements=`, a list of `Measurement` objects, or as an `obs_model` built
+with `prepare_observations` (see [Information](../information/index.md)). A
+preconditioned prior changes how a step is computed, not its result. See
+[How to choose](../../how-to-choose.md).
 
 ## Data between the grid nodes
 
