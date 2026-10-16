@@ -117,6 +117,8 @@ through each.
 | --- | --- |
 | a point estimate of ODE parameters | `marginal_loglik` and `fit_scipy` (L-BFGS-B), or `fit` with an Optax optimizer |
 | a posterior over the parameters | `marginal_loglik` inside NumPyro or BlackJAX |
+| the likelihood with adaptive steps between the data times | `InferenceProblem(..., adaptive=AdaptiveSettings(atol=..., rtol=...))` |
+| data off the solver's grid | `merge_measurement_times(ts, measurements)` |
 | a hidden input `u(t)` | a `JointPrior` with a `*WithHidden` model; `rts_smoother` / `sample_posterior` |
 | hyperparameters (length scale, `Xi`, an input's magnitude) | the conditional evidence: `channel="fenrir"` or `"dalton"` (see [calibration](calibration.md#selecting-hyperparameters-from-data)) |
 | how much the data say about a hidden input | `information_criteria` |

@@ -184,6 +184,14 @@ earlier data, which is the usual case. Two estimators:
   filters each pass linearizes at its own predictions, and it is Dalton's
   estimator (Wu & Lysy, 2024), which generally differs.
 
+With adaptive steps (`InferenceProblem(..., adaptive=AdaptiveSettings(...))`),
+`marginal_loglik` computes Fenrir's estimator from the pass without data run
+with `smoother=True`, whose backward conditionals span one save interval each.
+At `atol = rtol = 1e-8` it agrees with a fixed grid of 2000 steps to about
+`2e-8` relative. Dalton's estimator is not available there: the passes with and
+without data choose different steps, so their ODE evidences condition on ODE
+information at different times.
+
 Use the conditional evidence to compare hyperparameters by how well the
 ODE-constrained model explains the data; use the sequential one when the data
 should be judged as they arrive (filtering, online use).

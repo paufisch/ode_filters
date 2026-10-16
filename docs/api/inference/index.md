@@ -9,6 +9,12 @@ optimizer; `fit_scipy` with SciPy's quasi-Newton methods (L-BFGS-B by default),
 which usually need far fewer evaluations on low-dimensional problems. The
 diagnostics check a fitted model against its data.
 
+`marginal_loglik` solves on the fixed grid `InferenceProblem.ts` by default.
+With `InferenceProblem(..., adaptive=AdaptiveSettings(atol=..., rtol=...))` it
+runs `gaussian_filter_adaptive` with `ts` as the save grid, which carries the
+data. The channels `"obs"`, `"ode"`, `"both"` and `"fenrir"` are available
+there, and the result is differentiable in the parameters.
+
 ## Parameter inference
 
 ::: ode_filters.inference.model.ODEFilter
@@ -20,6 +26,8 @@ diagnostics check a fitted model against its data.
 ::: ode_filters.inference.likelihood.marginal_loglik
 
 ::: ode_filters.inference.likelihood.InferenceProblem
+
+::: ode_filters.inference.likelihood.AdaptiveSettings
 
 ## Conditional evidence and information criteria
 

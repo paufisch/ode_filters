@@ -7,6 +7,16 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+### Added
+
+- `merge_measurement_times(ts, measurements)` adds off-grid measurement times to
+  a grid, with the matching tolerance of `prepare_observations`.
+- A `Measurement` and its `ObsModel` can be built inside `jax.jit`, `grad` or
+  `vmap` when the times are concrete and the data traced.
+- `InferenceProblem(..., adaptive=AdaptiveSettings(...))` runs
+  `marginal_loglik` with adaptive steps (channels `"obs"`, `"ode"`, `"both"`
+  and `"fenrir"`).
+
 ## [0.8.0] - 2026-10-15
 
 A breaking release that rebuilds the package around one filter step and turns it

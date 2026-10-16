@@ -44,9 +44,11 @@ Additional constraints are added via frozen dataclasses:
 - **`Measurement`**: Time-varying observations `A @ x = z[t]` at specified times.
   These are *not* measure constraints; build an observation model with
   `prepare_observations([Measurement(...)], E0, ts)` and pass it as
-  `obs_model=` to the solver. Every measurement time must be a node of the grid
-  (add off-grid times to it, e.g. `ts = np.union1d(ts, z_t)`); measurements may
-  have different times, and each step conditions on the rows that have data.
+  `obs_model=` to the solver. Every measurement time must be a node of the grid.
+  `merge_measurement_times(ts, measurements)` adds off-grid times to it.
+  Measurements may have different times, and each step conditions on the rows
+  that have data. Built inside `jax.jit` from concrete times, a `Measurement`
+  may carry traced data.
 
 ## Usage Examples
 
@@ -243,6 +245,8 @@ model = TransformedMeasurement(base_model, softmax_transform, sigma_jacobian=sig
 ::: ode_filters.information.Measurement
 
 ::: ode_filters.information.prepare_observations
+
+::: ode_filters.information.merge_measurement_times
 
 ::: ode_filters.information.ObsModel
 

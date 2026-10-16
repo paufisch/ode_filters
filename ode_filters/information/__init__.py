@@ -5,7 +5,12 @@ data observations. Every measurement model implements ``MeasurementModel``.
 """
 
 from .blackbox import BlackBoxMeasurement, TransformedMeasurement
-from .observations import Measurement, ObsModel, prepare_observations
+from .observations import (
+    Measurement,
+    ObsModel,
+    merge_measurement_times,
+    prepare_observations,
+)
 from .ode_information import (
     BaseODEInformation,
     Conservation,
@@ -28,5 +33,6 @@ __all__ = [
     "SecondOrderODEInformation",
     "SecondOrderODEInformationWithHidden",
     "TransformedMeasurement",
+    "merge_measurement_times",
     "prepare_observations",
 ]
