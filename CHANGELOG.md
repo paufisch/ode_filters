@@ -7,6 +7,8 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-16
+
 ### Added
 
 - Data between grid nodes: `prepare_observations` accepts times anywhere in
@@ -641,7 +643,8 @@ single consolidated solver API and a differentiable parameter-inference layer.
 part of the public API and is not jit/grad-able. Prefer `gaussian_filter_adaptive`.
 
 [res]: https://paufisch.github.io/ode_filters/api/filters/
-[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/paufisch/ode_filters/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/paufisch/ode_filters/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/paufisch/ode_filters/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/paufisch/ode_filters/compare/v0.7.1...v0.7.2
