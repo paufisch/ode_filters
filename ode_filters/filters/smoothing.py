@@ -59,8 +59,9 @@ def sample_posterior(key: Array, result: FilterResult) -> Array:
     """A sample path from the smoothing posterior of a filter result.
 
     Draws the last state from its filtered marginal, then each earlier state
-    from the backward conditional ``p(x_n | x_{n+1})`` -- an exact joint sample,
-    not a sample from the marginals. The key is split into one key per node.
+    from the backward conditional ``p(x_n | x_{n+1})``. The result is an exact
+    sample of the joint posterior over all nodes, whereas independent draws
+    from the marginals would not be. The key is split into one key per node.
     Vmap over keys for many paths.
 
     With exact ODE information (zero noise ``R``) the posterior is singular and

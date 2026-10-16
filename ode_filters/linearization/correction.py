@@ -14,21 +14,24 @@ linearizes once.
 
 Shipped schemes:
 
-- ``TaylorCorrection(order=1)`` -- EK1, the first-order extended Kalman
+- ``TaylorCorrection(order=1)`` is EK1, the first-order extended Kalman
   linearization (full vector-field Jacobian).
-- ``TaylorCorrection(order=0)`` -- EK0, the zeroth-order linearization (vector field
-  treated as locally constant, so the ODE-defect rows of the Jacobian reduce to the
-  selection matrix of the ODE's left-hand side). It never differentiates the
-  vector field.
-- ``IteratedTaylorCorrection`` -- IEKF, the iterated EKF: a single forward pass in
-  which *each step's update* relinearizes at the updated mean to a fixed point
-  (Gauss-Newton on the per-step MAP). (The whole-trajectory iterated *smoother*,
-  IEKS, is ``iterated_smoother``.)
-- ``QuadratureCorrection`` -- statistical linearization (SLF / sigma-point family):
-  the affine surrogate is fitted over the predictive *spread* rather than tangent
-  to a point, with the required Gaussian expectations evaluated by quadrature.
-  With ``max_iters > 1`` it becomes the iterated posterior-linearization filter
-  (IPLF), which relinearizes with respect to the updated *density*.
+- ``TaylorCorrection(order=0)`` is EK0, the zeroth-order linearization. It
+  treats the vector field as locally constant, so the ODE-defect rows of the
+  Jacobian reduce to the selection matrix of the ODE's left-hand side, and it
+  never differentiates the vector field.
+- ``IteratedTaylorCorrection`` is the iterated EKF (IEKF). It runs a single
+  forward pass in which the update of each step relinearizes at the updated
+  mean, in a fixed number of Gauss-Newton passes on the MAP objective of the
+  step. (The iterated smoother over the whole trajectory, the IEKS, is
+  ``iterated_smoother``.)
+- ``QuadratureCorrection`` is statistical linearization, the linearization of
+  the statistically linearized filter (SLF) and the sigma-point filters. It
+  fits the affine surrogate over the predictive distribution instead of taking
+  the tangent at a point, and evaluates the Gaussian expectations by
+  quadrature. With ``max_iters > 1`` it becomes the iterated
+  posterior-linearization filter (IPLF), which relinearizes with respect to the
+  updated density.
 """
 
 from __future__ import annotations
@@ -149,11 +152,12 @@ class TaylorCorrection(Correction):
 class IteratedTaylorCorrection(Correction):
     """Iterated EKF (IEKF): per-step Gauss-Newton relinearization.
 
-    A single forward pass; within each update, the EK1 linearization is recomputed
-    at the *updated* mean and the update redone, for a fixed ``max_iters`` passes
-    (``max_iters=1`` reproduces EK1). A fixed iteration count -- rather than a
-    convergence-based ``while_loop`` -- keeps the correction reverse-mode
-    differentiable, so it can be used inside gradient-based parameter inference.
+    A single forward pass. Within each update, the EK1 linearization is
+    recomputed at the updated mean and the update is redone, for a fixed number
+    ``max_iters`` of passes (``max_iters=1`` reproduces EK1). The fixed
+    iteration count, in place of a ``while_loop`` with a convergence test,
+    keeps the correction reverse-mode differentiable, so it can be used inside
+    gradient-based parameter inference.
 
     Attributes:
         max_iters: Number of linearizations per step (>= 1).
@@ -182,20 +186,21 @@ class QuadratureCorrection(Correction):
     """Statistical linearization by quadrature (sigma-point / SLF family).
 
     Replaces the Taylor tangent at the predicted mean with the affine map that
-    best fits the residual *over the predictive spread*, computing the required
+    best fits the residual over the predictive distribution, and computes the
     Gaussian expectations by quadrature on the projected marginal (see
     ``ode_filters.linearization.statistical``). Two things change relative to
     ``TaylorCorrection(order=1)``:
 
-    - ``H`` becomes the *expected* Jacobian rather than the Jacobian at the mean;
+    - ``H`` becomes the expected Jacobian instead of the Jacobian at the mean;
     - the linearization-residual covariance ``Omega`` is added to the measurement
-      noise, so the innovation covariance is ``H P H^T + Omega + R`` -- exactly
-      the term a sigma-point filter's ``S`` carries and the EKF's omits.
+      noise, so the innovation covariance is ``H P H^T + Omega + R``. ``Omega``
+      is the term that the ``S`` of a sigma-point filter carries and that of the
+      EKF omits.
 
-    Both differences vanish for an affine vector field, so this correction is a
-    no-op (up to floating point) on linear problems. The diffusion calibration
-    still uses the EK1 linearization at the predicted mean, because the
-    statistical one needs the predicted covariance it is calibrating.
+    Both differences vanish for an affine vector field, so on linear problems
+    this correction coincides with EK1 up to floating point. The diffusion
+    calibration still uses the EK1 linearization at the predicted mean, because
+    the statistical one needs the predicted covariance it is calibrating.
 
     Where it matters: the closure error scales with the predictive spread of the
     vector field's arguments. In a pure ODE solve that spread vanishes as
@@ -207,14 +212,15 @@ class QuadratureCorrection(Correction):
         rule: ``"gauss_hermite"`` (default; tensor product, spectrally accurate,
             ``n_nodes ** p`` nodes) or ``"cubature"`` (third-degree spherical,
             ``2 p`` nodes, derivative-free-equivalent and dimension-linear).
-            ``p`` is the ODE dimension, not the state dimension.
+            ``p`` is the dimension of the vector field's arguments, not the
+            state dimension.
         n_nodes: Nodes per dimension for the Gauss-Hermite rule; exactness is
             ``2 * n_nodes - 1``. A polynomial vector field of degree ``k`` needs
             ``n_nodes >= ceil((k + 1) / 2)`` for ``H`` and ``c``, and
-            ``n_nodes >= ceil((2 k + 1) / 2)`` for ``Omega`` too -- so a cubic
-            (Duffing, van der Pol) is exactly reproduced at ``n_nodes = 4``, and
-            a quadratic (Lotka-Volterra, SIRD) at ``n_nodes = 3``. Ignored by
-            the cubature rule.
+            ``n_nodes >= ceil((2 k + 1) / 2)`` for ``Omega`` as well. A cubic
+            field (Duffing, van der Pol) is therefore reproduced exactly at
+            ``n_nodes = 4``, and a quadratic one (Lotka-Volterra, SIRD) at
+            ``n_nodes = 3``. Ignored by the cubature rule.
         max_iters: Number of posterior-linearization passes. ``1`` (default) is
             the one-shot filter; ``> 1`` is the iterated posterior-linearization
             filter (IPLF), which refits the surrogate over the *updated* density.

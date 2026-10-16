@@ -29,11 +29,11 @@ def _gauss_legendre(n_quad: int, q: int) -> tuple[Array, Array]:
     Raises:
         ValueError: If ``n_quad <= q``. The QR in
             ``_sqr_noise_via_quadrature`` stacks one block of rows per node
-            (one row per dispersion column), so fewer than ``q + 1`` nodes yields
-            a factor with fewer rows than the ``q + 1`` derivative blocks of the
-            state instead of a square one -- which is not a mildly less accurate
-            answer but a structurally wrong shape, and it would otherwise surface
-            only much later as a confusing shape error from inside a solve.
+            (one row per dispersion column). With fewer than ``q + 1`` nodes
+            the factor has fewer rows than the ``q + 1`` derivative blocks of
+            the state, so it is not square. The shape is wrong, independent of
+            the accuracy of the rule. Without this check, the wrong shape
+            would raise a shape error later, inside a solve.
     """
     if n_quad <= q:
         raise ValueError(

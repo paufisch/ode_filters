@@ -15,23 +15,26 @@ marginal ``N(E_args m, E_args P E_args^T)``::
     c     = E[g] - H m
     Omega = Var[g] - H P H^T = Var[g(X) - H X - c]
 
-The quadrature therefore runs in ``p = E_args.shape[0]`` dimensions -- the ODE
-dimension -- and never in the ``d (q+1)`` state dimension. Two consequences:
+The quadrature therefore runs in the ``p = E_args.shape[0]`` dimensions of the
+vector field's arguments (``p = d`` for a first-order ODE) and never in the
+``d (q+1)`` dimensions of the state. This has two consequences:
 
-- the tensor Gauss-Hermite cost ``m^p`` is indexed by the ODE dimension, not by
-  the state dimension, so the spectrally accurate rule is affordable here;
-- no matrix square root of the full ``P`` is ever taken. Sigma-point filters are
+- the tensor-product Gauss-Hermite rule has ``m^p`` nodes, a count set by the
+  arguments and not by the state, which keeps the spectrally accurate rule
+  affordable;
+- no matrix square root of the full ``P`` is taken. Sigma-point filters are
   reported unstable for ``q >= 3`` at small step sizes (Tronarp, Kersting,
   Sarkka & Hennig 2019, sec. 5) because ``cond(P) ~ h^(-2q)`` in the derivative
-  coordinates. Factoring only the ``p x p`` projected block avoids that entirely.
+  coordinates. Factoring only the ``p x p`` projected block avoids this
+  instability.
 
 ``Omega`` is returned as a square-root factor built from the weighted fit
 residuals at the nodes, so it is PSD by construction and needs no Cholesky of a
 possibly-singular matrix. This requires **non-negative quadrature weights**,
 which is why the rules here are Gauss-Hermite and spherical cubature rather than
 the classic scaled unscented transform (whose ``beta`` term puts a negative
-weight on the centre point). ``Omega`` vanishes identically for an affine vector
-field, so an SLR correction is a no-op on linear problems.
+weight on the center point). ``Omega`` vanishes identically for an affine vector
+field, so on linear problems an SLR correction coincides with EK1.
 
 References:
     Sarkka (2013), *Bayesian Filtering and Smoothing*, ch. 5-6 (SLF / sigma-point
@@ -82,10 +85,10 @@ class SLRModel(NamedTuple):
         Omega_sqr: Square-root factor of the linearisation-residual covariance
             alone, shape ``[K, obs_dim]`` with ``K`` the total number of
             quadrature nodes (``n_nodes ** p`` for Gauss-Hermite, ``2 p`` for
-            cubature; ``Omega = Omega_sqr.T @ Omega_sqr``). Not triangular and
-            not square -- it is the stacked weighted fit residuals at the nodes. Exposed for
-            diagnostics; ``R_eff_sqr`` already contains it. Zero for an affine
-            vector field.
+            cubature; ``Omega = Omega_sqr.T @ Omega_sqr``). It is neither
+            triangular nor square, since it stacks the weighted fit residuals
+            at the nodes. Exposed for diagnostics; ``R_eff_sqr`` already
+            contains it. Zero for an affine vector field.
     """
 
     H: Array
@@ -137,10 +140,10 @@ def cubature_rule(dim: int) -> tuple[Array, Array]:
     """Third-degree spherical-radial cubature nodes and weights.
 
     The ``2 * dim`` points ``+- sqrt(dim) e_j`` with equal weights ``1 / (2 dim)``
-    (Arasaratnam & Haykin 2009). Exact for polynomials up to total degree three,
-    dimension-linear in cost, and all weights positive -- unlike the scaled
-    unscented transform, which is the same third-degree rule plus a centre point
-    whose covariance weight can be negative.
+    (Arasaratnam & Haykin 2009). The rule is exact for polynomials up to total
+    degree three, its cost is linear in the dimension, and all its weights are
+    positive. The scaled unscented transform is the same third-degree rule plus
+    a center point, whose covariance weight can be negative.
 
     Args:
         dim: Dimension of the integration domain (``p``).
@@ -188,9 +191,9 @@ def _arg_projection(measure: MeasurementModel, state_dim: int) -> Array:
     Falls back to the identity for measurement models that do not declare
     ``E_args`` (e.g. ``\
 BlackBoxMeasurement``, which is duck-typed rather than a
-    ``BaseODEInformation`` subclass). That fallback is always *correct* --
+    ``BaseODEInformation`` subclass). The fallback is always correct, because
     quadrature over the full state integrates over a superset of the directions
-    that matter -- but it costs the full state dimension.
+    the residual depends on, but its cost grows with the full state dimension.
     """
     proj = getattr(measure, "E_args", None)
     if proj is None:
@@ -288,11 +291,12 @@ def check_arg_projection(
 ) -> None:
     """Verify that ``measure.E_args`` covers every coordinate ``g`` is nonlinear in.
 
-    An ``E_args`` that is too *small* makes ``slr_linearize`` silently wrong:
-    the quadrature would miss the spread in a direction the vector field
-    actually reads. This checks the defining property directly -- the Jacobian of
-    ``g`` must be unchanged by any state perturbation that leaves ``E_args @
-    state`` fixed -- by perturbing along the null space of ``E_args``.
+    If ``E_args`` omits a coordinate that the vector field reads,
+    ``slr_linearize`` is wrong and raises no error, because the quadrature
+    misses the spread in that direction. This function checks the defining
+    property directly: the Jacobian of ``g`` must not change under a state
+    perturbation that leaves ``E_args @ state`` fixed. It perturbs the state
+    along the null space of ``E_args``.
 
     Intended for tests and for validating a custom measurement subclass; it is a
     concrete-value check and cannot run inside ``jit``.

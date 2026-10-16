@@ -2,10 +2,11 @@
 
 ``ODEFilter`` bundles the problem structure (vector field, prior, grid) with
 the differentiable parameters as a single ``equinox.Module``, and ``fit``
-optimizes it against data -- the GPJax ``fit(model, ...)`` pattern. This is sugar
-over the pure Layer-1 core (``marginal_loglik``): ``ODEFilter.loglik`` builds
-an ``InferenceProblem`` from the module and calls the core, so there is a
-single source of truth for the likelihood.
+optimizes it against data, following the GPJax ``fit(model, ...)`` pattern.
+The object API is a wrapper around the pure Layer-1 core
+(``marginal_loglik``): ``ODEFilter.loglik`` builds an ``InferenceProblem`` from
+the module and calls the core, so both APIs evaluate the same likelihood
+function.
 
 ``fit`` trains ``ode_params`` only; the vector field, prior, grid and
 calibration stay fixed, and the initial Gaussian is produced by a static

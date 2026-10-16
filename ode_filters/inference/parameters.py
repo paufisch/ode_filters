@@ -1,8 +1,8 @@
 """Unconstrained-parameter wrappers for gradient-based inference.
 
-Many ODE parameters are constrained -- a diffusion scale, an observation noise,
-or a decay rate must be positive. Optimizers and samplers, however, work best in
-*unconstrained* space. These wrappers store a parameter in unconstrained space
+Many ODE parameters are constrained: a diffusion scale, an observation noise
+or a decay rate must be positive. Optimizers and samplers, however, operate on
+unconstrained values. These wrappers store a parameter in unconstrained space
 and expose the constrained value via ``unwrap``, following the
 ``equinox``/``paramax`` (and GPJax) pattern.
 

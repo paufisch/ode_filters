@@ -1,18 +1,19 @@
 """Step-size controllers for the adaptive solver (``gaussian_filter_adaptive``).
 
-A controller's job is to propose a new step size ``h_new`` given the current
-step ``h`` and a *normalised* error estimate ``err`` (one means "at tolerance",
-greater than one means "rejected, shrink"). Accept/reject is decided by the
-solver, not by the controller.
+A controller proposes a new step size ``h_new`` from the current step ``h``
+and a normalized error estimate ``err``. An error of one is at the tolerance,
+and an error above one rejects the step, which is then retried with a smaller
+``h``. The solver decides whether a step is accepted; the controller only
+proposes the next step size.
 
 Two controllers are provided:
 
-- ``PController`` -- proportional-only on the current error. Sometimes
-  called the *I-controller* or *elementary controller* in the
-  adaptive-ODE-solver literature (Hairer-Wanner-Norsett, Soederlind) because
-  ``h`` itself is the integral of the log-step adjustment.
-- ``PIController`` -- adds a Gustafsson PI term using the previous
-  accepted step's error to damp oscillations around the tolerance.
+- ``PController`` is proportional in the current error only. The literature
+  on adaptive ODE solvers (Hairer-Wanner-Norsett, Soederlind) also calls it the
+  *I-controller* or *elementary controller*, because ``h`` itself is the
+  integral of the adjustments of ``log h``.
+- ``PIController`` adds the PI term of Gustafsson, which uses the error of the
+  previous accepted step to damp oscillations around the tolerance.
 
 Both implement the ``StepSizeController`` protocol. ``propose`` is
 written with ``jax.numpy`` so the jittable adaptive solver can call it inside
@@ -134,9 +135,10 @@ class PIController:
         order: Convergence order of the local error estimate.
         safety: Safety factor on the proposed step.
         alpha: Proportional gain; defaults to ``0.7 / order``.
-        beta: Integral gain; defaults to ``0.4 / order``. Set ``beta=0`` for a
-            pure proportional controller -- ``PController`` is the
-            standalone equivalent with the more natural default ``alpha``.
+        beta: Integral gain; defaults to ``0.4 / order``. ``beta=0`` gives a
+            proportional controller. ``PController`` is the standalone
+            equivalent, with the default ``alpha = 1 / order`` of the
+            elementary controller instead of ``0.7 / order``.
         min_factor: Lower clip on ``h_new / h``.
         max_factor: Upper clip on ``h_new / h``.
     """

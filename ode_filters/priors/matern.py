@@ -172,11 +172,12 @@ class MaternPrior(BasePrior):
 class PrecondMaternPrior(MaternPrior):
     """``MaternPrior`` computed in step-size-preconditioned coordinates.
 
-    The same process as ``MaternPrior`` -- ``A(h)``, ``Q(h)``, ``Q_sqr(h)`` and
-    the stationary law are ``MaternPrior``'s -- but the filters compute each step
-    in the coordinates ``x_bar = T(h)^-1 x`` with the diagonal preconditioner of
-    ``PrecondIWP``. Unlike for the IWP, the preconditioned transition and noise
-    still depend on ``h`` (they tend to the IWP constants as ``h -> 0``).
+    The process is the same as ``MaternPrior``, and ``A(h)``, ``Q(h)``,
+    ``Q_sqr(h)`` and the stationary law are those of ``MaternPrior``. The
+    filters, however, compute each step in the coordinates
+    ``x_bar = T(h)^-1 x``, with the diagonal preconditioner of ``PrecondIWP``.
+    Unlike for the IWP, the preconditioned transition and noise still depend on
+    ``h`` (they tend to the IWP constants as ``h -> 0``).
 
     Args:
         q: Smoothness order (``nu = q + 1/2``).

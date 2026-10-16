@@ -9,9 +9,10 @@ updates on the ODE information and then on the data at every step reports
 
 whose sum is ``log p(Z, Y)`` under the (linearized) model. The *conditional*
 evidence ``log p(Y | Z) = log p(Z, Y) - log p(Z)`` conditions every
-observation on *all* of the ODE information, also the later one, and so
-differs from ``log_likelihood_obs`` whenever later ODE information is
-informative about earlier data -- the generic case. Two estimators of it:
+observation on all of the ODE information, including the later one. It
+therefore differs from ``log_likelihood_obs`` whenever later ODE information is
+informative about earlier data, which is the generic case. There are two
+estimators of it:
 
 - ``fenrir_loglik`` (Tronarp, Bosch & Hennig 2022): one pass on the ODE
   information alone, then a Kalman filter backwards through its backward
@@ -119,12 +120,12 @@ def fenrir_loglik(data_free: FilterResult, obs_model: ObsModel) -> Array:
 def conditional_loglik(data: FilterResult, data_free: FilterResult) -> Array:
     """``log p(Y | Z) = log p(Z, Y) - log p(Z)`` from a pass with and one without data.
 
-    On one shared linear-Gaussian model -- both passes ``affine_filter`` runs of
-    the same ``AffineSurrogate`` -- this is exact and equals ``fenrir_loglik``
-    of the data-free pass. With one-shot filters (``gaussian_filter``) each pass
-    linearizes at its own predictions, so the two terms belong to different
-    linearizations: that difference is Dalton's estimator (Wu & Lysy 2024),
-    which generally differs from Fenrir's.
+    On one shared linear-Gaussian model, with both passes ``affine_filter``
+    runs of the same ``AffineSurrogate``, this is exact and equals
+    ``fenrir_loglik`` of the data-free pass. With one-shot filters
+    (``gaussian_filter``) each pass linearizes at its own predictions, so the
+    two terms belong to different linearizations: that difference is Dalton's
+    estimator (Wu & Lysy 2024), which generally differs from Fenrir's.
 
     Args:
         data: A pass conditioned on the ODE information and the data.
@@ -280,9 +281,9 @@ def information_criteria(
     square-root covariance, with one QR per prediction and per update. This
     is valid because the joint prior's block-diagonal transition makes the
     state block evolve independently given ``U``, and a frozen surrogate is
-    affine in ``U``, so conditioning on ``U`` only shifts the residual means --
-    and likewise the data's dependence on ``U``, which is why the data rows can
-    be restricted to the state's columns.
+    affine in ``U``, so conditioning on ``U`` only shifts the residual means.
+    The same holds for the dependence of the data on ``U``, which is why the
+    data rows can be restricted to the state's columns.
 
     Args:
         m_0: Initial mean of the joint state.

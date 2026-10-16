@@ -24,8 +24,8 @@ def whitened_residuals(mz: ArrayLike, Pz_sqr: ArrayLike) -> Array:
     decompositions that produce ``Pz_sqr`` leave them arbitrary, so
     ``Pz_sqr^-T mz`` would flip the sign of a component from step to step. The
     factor is therefore taken with a non-negative diagonal (``L = Pz_sqr.T``
-    with its columns' signs fixed), which makes the residuals comparable across
-    steps -- what ``residual_autocorrelation`` needs.
+    with its columns' signs fixed). This makes the residuals comparable across
+    steps, as ``residual_autocorrelation`` requires.
 
     Args:
         mz: Innovation means, shape ``[N, k]`` (e.g. ``result.mz_obs``).

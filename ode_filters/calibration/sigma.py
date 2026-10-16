@@ -45,18 +45,19 @@ def quasi_mle_sigma_sqr(mz: Array, Pz_sqr: Array) -> Array:
         sigma_hat^2 = (1 / d) * mz.T @ S^{-1} @ mz
 
     where ``d = mz.shape[0]`` and ``S = Pz_sqr.T @ Pz_sqr`` is a
-    *noise-free* predicted-observation covariance under the implicit
-    assumption that ``S`` scales linearly with ``sigma^2``. Which ``S`` is
-    "correct" depends on the calibration mode -- see the module docstring.
+    noise-free predicted-observation covariance under the implicit
+    assumption that ``S`` scales linearly with ``sigma^2``. Which ``S`` to
+    use depends on the calibration mode (see the module docstring).
 
-    **``Pz_sqr`` must exclude any measurement noise R.** The estimator
-    treats ``S`` as scaling linearly with ``sigma^2``; adding ``R`` into the
+    ``Pz_sqr`` must exclude any measurement noise ``R``. The estimator
+    treats ``S`` as scaling linearly with ``sigma^2``. Adding ``R`` to the
     denominator inflates it by a constant and biases ``sigma_hat^2`` down.
-    For pure ODE-information filtering (``measure.noise_sqr`` returns zero
-    -- the typical case) the distinction is moot. For data-assimilation
-    workflows with ``R != 0``, pre-compute the noise-free covariance with
-    ``ode_filters.gaussian.marginalize`` and a zero noise factor (or use ``quasi_mle_sigma_sqr_from_Q``, which
-    builds ``H Q H.T`` directly and never sees ``R``).
+    For filtering on the ODE information alone, ``measure.noise_sqr``
+    returns zero (the usual case), so the predicted covariance is already
+    noise-free. For data-assimilation workflows with ``R != 0``, pre-compute
+    the noise-free covariance with ``ode_filters.gaussian.marginalize`` and a
+    zero noise factor, or use ``quasi_mle_sigma_sqr_from_Q``, which builds
+    ``H Q H.T`` directly and never sees ``R``.
 
     Args:
         mz: Predicted observation mean (a.k.a. ODE residual mean), shape ``[d]``.
@@ -85,8 +86,8 @@ def _sqr_HQH(H: Array, Q_sqr: Array) -> Array:
 def quasi_mle_sigma_sqr_from_Q(mz: Array, H: Array, Q_sqr: Array) -> Array:
     """Per-step quasi-MLE of sigma^2 in the *dynamic-diffusion* convention.
 
-    Uses ``S = H Q(h) H.T`` -- i.e. only the current step's process-noise
-    propagation -- as the residual covariance. This is the Bosch-Tronarp-
+    Uses ``S = H Q(h) H.T``, the propagation of the current step's process
+    noise only, as the residual covariance. This is the Bosch-Tronarp-
     Hennig 2021 per-step quasi-MLE (Eq. 32). The resulting ``sigma_hat^2``
     is intended to be baked into ``Q_h`` for the current step's
     propagation; past-step contributions in ``A P_prev A.T`` keep their
