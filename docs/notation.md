@@ -1,15 +1,15 @@
 # Notation & conventions
 
-The guides and API assume a small, consistent vocabulary. This page is the single
-place that maps every code symbol to the maths, and states the conventions the
-library follows.
+The guides and the API reference use one consistent set of symbols. This page
+maps every code symbol to its mathematical counterpart and states the
+conventions the library follows.
 
 ## Symbols
 
-| Symbol (code) | Maths | Meaning |
+| Symbol (code) | Math | Meaning |
 | --- | --- | --- |
 | `d` | $d$ | dimension of the ODE (number of state components) |
-| `q` | $q$ | smoothness order: number of derivatives modelled (an IWP tracks $x, \dot x, \ldots, x^{(q)}$) |
+| `q` | $q$ | smoothness order: number of derivatives modeled (an IWP tracks $x, \dot x, \ldots, x^{(q)}$) |
 | state dim | $D = d\,(q+1)$ | length of the stacked state vector $Y$ |
 | `Y` / `m` | $Y(t)$, $m$ | the stacked state (solution + derivatives) and its posterior mean |
 | `E0` | $E_0$ | selection matrix extracting the 0th derivative $x$ from $Y$ |
@@ -27,8 +27,8 @@ library follows.
 
 !!! note "Prefer `E0`/`E1` over `q`/`d` in the API"
     Functions take the selection matrices `E0`, `E1` (`E2`) rather than raw `q`/`d`
-    integers. This keeps the measurement model agnostic to how the prior lays out
-    its state, and lets `JointPrior` expose `E0_x` / `E0_hidden` for joint
+    integers. The measurement model then does not depend on how the prior lays
+    out its state, and `JointPrior` can expose `E0_x` / `E0_hidden` for joint
     state–parameter models. Construct them from a prior (`prior.E0`, `prior.E1`).
 
 ## The square-root convention
@@ -50,26 +50,26 @@ standard deviations (computed from the factor's column norms, without forming
   the covariance (or a variance); the models factor them internally
   (`measure.noise_sqr(t=t)`, `ObsModel.R_sqr`).
 
-The filter never forms `P`
-explicitly — predictions and updates are QR-based operations on the factors
-(Krämer & Hennig 2024), which keeps the represented covariance positive-*semi*definite
-by construction (`P = P_sqr.T @ P_sqr` is a Gram matrix) and avoids ever forming the
-ill-conditioned dense `Q`, so the factors stay well conditioned even at high order `q`.
+The filter does not form `P` explicitly. Predictions and updates are QR-based
+operations on the factors (Krämer & Hennig 2024). The represented covariance
+`P = P_sqr.T @ P_sqr` is a Gram matrix and therefore positive semidefinite by
+construction. The filter also never forms the ill-conditioned dense `Q`, so the
+factors stay well conditioned at high order `q`.
 
 ## Other conventions
 
 - **Keyword-only time.** Vector fields and measurement methods take `t` as a
   keyword-only argument: `def vf(x, *, t): ...`. This makes the time dependence
-  explicit and prevents positional mistakes.
+  explicit and prevents passing `t` in the position of another argument.
 - **Time grids are arrays.** The solvers take the grid `ts` itself (any strictly
   increasing 1-D array); a uniform one is `np.linspace(t0, t1, N + 1)`.
-- **64-bit precision.** Probabilistic ODE solvers are sensitive to round-off; enable
-  `jax.config.update("jax_enable_x64", True)` (the test suite does this in
-  `conftest.py`).
-- **Pure JAX.** Everything is `jit`/`grad`/`vmap`-compatible on the scan-based code
-  paths; `import jax.numpy as np` is used throughout.
+- **64-bit precision.** Probabilistic ODE solvers are sensitive to round-off.
+  Enable double precision with `jax.config.update("jax_enable_x64", True)` (the
+  test suite does this in `conftest.py`).
+- **Pure JAX.** Every scan-based code path is compatible with `jit`, `grad` and
+  `vmap`, and the code imports `jax.numpy` as `np` throughout.
 
 ## See also
 
-- [What is a probabilistic ODE solver?](probabilistic-ode-solvers.md) — the concepts behind these symbols.
-- [Sharp bits](sharp-bits.md) — the conventions that bite if ignored.
+- [What is a probabilistic ODE solver?](probabilistic-ode-solvers.md): the concepts behind these symbols.
+- [Sharp bits](sharp-bits.md): the errors that follow when these conventions are ignored.

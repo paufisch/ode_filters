@@ -1,9 +1,10 @@
 # Migrating from 0.7 to 0.8
 
 Release 0.8.0 reorganizes the package around one filter step and makes the
-models JAX pytrees. It breaks the 0.7 API in one go, with no deprecation
-period: this page lists every change a 0.7 user can hit, old on the left and
-new on the right. The [changelog](https://github.com/paufisch/ode_filters/blob/main/CHANGELOG.md)
+models JAX pytrees. It breaks the 0.7 API in a single release, with no
+deprecation period. This page lists every change that affects code written for
+0.7, with the old form on the left and the new one on the right. The
+[changelog](https://github.com/paufisch/ode_filters/blob/main/CHANGELOG.md)
 lists the additions.
 
 Most code needs three edits: pass a time grid instead of `tspan, N`, call
@@ -163,8 +164,8 @@ and `log_likelihood`.
 ## Data
 
 - `prepare_observations` raises `ValueError` when a measurement time is not a
-  grid node; it dropped such data silently. Put the measurement times into the
-  grid.
+  grid node; 0.7 dropped such data without a warning. Put the measurement times
+  into the grid.
 - Measurements at different times work: each row of the data has its own mask.
 
 ## Parameter inference
@@ -202,6 +203,6 @@ numbers in these cases:
   the usual one: an old `l_old` corresponds to `length_scale=sqrt(l_old)`.
   `length_scale=1` is unchanged.
 - **Preconditioned priors** run in the original coordinates with a change of
-  variables per step. Solutions agree with 0.7 to rounding; at very high order
-  (`q >= 8`) on fine grids the ODE-information log-likelihood is dominated by
-  rounding in both versions, and the two can differ there.
+  variables per step. Solutions agree with 0.7 to rounding. At order `q >= 8`
+  on fine grids, rounding dominates the ODE-information log-likelihood in both
+  versions, and the two can differ there.

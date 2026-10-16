@@ -7,6 +7,10 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+### Changed
+
+- Docs: improve clarity of writing.
+
 ### Fixed
 
 - The work-precision benchmark ran probdiffeq without calibration. Both

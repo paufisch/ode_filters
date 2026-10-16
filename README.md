@@ -11,19 +11,19 @@
 [![Docs](https://img.shields.io/badge/docs-latest-brightgreen)](https://paufisch.github.io/ode_filters/)
 [![Coverage](https://codecov.io/gh/paufisch/ode_filters/branch/main/graph/badge.svg)](https://codecov.io/gh/paufisch/ode_filters)
 
-Fit ODE models to data, with the solver's numerical error accounted for. `ode_filters` is a probabilistic ODE solver in JAX: it returns a Gaussian distribution over the solution instead of a single trajectory, and it treats the ODE as information about the solution, on the same footing as data. One square-root Kalman filter conditions on the ODE, on noisy measurements, on conservation laws and on an unknown input that drives the system, which gives a likelihood of the data that is differentiable in every parameter of the model.
+`ode_filters` fits ODE models to data and accounts for the numerical error of the solver. It is a probabilistic ODE solver: it returns a Gaussian distribution over the solution instead of a single trajectory, and the spread of this distribution estimates the numerical error. The ODE enters as information about the solution, in the same way as data. One square-root Kalman filter therefore conditions on the ODE, on noisy measurements, on conservation laws and on an unknown input that drives the system. The result is a likelihood of the data that includes the numerical error and is differentiable in every parameter of the model. The library is written in JAX, so fits can be compiled, batched and differentiated.
 
 ## Features
 
-- **Inference from data** - a differentiable marginal likelihood for any parameter of the ODE or the prior; `fit_scipy` (L-BFGS-B), `fit` (Optax), NumPyro and BlackJAX
-- **Hidden inputs** - joint state-input priors recover an unknown force driving the system, with information criteria for what the data say about it
-- **Evidence for hyperparameters** - the sequential data evidence and the conditional evidence given the ODE (Fenrir, Dalton)
-- **Outputs** - smoothed marginals, joint posterior samples, dense output, observation predictives, innovation diagnostics (NIS, whitened residuals)
-- **The ODE as information** - first- and second-order ODEs, conservation laws, black-box and transformed operators, data at any grid node
-- **Pluggable linearization** - EK0, EK1, IEKF and statistical linearization, plus the IEKS and IPLS smoothers
-- **Priors** - integrated Wiener, Matern, integrated Ornstein-Uhlenbeck and joint priors, plain or preconditioned
-- **Calibrated uncertainty** - online and post-hoc diffusion calibration; fixed grids of any spacing and adaptive steps
-- **Pure JAX, square-root form** - `jit`, `vmap` and `grad` through every solver; numerically stable QR-based filtering and smoothing
+- **Inference from data**: a differentiable marginal likelihood for any parameter of the ODE or the prior; `fit_scipy` (L-BFGS-B), `fit` (Optax), NumPyro and BlackJAX
+- **Hidden inputs**: joint state-input priors recover an unknown force driving the system, with information criteria for what the data say about it
+- **Evidence for hyperparameters**: the sequential data evidence and the conditional evidence given the ODE (Fenrir, Dalton)
+- **Outputs**: smoothed marginals, joint posterior samples, dense output, observation predictives, innovation diagnostics (NIS, whitened residuals)
+- **The ODE as information**: first- and second-order ODEs, conservation laws, black-box and transformed operators, data at any grid node
+- **Pluggable linearization**: EK0, EK1, IEKF and statistical linearization, plus the IEKS and IPLS smoothers
+- **Priors**: integrated Wiener, Matern, integrated Ornstein-Uhlenbeck and joint priors, plain or preconditioned
+- **Calibrated uncertainty**: online and post-hoc diffusion calibration; fixed grids of any spacing and adaptive steps
+- **Pure JAX, square-root form**: `jit`, `vmap` and `grad` through every solver; numerically stable QR-based filtering and smoothing
 
 ## Installation
 
@@ -106,7 +106,7 @@ result = gaussian_filter(m_0, P_0_sqr, prior, ODEInformation(vf, prior.E0, prior
 posterior = rts_smoother(result)  # posterior.m, posterior.std: mean and error estimate
 ```
 
-Upgrading from 0.7? See the [migration guide](https://paufisch.github.io/ode_filters/migration/).
+To upgrade from 0.7, follow the [migration guide](https://paufisch.github.io/ode_filters/migration/).
 
 ## Package Structure
 
@@ -141,4 +141,4 @@ uv run --group docs mkdocs serve
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](LICENSE) for details.
