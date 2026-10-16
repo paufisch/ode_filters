@@ -1,17 +1,17 @@
 """The interface every measurement model offers the filters, and optional members.
 
-``MeasurementModel`` is the interface that every solver requires. Four further
+``MeasurementModel`` is the interface that every solver requires. Three further
 members are optional. One feature calls each of them, and each has its own
 protocol:
 
-- ``HasLHSSelector``: ``E_lhs``, for ``DiagonalCalibration(jacobian="ek0")``.
 - ``EK0Linearizable``: ``linearize_ek0``, for ``TaylorCorrection(order=0)``.
 - ``HasNoiseCovariance``: ``R``, for ``TransformedMeasurement.R``.
 - ``NoiseSettable``: ``with_noise``, for ``TransformedMeasurement.with_noise``.
 
 The optional protocols do not extend ``MeasurementModel``. An ``isinstance``
 check against one of them therefore tests only the member that its feature
-calls.
+calls. ``HasLHSSelector`` (``E_lhs``) serves only the deprecated
+``DiagonalCalibration(jacobian="ek0")`` and is internal.
 """
 
 from __future__ import annotations
@@ -31,9 +31,9 @@ class MeasurementModel(Protocol):
     ``ode_dim`` rows of ``g`` are the ODE residual (they drive the diffusion
     calibration); further rows, e.g. conservation laws, only update the state.
 
-    A feature that calls one of the optional members (``HasLHSSelector``,
-    ``EK0Linearizable``, ``HasNoiseCovariance``, ``NoiseSettable``) checks for
-    it and raises an error that names the member if the model lacks it.
+    A feature that calls one of the optional members (``EK0Linearizable``,
+    ``HasNoiseCovariance``, ``NoiseSettable``) checks for it and raises an
+    error that names the member if the model lacks it.
     """
 
     @property
@@ -64,8 +64,9 @@ class HasLHSSelector(Protocol):
 
     The ODE rows of the residual are ``E_lhs @ state - f(...)``, so ``E_lhs``
     is their Jacobian with the vector field held constant (the EK0 Jacobian).
-    ``DiagonalCalibration(jacobian="ek0")`` estimates the diffusion with it.
-    The ODE-information models implement it.
+    The deprecated ``DiagonalCalibration(jacobian="ek0")`` estimates the
+    diffusion with it. The ODE-information models implement it. Internal: it
+    goes with that option in 0.9.
     """
 
     @property

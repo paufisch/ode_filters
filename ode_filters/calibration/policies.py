@@ -15,21 +15,22 @@ and decides whether the step propagates with it:
 - ``DynamicCalibration`` scales the step's process noise by the scalar
   estimate.
 - ``DiagonalCalibration`` uses one estimate per solution component,
-  ``r_i^2 / (H Q H.T)_ii``. With ``jacobian="ek0"`` the denominator uses the
-  ODE's left-hand-side selector instead of the linearization's Jacobian, which
-  makes it the exact per-component MLE when ``Xi`` is diagonal.
+  ``r_i^2 / (H Q H.T)_ii``. Its option ``jacobian="ek0"`` (shorthand
+  ``"diagonal_ekf0"``) is deprecated and will be removed in 0.9.
 
 Only the ODE-residual rows (the first ``ode_dim`` rows of the information)
 drive the estimate; conservation rows and data update the posterior but live
 on other scales. For joint priors only the state block of the noise is scaled.
 
 The strings ``"none"``, ``"dynamic"``, ``"diagonal"`` and ``"diagonal_ekf0"``
-are accepted wherever a policy is, as shorthands for the default policies.
+(deprecated) are accepted wherever a policy is, as shorthands for the default
+policies.
 """
 
 from __future__ import annotations
 
 import abc
+import warnings
 from collections.abc import Callable
 from typing import Literal
 
@@ -42,6 +43,14 @@ from jax import Array
 from .sigma import quasi_mle_sigma_sqr_from_Q
 
 CalibrationMode = Literal["none", "dynamic", "diagonal", "diagonal_ekf0"]
+
+#: Raised as a ``FutureWarning`` by ``DiagonalCalibration(jacobian="ek0")``.
+EK0_JACOBIAN_DEPRECATION = (
+    'DiagonalCalibration(jacobian="ek0") and its shorthand "diagonal_ekf0" are '
+    'deprecated and will be removed in ode-filters 0.9. Use "diagonal" '
+    "(DiagonalCalibration()): with an EK0 correction it is identical, and with "
+    "EK1 it calibrates to within a few percent."
+)
 
 
 class Calibration(eqx.Module):
@@ -118,12 +127,13 @@ class DiagonalCalibration(Calibration):
     be diagonal; checked when a solve starts.
 
     Attributes:
-        jacobian: ``"ek1"`` (default) takes ``H`` from the linearization, so a
-            coupled Jacobian mixes the components and the diagonal is a
-            heuristic. ``"ek0"`` takes the ODE's left-hand-side selector
-            (``E1`` for ``x' = f``, ``E2`` for ``x'' = f``), for which
-            ``H Q H.T`` is exactly diagonal when ``Xi`` is: the recommended
-            choice for multi-scale systems.
+        jacobian: ``"ek1"`` (default) takes ``H`` from the linearization; for
+            a decoupled system this is the scalar estimate of each component,
+            for a coupled Jacobian the diagonal is a heuristic. ``"ek0"`` takes
+            the ODE's left-hand-side selector (``E1`` for ``x' = f``, ``E2`` for
+            ``x'' = f``). It is deprecated and will be removed in 0.9: with an
+            EK0 correction it equals ``"ek1"``, and with EK1 both calibrate to
+            within a few percent on the problems we measured.
         min_sigma_sqr: Lower bound on each component's estimate.
     """
 
@@ -133,6 +143,8 @@ class DiagonalCalibration(Calibration):
     def __check_init__(self):
         if self.jacobian not in ("ek1", "ek0"):
             raise ValueError(f'jacobian must be "ek1" or "ek0", got {self.jacobian!r}.')
+        if self.jacobian == "ek0":
+            warnings.warn(EK0_JACOBIAN_DEPRECATION, FutureWarning, stacklevel=2)
 
     def calibrate(self, residual, H, Q_sqr, *, H_ek0):
         """Return the floored per-component estimate, also as the diffusion."""

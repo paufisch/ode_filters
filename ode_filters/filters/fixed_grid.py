@@ -568,7 +568,7 @@ def gaussian_filter(
             ``IteratedTaylorCorrection`` / ``QuadratureCorrection``); ``None``
             is EK1.
         calibration: Diffusion calibration policy, or one of ``"dynamic"``
-            (default), ``"none"``, ``"diagonal"``, ``"diagonal_ekf0"``.
+            (default), ``"none"``, ``"diagonal"``, ``"diagonal_ekf0"`` (deprecated).
         obs_model: Data for the grid ``ts``, from
             ``prepare_observations(measurements, prior.E0_state, ts)``.
         measurements: The data as ``Measurement`` objects, in place of

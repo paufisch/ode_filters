@@ -246,7 +246,7 @@ def gaussian_filter_adaptive(
             time, where the initial state is returned unchanged.
         correction: Linearization; ``None`` is EK1.
         calibration: Diffusion calibration policy, or one of ``"dynamic"``
-            (default), ``"none"``, ``"diagonal"``, ``"diagonal_ekf0"``.
+            (default), ``"none"``, ``"diagonal"``, ``"diagonal_ekf0"`` (deprecated).
         obs_model: Data for the save times, from
             ``prepare_observations(measurements, prior.E0_state, save_at)``;
             conditioned on after landing on each save time. Data between the

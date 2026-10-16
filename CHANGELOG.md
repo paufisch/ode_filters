@@ -28,8 +28,8 @@ minor bump, non-breaking changes in a patch bump).
 - `gaussian_filter_adaptive(..., h_init="auto")` chooses the first step from
   the initial state and the tolerances (Hairer, Nørsett & Wanner, Sec. II.4).
 - `ode_filters.information` protocols for the optional members of a
-  measurement model: `HasLHSSelector`, `EK0Linearizable`, `HasNoiseCovariance`
-  and `NoiseSettable`. A model that lacks one raises an error naming it.
+  measurement model: `EK0Linearizable`, `HasNoiseCovariance` and
+  `NoiseSettable`. A model that lacks one raises an error naming it.
 - Docs: sharp bits on an uncertain initial value without data and on the
   smoother's uncertainty, with two rescaling recipes in the calibration guide.
 - Docs: ODEs of order three and higher.
@@ -37,6 +37,12 @@ minor bump, non-breaking changes in a patch bump).
 ### Changed
 
 - Docs: improve clarity of writing.
+
+### Deprecated
+
+- `DiagonalCalibration(jacobian="ek0")` and its shorthand `"diagonal_ekf0"`
+  (a `FutureWarning`; removed in 0.9). Use `"diagonal"`: with an EK0 correction
+  it is identical, and with EK1 it calibrates to within a few percent.
 
 ### Removed
 

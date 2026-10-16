@@ -127,15 +127,13 @@ class OnlineInformation(NamedTuple):
         """The measurement model's ``E_lhs``.
 
         Raises:
-            AttributeError: If the measurement model declares no ``E_lhs``
-                (see ``HasLHSSelector``).
+            AttributeError: If the measurement model declares no ``E_lhs``.
         """
         measure = self.measure
         if not isinstance(measure, HasLHSSelector):
             raise AttributeError(
                 f"{type(measure).__name__} has no 'E_lhs', the selector of the "
-                "ODE's left-hand side (see HasLHSSelector). Use a calibration "
-                "that does not need one."
+                "ODE's left-hand side. Use a calibration that does not need one."
             )
         return measure.E_lhs
 

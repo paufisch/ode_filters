@@ -96,6 +96,9 @@ filterwarnings = [
     # warns and compiles the function anew, so the result is unaffected.
     "ignore:Error reading persistent compilation cache entry:UserWarning",
     "ignore:Error writing persistent compilation cache entry:UserWarning",
+    # The deprecated DiagonalCalibration(jacobian="ek0") stays tested until its
+    # removal in 0.9; test_policies.py checks that it warns.
+    'ignore:DiagonalCalibration\(jacobian="ek0"\):FutureWarning',
 ]
 markers = [
     "slow: long-running tests (MCMC runs of the example scripts); deselect with -m 'not slow'",

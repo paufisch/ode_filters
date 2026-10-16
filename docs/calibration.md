@@ -17,7 +17,7 @@ this estimate. The solvers' `calibration=` argument selects the policy:
 | `NoCalibration()` | `"none"` | propagates the prior's noise unscaled; still reports the estimate |
 | `DynamicCalibration(min_sigma_sqr=0.0)` | `"dynamic"` (default) | scales the step's noise by the scalar quasi-MLE |
 | `DiagonalCalibration(jacobian="ek1", min_sigma_sqr=0.0)` | `"diagonal"` | one estimate per solution component |
-| `DiagonalCalibration(jacobian="ek0")` | `"diagonal_ekf0"` | the same, with the ODE's left-hand-side selector in the denominator |
+| `DiagonalCalibration(jacobian="ek0")` | `"diagonal_ekf0"` | deprecated, removed in 0.9: the same with the ODE's left-hand-side selector in the denominator; use `"diagonal"` |
 
 `min_sigma_sqr` is a lower bound on the estimate, so a residual that vanishes
 identically (a system at rest) does not set the diffusion to zero. In
