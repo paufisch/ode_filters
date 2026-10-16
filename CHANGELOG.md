@@ -33,13 +33,14 @@ minor bump, non-breaking changes in a patch bump).
 
 - Docs: improve clarity of writing.
 
+### Removed
+
+- Docs: the comparison page and the benchmark figures.
+
 ### Fixed
 
 - The work-precision benchmark ran probdiffeq without calibration. Both
-  libraries now calibrate at every step, and the figures on the comparison page
-  are rerun.
-- Docs: the comparison table uses one name per method across the libraries and
-  was checked again against their source.
+  libraries now calibrate at every step.
 
 ## [0.8.0] - 2026-10-15
 

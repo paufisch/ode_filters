@@ -215,15 +215,6 @@ step. A larger mean indicates a band that is too tight, and a smaller mean a
 band that is too wide. Without data, see
 [What calibration cannot fix](calibration.md#what-calibration-cannot-fix).
 
-### How does this compare to `scipy` / Diffrax / probdiffeq / ProbNumDiffEq.jl / rodeo?
-
-`scipy` and Diffrax are classical solvers, which return a point trajectory
-without uncertainty. The others are probabilistic solvers.
-[How it compares](comparison.md) sets out what each library offers and when to
-use which. In that comparison probdiffeq is the fastest, and `ode_filters`
-focuses on models that combine the ODE with data, conservation laws and hidden
-inputs.
-
 ### Which function do I call?
 
 See [How to choose](how-to-choose.md). Use `gaussian_filter` for a solve on a
