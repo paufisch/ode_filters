@@ -173,7 +173,7 @@ an ODE in the [Quickstart](examples/quickstart.ipynb) and fit one in the
   the grid nodes, the predictive distribution of observations, and innovation
   diagnostics (NIS, whitened residuals) to check a fit.
 - **The ODE as information**: first- and second-order ODEs, conservation laws,
-  black-box and transformed operators, and data at any grid node, all in one
+  black-box and transformed operators, and data at any time, all in one
   filter.
 - **Pluggable linearization**: EK0, EK1, iterated (IEKF) and statistical
   [linearization](corrections.md), plus the trajectory-level IEKS and IPLS.
