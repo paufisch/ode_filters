@@ -1,12 +1,14 @@
 # Information
 
-The information module provides classes for defining ODE constraints and observation
-models used in probabilistic ODE solvers. The design separates concerns cleanly:
+The information module defines the ODE constraints and the observation models
+of a probabilistic ODE solver. Its classes form four groups:
 
-- **ODE classes** define the dynamical system constraint
-- **Constraint and data classes** add conservation laws (`Conservation`) and noisy observations (`Measurement`, via an `obs_model`)
-- **Black-box models** allow arbitrary user-defined measurement functions
-- **Transformed models** apply nonlinear state transformations with proper Jacobians
+- **ODE classes** define the constraint that the dynamical system imposes.
+- **Constraint and data classes** add conservation laws (`Conservation`) and
+  noisy observations (`Measurement`, via an `obs_model`).
+- **Black-box models** accept an arbitrary user-defined measurement function.
+- **Transformed models** apply a nonlinear state transformation and compose its
+  Jacobian by the chain rule.
 
 ## Class Hierarchy
 
@@ -29,21 +31,23 @@ hidden states are present:
 | `BlackBoxMeasurement`    | User-defined `g(state, t)` with autodiff Jacobian   |
 | `TransformedMeasurement` | Wraps any model with nonlinear state transformation |
 
-This separation ensures:
+The separation into classes has three consequences:
 
-- **No runtime conditionals** - Each class has a fixed code path, optimal for JAX JIT
-- **Explicit signatures** - The vector field type is clear from the class choice
-- **Single responsibility** - Each class handles exactly one case
+- **No runtime conditionals.** Each class has a fixed code path, so a compiled
+  solve contains no branch over the type of the model.
+- **Explicit signatures.** The class determines the signature of the vector
+  field.
+- **Single responsibility.** Each class handles exactly one case.
 
 ## Composable Constraints
 
-Additional constraints are added via frozen dataclasses:
+Further constraints are added with frozen dataclasses:
 
 - **`Conservation`**: Time-invariant linear constraints `A @ x = p`, passed via
   the ODE class's `constraints=` argument.
 - **`Measurement`**: Time-varying observations `A @ x = z[t]` at specified times.
-  These are *not* measure constraints; build an observation model with
-  `prepare_observations([Measurement(...)], E0, ts)` and pass it as
+  They are not constraints of the measurement model. Build an observation
+  model with `prepare_observations([Measurement(...)], E0, ts)` and pass it as
   `obs_model=` to the solver. Every measurement time must be a node of the grid.
   `merge_measurement_times(ts, measurements)` adds off-grid times to it.
   Measurements may have different times, and each step conditions on the rows
@@ -83,8 +87,8 @@ model = SecondOrderODEInformation(vf, prior.E0, prior.E1, prior.E2)
 
 ### Joint State-Parameter Estimation
 
-For estimating unknown parameters alongside the state, use `JointPrior` with
-the hidden state classes:
+To estimate unknown parameters together with the state, use `JointPrior` with
+the hidden-state classes:
 
 ```python
 import jax
@@ -149,7 +153,9 @@ model = ODEInformation(vf, E0, E1, constraints=[cons])
 
 ### Black-Box Measurement Models
 
-For cases where the standard ODE structure doesn't fit, use `BlackBoxMeasurement` to define an arbitrary differentiable measurement function. The Jacobian is computed automatically via JAX autodiff.
+When the residual does not have the structure of the ODE information classes,
+`BlackBoxMeasurement` defines an arbitrary differentiable measurement function.
+JAX computes its Jacobian by automatic differentiation.
 
 **Example:**
 
@@ -177,11 +183,17 @@ R = model.noise_sqr(t=0.0)
 As the `measure` of a solver, `g` plays the role of the ODE residual: the filter
 conditions on `g(state) = 0`, and all rows drive the diffusion calibration. If
 `g` stacks further rows after the ODE residual (e.g. conservation constraints),
-pass `ode_dim=` to say how many leading rows are ODE defect.
+pass the number of leading rows that form the ODE defect as `ode_dim=`.
 
 ### Transformed Measurement Models
 
-`TransformedMeasurement` wraps any existing measurement model with a nonlinear state transformation `sigma(state)`. The Jacobian of the mean is composed correctly via the chain rule: `J_total = J_g(sigma(state)) @ J_sigma(state)`. Note, however, that only the mean/linearization is transformed: the measurement-noise covariance `R` is delegated to and taken unchanged from the base model (see `noise_sqr`), and is *not* propagated through `sigma`. `R` must therefore already be expressed in the base model's post-transform coordinates.
+`TransformedMeasurement` wraps a measurement model with a nonlinear state
+transformation `sigma(state)`. The Jacobian of the mean follows from the chain
+rule, `J_total = J_g(sigma(state)) @ J_sigma(state)`. Only the mean and the
+linearization are transformed. The measurement-noise covariance `R` is taken
+unchanged from the base model (see `noise_sqr`) and is not propagated through
+`sigma`, so `R` must be expressed in the coordinates of the base model after
+the transformation.
 
 **Use cases:**
 
@@ -218,7 +230,8 @@ H, c = model.linearize(state, t=0.0)
 
 **Example with explicit Jacobian:**
 
-For performance-critical applications, you can provide a custom Jacobian:
+Pass `sigma_jacobian=` to replace the automatic Jacobian of `sigma`, e.g. by a
+closed form:
 
 ```python
 def sigma_jacobian(state):

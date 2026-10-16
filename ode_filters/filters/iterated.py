@@ -18,9 +18,10 @@ Contrast the IEKF (``IteratedTaylorCorrection``) and the IPLF
 (``QuadratureCorrection(max_iters > 1)``), which iterate within each step of a
 single forward pass.
 
-The diffusion is not recalibrated between passes -- a per-pass ``sigma^2``
-would chase the linearization it is supposed to be conditioned on -- so the
-prior must carry its own scale, as with ``calibration="none"``.
+The diffusion is not recalibrated between passes, because a ``sigma^2``
+estimated in each pass would depend on the linearization of that pass, on
+which it is meant to be conditioned. The prior must therefore carry its own
+scale, as with ``calibration="none"``.
 """
 
 from __future__ import annotations

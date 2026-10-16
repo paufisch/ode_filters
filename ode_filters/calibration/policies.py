@@ -9,11 +9,12 @@ Hennig (2021, Eq. 32),
 
 and decides whether the step propagates with it:
 
-- ``NoCalibration`` -- propagate ``Q(h)`` unscaled (a fixed diffusion, carried
-  by the prior's ``Xi``); the estimate is still reported, for post-hoc rescaling.
-- ``DynamicCalibration`` -- scale the step's process noise by the scalar
+- ``NoCalibration`` propagates ``Q(h)`` unscaled (a fixed diffusion, carried
+  by the prior's ``Xi``). The estimate is still reported, for post-hoc
+  rescaling.
+- ``DynamicCalibration`` scales the step's process noise by the scalar
   estimate.
-- ``DiagonalCalibration`` -- one estimate per solution component,
+- ``DiagonalCalibration`` uses one estimate per solution component,
   ``r_i^2 / (H Q H.T)_ii``. With ``jacobian="ek0"`` the denominator uses the
   ODE's left-hand-side selector instead of the linearization's Jacobian, which
   makes it the exact per-component MLE when ``Xi`` is diagonal.

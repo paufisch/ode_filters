@@ -9,8 +9,9 @@ linear-Gaussian model.
 
 The grid may be non-uniform. On a concrete uniform grid the prior's transition
 is computed once; otherwise once per step. A grid is concrete when it is a NumPy
-array or a JAX array that is not traced -- also when a jitted function closes
-over it -- and traced when it is, e.g., an argument of a jitted function. Data
+array or a JAX array that is not traced, which includes an array that a jitted
+function closes over. A grid is traced when it is, for example, an argument of
+a jitted function. Data
 (an ``ObsModel`` from ``prepare_observations`` on the same grid) are conditioned
 on after the ODE information at each step.
 

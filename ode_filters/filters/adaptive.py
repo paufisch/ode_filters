@@ -274,9 +274,10 @@ def gaussian_filter_adaptive(
             traced loop, so a custom controller must use ``jax.numpy``.
         sigma_in_error: The diffusion in the error estimate. ``"per_step"``
             (default) uses the step's own estimate (Bosch et al. 2021);
-            ``"running_mean"`` the mean over the accepted steps so far, whose
-            noise vanishes after a few steps, so the step sizes vary more
-            smoothly -- but it lags an abrupt change in the problem's stiffness.
+            ``"running_mean"`` the mean over the accepted steps so far. The
+            noise of this mean decreases with the number of steps, so the step
+            sizes vary more smoothly, but the mean lags an abrupt change in the
+            problem's stiffness.
         max_steps: Cap on attempts per save interval (it bounds the
             checkpointed while-loop). Raise it, or loosen the tolerances, if
             ``result.success`` is ``False``.

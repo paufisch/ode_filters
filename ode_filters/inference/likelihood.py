@@ -6,19 +6,19 @@ gradient-based optimization (Optax) or sampling (NumPyro / BlackJAX). The
 ergonomic, object-oriented ``fit(model, ...)`` wrapper (Layer 2) builds on top of
 this.
 
-Design -- *params-as-argument*: ``theta`` carries the differentiable parameters
-and flows into the vector field / initial state via the problem's ``build``
-callable; the static configuration (prior, grid, calibration) lives in an
-``InferenceProblem``. Only ``theta`` is differentiated -- ``model`` and
-``data`` are closed over / held static (``model`` holds a Python callable and so
-is not itself a traceable argument).
+The design passes the parameters as an argument. ``theta`` carries the
+differentiable parameters and flows into the vector field and the initial state
+through the problem's ``build`` callable, and the static configuration (prior,
+grid, calibration) lives in an ``InferenceProblem``. Only ``theta`` is
+differentiated. ``model`` and ``data`` are closed over or held static
+(``model`` holds a Python callable and is therefore not a traceable argument).
 
 The likelihood is evaluated with ``gaussian_filter`` on the problem's time
 grid. By default the returned scalar is the *observation* channel,
 ``FilterResult.log_likelihood_obs``: the data evidence of the sequential filter,
 each observation conditioned on the ODE information up to its own time. Pass
 ``channel="ode"`` or ``channel="both"`` to get the ODE-information evidence
-instead of, or alongside, it -- methods that weight the two channels separately
+instead of it or alongside it. Methods that weight the two channels separately
 need the pair. The conditional evidence ``log p(Y | Z)``, which conditions the
 data on *all* of the ODE information, is the ``"fenrir"`` or ``"dalton"``
 channel (see ``ode_filters.inference.evidence``). Calibration defaults to
@@ -102,16 +102,17 @@ class InferenceProblem(NamedTuple):
             ``adaptive``, the save grid of the adaptive solver, which steps
             between its nodes.
         calibration: Diffusion calibration policy or shorthand. Defaults to
-            ``"none"`` (fixed diffusion) -- recommended for parameter inference.
+            ``"none"`` (fixed diffusion), the recommended setting for parameter
+            inference.
         correction: Linearization strategy (a ``Correction``);
             ``None`` defaults to EK1. Use e.g. ``TaylorCorrection(order=0)`` or
             ``IteratedTaylorCorrection()`` to fit with EK0 / IEKF.
-        prior_fn: Optional callable ``theta -> prior``, for fitting the *prior's*
-            hyperparameters (diffusion scale, length scale) rather than -- or in
-            addition to -- parameters of the vector field. When given it takes
-            precedence over the static ``prior``, and the prior is built inside
-            the traced region so its hyperparameters are differentiated. When
-            ``None`` (the default) the static ``prior`` is used unchanged.
+        prior_fn: Optional callable ``theta -> prior``, for fitting the
+            hyperparameters of the prior (diffusion scale, length scale) instead
+            of or in addition to parameters of the vector field. When given it
+            takes precedence over the static ``prior``, and the prior is built
+            inside the traced region so its hyperparameters are differentiated.
+            When ``None`` (the default) the static ``prior`` is used unchanged.
         adaptive: ``None`` (the default) solves on the fixed grid ``ts`` with
             ``gaussian_filter``. ``AdaptiveSettings`` solve with
             ``gaussian_filter_adaptive`` and these settings, with ``ts`` as the
@@ -196,10 +197,10 @@ def marginal_loglik(
             - ``"ode"``: the ODE-defect (residual) marginal log-likelihood. A
               scalar; does not require observations.
             - ``"both"``: the tuple ``(ll_ode, ll_obs)``. The two channels are
-              summed over *different* numbers of terms -- ``N`` filter steps and
-              ``K`` observations respectively -- so weight them deliberately
-              when combining; the raw sum makes the residual channel's influence
-              scale with the grid density.
+              sums over different numbers of terms, ``N`` filter steps and
+              ``K`` observations respectively. Choose their weights explicitly
+              when combining them, because in the unweighted sum the influence
+              of the residual channel grows with the grid density.
             - ``"fenrir"``: the conditional evidence ``log p(Y | Z)`` by Fenrir:
               one pass without data, then ``fenrir_loglik``.
             - ``"dalton"``: ``log p(Y | Z)`` by Dalton: a pass with and one

@@ -5,7 +5,7 @@ in square-root form throughout. The public API is re-exported here; the
 subpackages are organized by layer:
 
 - ``priors``: Gauss-Markov priors over the solution and its derivatives.
-- ``information``: what the filters condition on -- the ODE information
+- ``information``: what the filters condition on, namely the ODE information
   (plus conservation laws) and data observations.
 - ``linearization``: Taylor and statistical linearization (the corrections),
   and frozen linearizations along a trajectory.

@@ -1,16 +1,18 @@
 # Filters
 
-The solvers all return a `FilterResult` in the original state coordinates:
+The solvers return a `FilterResult` in the original state coordinates. The
+module provides the following functions:
 
-- `gaussian_filter` — a given time grid (uniform or not), the ODE information
-  linearized at each prediction by a [`Correction`](../../corrections.md).
-- `gaussian_filter_adaptive` — adaptive steps between given save times.
-- `affine_filter` — a frozen linearization (an `AffineSurrogate`).
-- `rts_smoother` — smoothing of any result that carries backward conditionals.
-- `sample_posterior` — a joint sample path from the smoothing posterior.
-- `interpolate` — filtered or smoothed marginals between the grid nodes.
-- `iterated_smoother` — the IEKS and the IPLS: linearize along the smoothed
-  trajectory, filter and smooth, repeat.
+- `gaussian_filter` solves on a given time grid (uniform or not) and
+  linearizes the ODE information at each prediction with a
+  [`Correction`](../../corrections.md).
+- `gaussian_filter_adaptive` takes adaptive steps between given save times.
+- `affine_filter` filters a frozen linearization (an `AffineSurrogate`).
+- `rts_smoother` smooths any result that carries backward conditionals.
+- `sample_posterior` draws a joint sample path from the smoothing posterior.
+- `interpolate` returns filtered or smoothed marginals between the grid nodes.
+- `iterated_smoother` implements the IEKS and the IPLS, which linearize along
+  the smoothed trajectory, filter and smooth, and repeat.
 
 Every step calibrates the diffusion with the `calibration=` policy (`"dynamic"`
 by default; see [Diffusion calibration](../../calibration.md)) and conditions on
@@ -27,7 +29,7 @@ the step from `t[n]` to `t[n + 1]`.
 | Field | Meaning |
 | --- | --- |
 | `t` | time grid (the save times on the adaptive path) |
-| `m`, `P_sqr` | **filtered** mean and square-root covariance |
+| `m`, `P_sqr` | filtered mean and square-root covariance |
 | `log_likelihood` | ODE-information evidence, after calibration (not comparable across calibration policies) |
 | `log_likelihood_obs` | data evidence, each observation conditioned on the ODE information up to its time (`None` without data) |
 | `sigma_sqr` | per-step diffusion estimate (`None` on the adaptive path) |
@@ -43,8 +45,8 @@ the step from `t[n]` to `t[n + 1]`.
 `result.filtered` and `result.backward` return the marginals and the backward
 conditionals as a stacked `Gaussian` and `Conditional`.
 
-`gaussian_filter_adaptive` is **filtering-only by default** (`smoother=False`):
-its backward fields are then `None` and `rts_smoother` raises. With
+By default (`smoother=False`), `gaussian_filter_adaptive` only filters. Its
+backward fields are then `None`, and `rts_smoother` raises. With
 `smoother=True` it composes one backward conditional per save interval
 (`O(#save points)` memory), with or without data.
 
