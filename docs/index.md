@@ -141,14 +141,6 @@ an ODE in the [Quickstart](examples/quickstart.ipynb) and fit one in the
 
     [:octicons-arrow-right-24: How to choose](how-to-choose.md)
 
--   :material-scale-balance:{ .lg .middle } **Compare the libraries**
-
-    ---
-
-    What probdiffeq, ProbNumDiffEq.jl and rodeo offer, and when to use which.
-
-    [:octicons-arrow-right-24: How it compares](comparison.md)
-
 -   :material-alert-outline:{ .lg .middle } **Avoid the pitfalls**
 
     ---

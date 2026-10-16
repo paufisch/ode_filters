@@ -50,8 +50,7 @@ uv run --extra benchmarks python benchmarks/<name>.py
 The outputs go to `benchmarks/results/` next to the script, independent of the
 working directory (`--out-dir PATH` changes it). The folder is git-ignored,
 since the timings depend on the machine and its load; they are regenerated, not
-versioned. Only the copies shown in the docs (`docs/assets/work-precision*.svg`)
-are committed (step 6 below).
+versioned.
 
 | File | Content |
 | --- | --- |
@@ -113,14 +112,6 @@ the load after every round.
    disturbed; rerun, or raise `--repeats`.
 5. The figures are in `benchmarks/results/`. To restyle them without timing
    again, edit the plotting code and run with `--replot`.
-6. For a release, copy the two SVGs to the docs, where the comparison page
-   shows them, and update the measurement note below them in
-   `docs/comparison.md` (date, machine and versions, all recorded in the JSON):
-
-   ```bash
-   cp benchmarks/results/work_precision.svg docs/assets/work-precision.svg
-   cp benchmarks/results/work_precision_fixed.svg docs/assets/work-precision-fixed.svg
-   ```
 
 ### Suggested captions
 
