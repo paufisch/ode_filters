@@ -7,6 +7,14 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+### Fixed
+
+- The work-precision benchmark ran probdiffeq without calibration. Both
+  libraries now calibrate at every step, and the figures on the comparison page
+  are rerun.
+- Docs: the comparison table uses one name per method across the libraries and
+  was checked again against their source.
+
 ## [0.8.0] - 2026-10-15
 
 A breaking release that rebuilds the package around one filter step and turns it
