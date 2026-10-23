@@ -236,9 +236,10 @@ def test_smoothed_covariance_gradient_matches_finite_differences():
         _, P_sqr = _smoothed(mu, prior, measure, P_0_sqr)
         return np.sum(np.einsum("kij,kil->kjl", P_sqr, P_sqr))
 
-    # The trailing components are ~1e-8 against an O(1) objective, where central
-    # differences are dominated by cancellation; compare on the shared scale.
-    assert_grad_matches_fd_vector(cov_sum, m_0, eps=1e-6, rtol=5e-3, atol=1e-10)
+    # The trailing components are ~1e-8 against an objective of ~0.2: at small
+    # steps round-off in f, divided by 2*eps, swamps them. f is smooth, so a larger
+    # step costs almost no truncation error and keeps the round-off ~1e-12.
+    assert_grad_matches_fd_vector(cov_sum, m_0, eps=1e-4, atol=1e-10)
 
 
 def test_values_are_unchanged_and_continuous_in_a_regularizing_jitter():
