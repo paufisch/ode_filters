@@ -46,10 +46,10 @@ from ..filters.fixed_grid import (
     resolve_observations,
     timeline_transitions,
 )
-from ..filters.kernel import mask_rows, observe, scale_gaussian
+from ..filters.kernel import mask_rows, observe
 from ..filters.result import FilterResult
 from ..gaussian import AffineModel, Gaussian, marginalize
-from ..gaussian.algebra import _safe_qr
+from ..gaussian.algebra import _safe_qr, _unit_variance_where_zero
 from ..information import Measurement, ObsModel, prepare_observations
 from ..information.observations import MEASUREMENT_TIME_ATOL, MEASUREMENT_TIME_RTOL
 from ..linearization.surrogate import AffineSurrogate
@@ -184,37 +184,44 @@ def _logdet(F: Array) -> Array:
     return 2.0 * np.sum(np.log(np.abs(np.diag(F))))
 
 
-def _predicted_factor(P_sqr: Array, transition: Transition) -> Array:
-    """Square root of the predicted covariance ``A P A.T + Q``.
+def _predicted_factor(F: Array, transition: Transition) -> Array:
+    """Triangular square root of the predicted covariance ``A P A.T + Q``.
 
-    A preconditioned transition acts on ``x / T_diag``: the factor moves into
-    those coordinates and back, as in the filter's prediction.
+    ``F`` is any factor of ``P`` (``P = F.T @ F``), also a stack with more rows
+    than columns, such as the updated factor of ``_update``. A preconditioned
+    transition acts on ``x / T_diag``: the factor moves into those coordinates
+    and back, as in the filter's prediction.
     """
-    x = Gaussian(np.zeros(P_sqr.shape[0], dtype=P_sqr.dtype), P_sqr)
     s = transition.T_diag
-    frame = x if s is None else scale_gaussian(x, 1.0 / s)
-    predicted = marginalize(transition.A, transition.b, transition.Q_sqr, frame)
-    return (predicted if s is None else scale_gaussian(predicted, s)).P_sqr
+    frame = F if s is None else F * (1.0 / s)[None, :]
+    P_sqr = _safe_qr(np.concatenate([frame @ transition.A.T, transition.Q_sqr]))
+    return P_sqr if s is None else P_sqr * s[None, :]
 
 
-def _updated_factors(P_sqr: Array, model: AffineModel) -> tuple[Array, Array]:
-    """Innovation factor and updated factor of observing ``H x + v``, from one QR.
+def _update(F: Array, model: AffineModel) -> tuple[Array, Array]:
+    """Innovation factor and a factor of the updated covariance of ``H x + v``.
 
-    The triangular factor of the pre-array ``[[R_sqr, 0], [P_sqr H.T, P_sqr]]``
-    is ``[[S_sqr, K], [0, P_sqr_new]]``: its Gram matrix
-    ``[[S, H P], [P H.T, P]]`` has the innovation covariance
-    ``S = H P H.T + R`` in the first block, and ``P_sqr_new`` factors the
-    Schur complement ``P - P H.T S^-1 H P``, the updated covariance.
+    ``F`` is any factor of the covariance ``P`` (``P = F.T @ F``). The
+    triangular factor ``S_sqr`` of the stack ``[[R_sqr], [F H.T]]`` factors the
+    innovation covariance ``S = H P H.T + R``. With the gain ``K = P H.T S^-1``,
+    the stack ``[[F (I - K H).T], [R_sqr K.T]]`` factors the updated covariance
+    in Joseph form, ``(I - K H) P (I - K H).T + K R K.T``.
+
+    The updated factor is returned as this stack, not triangularized. On rows
+    without noise the updated covariance is singular, and the derivative of a
+    triangular factor is undefined at a singular matrix: reverse mode divides
+    by its pivots, and a pivot that rounds to zero gives ``NaN``. The next
+    prediction triangularizes the stack together with the process noise, which
+    makes it regular. A component of ``H x + v`` with exactly zero variance
+    gets a zero gain column, as in ``invert``.
     """
-    k, n = model.H.shape
-    pre = np.block(
-        [
-            [model.R_sqr, np.zeros((k, n), dtype=P_sqr.dtype)],
-            [P_sqr @ model.H.T, P_sqr],
-        ]
-    )
-    post = _safe_qr(pre)
-    return post[:k, :k], post[k:, k:]
+    M = F @ model.H.T
+    S_sqr = _safe_qr(np.concatenate([model.R_sqr, M]))
+    # K.T = S^-1 H P by two triangular solves with the factor of S; H P = M.T F.
+    S_gain = _unit_variance_where_zero(S_sqr)
+    Z = jax.scipy.linalg.solve_triangular(S_gain.T, M.T @ F, lower=True)
+    K_T = jax.scipy.linalg.solve_triangular(S_gain, Z, lower=False)
+    return S_sqr, np.concatenate([F - M @ K_T, model.R_sqr @ K_T])
 
 
 def _innovation_logdets(
@@ -226,31 +233,42 @@ def _innovation_logdets(
     """``sum_n log|S_n|`` of the ODE information and of the data along a pass.
 
     The innovation covariances do not depend on the means, so the pass carries
-    the state's square-root covariance alone: one QR per prediction and one per
-    update, which gives the innovation factor and the updated factor together
-    (``_updated_factors``). Rows without data are masked as in the filters and
-    add nothing; without ``obs_model`` the data's sum is zero.
+    a square-root factor of the state's covariance alone: one QR per prediction
+    and one per update, for the innovation factor. Each update appends the rows
+    of its noise to the factor (``_update``). The factor carried from step to
+    step thus has the rows of the predicted factor, padded to those of
+    ``P_0_sqr`` if it has more, and the rows of the ODE information and of the
+    data; ``P_0_sqr`` is padded with zero rows to that shape. Rows without data
+    are masked as in the filters and add nothing; without ``obs_model`` the
+    data's sum is zero.
     """
     constant, per_step = transitions
     data = None if obs_model is None else (obs_model.c_seq, obs_model.mask)
+    P_0_sqr = np.asarray(P_0_sqr)
+    rows, n = P_0_sqr.shape
+    extra = max(rows - n, 0)
 
-    def step(P_sqr: Array, inputs):
+    def step(F: Array, inputs):
         transition, model, step_data = inputs
         step_transition = constant if transition is None else transition
         assert step_transition is not None
-        P_sqr = _predicted_factor(P_sqr, step_transition)
-        S_sqr, P_sqr = _updated_factors(P_sqr, AffineModel(*model))
-        logdet_obs = np.zeros((), dtype=P_sqr.dtype)
+        P_sqr = _predicted_factor(F, step_transition)
+        if extra:
+            P_sqr = np.concatenate([P_sqr, np.zeros((extra, n), dtype=P_sqr.dtype)])
+        S_sqr, F = _update(P_sqr, AffineModel(*model))
+        logdet_obs = np.zeros((), dtype=F.dtype)
         if step_data is not None:
             assert obs_model is not None
             c, mask = step_data
             observation = AffineModel(obs_model.H, c, obs_model.R_sqr)
-            S_obs_sqr, P_sqr = _updated_factors(P_sqr, mask_rows(observation, mask))
+            S_obs_sqr, F = _update(F, mask_rows(observation, mask))
             logdet_obs = _logdet(S_obs_sqr)
-        return P_sqr, (_logdet(S_sqr), logdet_obs)
+        return F, (_logdet(S_sqr), logdet_obs)
 
+    appended = surrogate.H.shape[1] + (0 if obs_model is None else obs_model.H.shape[0])
+    padding = np.zeros((n + extra - rows + appended, n), dtype=P_0_sqr.dtype)
     _, (logdet_ode, logdet_obs) = jax.lax.scan(
-        step, np.asarray(P_0_sqr), (per_step, surrogate, data)
+        step, np.concatenate([P_0_sqr, padding]), (per_step, surrogate, data)
     )
     return np.sum(logdet_ode), np.sum(logdet_obs)
 
@@ -275,19 +293,31 @@ def _on_timeline(
 def conditional_state_cov_sqr(P_0_sqr: ArrayLike, n_state: int) -> Array:
     """Square root of the state block's covariance given the input block.
 
-    The Schur complement, from the factor: with the columns reordered to
-    ``[input | state]``, the trailing block of the triangular factor is the
-    conditional factor of the state given the input.
+    The Schur complement ``P_xx - P_xu P_uu^-1 P_ux``, as the state columns of
+    the joint factor updated on the input without noise (``_update``). The
+    factor has the rows of ``P_0_sqr`` and is not triangularized: the Schur
+    complement is singular when the state is a function of the input, as after
+    a Taylor-mode initialization, and the derivative of a triangular factor is
+    undefined at a singular matrix.
 
     Args:
         P_0_sqr: A square-root factor of the joint covariance, state block first.
         n_state: Dimension of the state block.
+
+    Returns:
+        A factor ``F`` with ``F.T @ F`` the conditional covariance, of shape
+        ``[P_0_sqr.shape[0], n_state]``.
     """
     P_0_sqr = np.asarray(P_0_sqr)
-    reordered = np.concatenate([P_0_sqr[:, n_state:], P_0_sqr[:, :n_state]], axis=1)
-    R = _safe_qr(reordered)
-    n_input = P_0_sqr.shape[1] - n_state
-    return R[n_input:, n_input:]
+    n = P_0_sqr.shape[1]
+    input_rows = np.eye(n, dtype=P_0_sqr.dtype)[n_state:]
+    noise_free = AffineModel(
+        input_rows,
+        np.zeros(n - n_state, dtype=P_0_sqr.dtype),
+        np.zeros((n - n_state, n - n_state), dtype=P_0_sqr.dtype),
+    )
+    _, updated = _update(P_0_sqr, noise_free)
+    return updated[: P_0_sqr.shape[0], :n_state]
 
 
 def information_criteria(
@@ -313,9 +343,12 @@ def information_criteria(
     Each log-determinant is a sum of innovation log-determinants along a filter
     pass, so four passes give them all: the joint model and the state block
     alone (given ``U``), each without and with the data. The innovation
-    covariances do not depend on the means, so each pass carries only the
-    square-root covariance, with one QR per prediction and per update. This
-    is valid because the joint prior's block-diagonal transition makes the
+    covariances do not depend on the means, so each pass carries only a
+    square-root factor of the covariance, with one QR per prediction and per
+    update. The updated factors stay untriangularized until the next
+    prediction, so the gradients are finite also when the ODE information has
+    no noise, which makes every updated covariance singular. This is valid
+    because the joint prior's block-diagonal transition makes the
     state block evolve independently given ``U``, and a frozen surrogate is
     affine in ``U``, so conditioning on ``U`` only shifts the residual means.
     The same holds for the dependence of the data on ``U``, which is why the
@@ -335,8 +368,9 @@ def information_criteria(
             with the data run over the timeline, with the ODE information at
             the grid nodes only, as in ``affine_filter``.
         P_0_state_sqr: Square root of the state block's initial covariance given
-            the input. Defaults to the Schur complement of ``P_0``
-            (``conditional_state_cov_sqr``).
+            the input, any factor ``F`` with ``F.T @ F`` the covariance, also one
+            with more rows than columns. Defaults to the Schur complement of
+            ``P_0`` (``conditional_state_cov_sqr``).
 
     Returns:
         The ``InformationCriteria``.
