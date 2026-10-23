@@ -7,6 +7,19 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+### Fixed
+
+- The gradient of `information_criteria` could come out `NaN` when the ODE
+  information has no noise. Each update then leaves a singular covariance,
+  which the passes triangularized by a QR, whose derivative is undefined at a
+  singular matrix: a pivot that rounded to exactly zero made the whole
+  gradient `NaN`. The updated factor now stays an untriangularized
+  Joseph-form stack until the next prediction, whose QR the process noise
+  keeps regular. The default `P_0_state_sqr` had the same problem whenever
+  the state starts as a function of the input, as after a Taylor-mode
+  initialization; the Schur complement is now such a stack too. The values
+  change only by rounding.
+
 ## [0.8.1] - 2026-10-16
 
 ### Added
