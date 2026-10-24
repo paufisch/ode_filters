@@ -2,7 +2,8 @@
 name: CI
 
 # Workflow: feature branches -> development -> main.
-# CI must run on push to development and main, and on PRs targeting either.
+# CI runs on push to development and main, and on PRs targeting either; a run
+# of a tree that already passed skips the work (see the `tested` job).
 on:
   push:
     branches:
@@ -17,9 +18,56 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# The test suite runs in four shards per mode (ODE_FILTERS_TEST_SHARD, see
+# test/conftest.py), each on its own runner. Most of the suite's time is XLA
+# compilation. A persistent JAX compilation cache would save most of it, but
+# its key leaves out the host CPU, and an entry compiled on a runner with
+# AVX-512 could crash one without; so each run compiles from scratch.
 jobs:
+  # A release goes through three runs of the same tree: the push to
+  # development, the pull request into main, and the merge into main. The merge
+  # commit (and the pull request's test merge) has the tree of development's
+  # head, so a run whose commit, or a parent of it, has the same tree and passed
+  # a push run of this workflow skips the work. Every required check still
+  # reports, so branch protection and the release workflow, which waits for CI
+  # on main, see a pass. Without an earlier pass (or if the lookup fails) the
+  # work runs.
+  tested:
+    name: Find an earlier pass of this tree
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      skip: ${{ steps.find.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # the commit and its parents
+      - name: Look for a passed push run on a commit with this tree
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          skip=false
+          for commit in $(git rev-list --no-walk --parents HEAD); do
+            [ "$(git rev-parse "$commit^{tree}")" = "$tree" ] || continue
+            passed=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+              --commit "$commit" --event push --status success --json databaseId \
+              --jq "map(select(.databaseId != $GITHUB_RUN_ID)) | length" || echo 0)
+            if [ "${passed:-0}" -gt 0 ]; then
+              echo "::notice::CI already passed on $commit, which has this tree; skipping the work."
+              skip=true
+              break
+            fi
+          done
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   checks:
     name: Checks (lint, format, types)
+    needs: tested
+    if: needs.tested.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,22 +83,15 @@ jobs:
         run: uv run --group dev pre-commit run --all-files --show-diff-on-failure
 
   test:
-    name: Tests (py${{ matrix.python-version }})
+    name: Tests (py${{ matrix.python-version }}, ${{ matrix.shard }}/4)
+    needs: tested
+    if: needs.tested.outputs.skip != 'true'
     runs-on: ubuntu-latest
-    # A persistent JAX compilation cache, restored from the latest run with the
-    # same lock file and saved under the commit: a run whose code is unchanged
-    # compiles almost nothing (locally 31 s instead of 120 s for the suite). JAX
-    # keys every entry by the compiled program, the compile options and the
-    # jaxlib version, so a stale entry is never used; the size bound evicts the
-    # least recently used entries.
-    env:
-      JAX_COMPILATION_CACHE_DIR: ${{ github.workspace }}/../jax-cache
-      JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS: "0"
-      JAX_COMPILATION_CACHE_MAX_SIZE: "1000000000"
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.13", "3.14"]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -60,19 +101,65 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Sync dependencies
         run: uv sync --group dev
-      - name: Restore the JAX compilation cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/../jax-cache
-          key: jax-py${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}-${{ github.sha }}
-          restore-keys: jax-py${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}-
       # Parallel over the runner's cores (-n auto in [tool.pytest.ini_options]);
-      # pytest-cov combines the workers' coverage.
+      # pytest-cov combines the workers' coverage. The table it prints covers
+      # this shard only: the 100% gate applies to the shards together, in the
+      # job below.
       - name: Run tests
         env:
           HYPOTHESIS_PROFILE: ci
-        run: uv run pytest --cov=ode_filters --cov-report=term-missing --cov-report=xml
+          ODE_FILTERS_TEST_SHARD: ${{ matrix.shard }}/4
+        run: uv run pytest --cov=ode_filters --cov-fail-under=0
+      - name: Upload the coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-py${{ matrix.python-version }}-${{ matrix.shard }}
+          path: .coverage
+          include-hidden-files: true
+          retention-days: 1
+
+  # Keeps the check name that branch protection requires: passes only if every
+  # shard of this Python passed (each uploads its coverage only then) and the
+  # combined coverage is 100%.
+  coverage:
+    name: Tests (py${{ matrix.python-version }})
+    needs: [tested, test]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+    env:
+      RUN: ${{ needs.tested.outputs.skip != 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.RUN == 'true'
+      - name: Install uv
+        if: env.RUN == 'true'
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - name: Download the shards' coverage data
+        if: env.RUN == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-py${{ matrix.python-version }}-*
+          path: coverage
+      - name: Combine the coverage (gated at 100%)
+        if: env.RUN == 'true'
+        run: |
+          passed=$(find coverage -name .coverage 2>/dev/null | wc -l)
+          if [ "$passed" -ne 4 ]; then
+            echo "::error::$passed of 4 shards passed"
+            exit 1
+          fi
+          uv run --group dev coverage combine coverage/*/.coverage
+          uv run --group dev coverage report --show-missing --fail-under=100
+          uv run --group dev coverage xml
       - name: Upload coverage to Codecov
+        if: env.RUN == 'true'
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.xml
@@ -81,21 +168,15 @@ jobs:
           slug: paufisch/ode_filters
 
   strict:
-    name: Tests (${{ matrix.mode }})
+    name: Tests (${{ matrix.mode }}, ${{ matrix.shard }}/4)
+    needs: tested
+    if: needs.tested.outputs.skip != 'true'
     runs-on: ubuntu-latest
-    # A persistent JAX compilation cache, restored from the latest run with the
-    # same lock file and saved under the commit: a run whose code is unchanged
-    # compiles almost nothing (locally 31 s instead of 120 s for the suite). JAX
-    # keys every entry by the compiled program, the compile options and the
-    # jaxlib version, so a stale entry is never used; the size bound evicts the
-    # least recently used entries.
-    env:
-      JAX_COMPILATION_CACHE_DIR: ${{ github.workspace }}/../jax-cache
-      JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS: "0"
-      JAX_COMPILATION_CACHE_MAX_SIZE: "1000000000"
     strategy:
       fail-fast: false
       matrix:
+        mode: [strict promotion, runtime type checks]
+        shard: [1, 2, 3, 4]
         include:
           # Implicit dtype promotion (int with float, float32 with float64) and
           # implicit rank promotion (broadcasting arrays of different rank)
@@ -119,33 +200,30 @@ jobs:
           python-version: "3.13"
       - name: Sync dependencies
         run: uv sync --group dev
-      - name: Restore the JAX compilation cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/../jax-cache
-          key: jax-${{ matrix.typecheck == '1' && 'typecheck' || 'strict' }}-${{ hashFiles('uv.lock') }}-${{ github.sha }}
-          restore-keys: jax-${{ matrix.typecheck == '1' && 'typecheck' || 'strict' }}-${{ hashFiles('uv.lock') }}-
       # Coverage is the test job's concern.
       - name: Run tests
         env:
           JAX_NUMPY_DTYPE_PROMOTION: ${{ matrix.dtype_promotion }}
           JAX_NUMPY_RANK_PROMOTION: ${{ matrix.rank_promotion }}
           ODE_FILTERS_TYPECHECK: ${{ matrix.typecheck }}
+          ODE_FILTERS_TEST_SHARD: ${{ matrix.shard }}/4
         run: uv run pytest --no-cov
 
-  # The two modes run in parallel; this job keeps the check name that branch
-  # protection requires and passes only if both passed.
+  # The two modes run in parallel shards; this job keeps the check name that
+  # branch protection requires and passes only if every shard passed.
   strict-summary:
     name: Tests (strict promotion, runtime type checks)
-    needs: strict
-    if: ${{ always() }}
+    needs: [tested, strict]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Both modes passed
-        run: test "${{ needs.strict.result }}" = "success"
+      - name: Every shard of both modes passed
+        run: test "${{ needs.tested.outputs.skip }}" = "true" || test "${{ needs.strict.result }}" = "success"
 
   benchmark:
     name: Benchmark smoke run
+    needs: tested
+    if: needs.tested.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -161,6 +239,8 @@ jobs:
 
   docs:
     name: Build docs (strict)
+    needs: tested
+    if: needs.tested.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

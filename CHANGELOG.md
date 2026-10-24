@@ -7,6 +7,29 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-24
+
+### Changed
+
+- Tooling: CI runs each test mode in four shards on separate runners
+  (`ODE_FILTERS_TEST_SHARD=i/n`) and combines the shards' coverage for the
+  100% gate; it no longer keeps a JAX compilation cache. A run of a tree that
+  already passed -- the pull request from `development` into `main` and the
+  merge into `main` -- skips the work.
+
+### Fixed
+
+- The gradient of `information_criteria` could come out `NaN` when the ODE
+  information has no noise. Each update then leaves a singular covariance,
+  which the passes triangularized by a QR, whose derivative is undefined at a
+  singular matrix: a pivot that rounded to exactly zero made the whole
+  gradient `NaN`. The updated factor now stays an untriangularized
+  Joseph-form stack until the next prediction, whose QR the process noise
+  keeps regular. The default `P_0_state_sqr` had the same problem whenever
+  the state starts as a function of the input, as after a Taylor-mode
+  initialization; the Schur complement is now such a stack too. The values
+  change only by rounding.
+
 ## [0.8.1] - 2026-10-16
 
 ### Added
@@ -648,7 +671,8 @@ single consolidated solver API and a differentiable parameter-inference layer.
 part of the public API and is not jit/grad-able. Prefer `gaussian_filter_adaptive`.
 
 [res]: https://paufisch.github.io/ode_filters/api/filters/
-[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/paufisch/ode_filters/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/paufisch/ode_filters/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/paufisch/ode_filters/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/paufisch/ode_filters/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/paufisch/ode_filters/compare/v0.7.2...v0.7.3

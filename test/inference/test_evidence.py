@@ -301,6 +301,72 @@ def test_default_conditional_state_covariance_is_the_schur_complement():
     assert_close(default.D, explicit.D, rtol=1e-12)
 
 
+def test_noise_free_ode_rows_match_the_dense_oracle():
+    """Without noise on the ODE rows every update leaves a singular covariance, and
+    with the state a function of the input so is its covariance given the input."""
+    prior, surrogate, m_0, _, obs = _setup()
+    surrogate = surrogate._replace(R_sqr=np.zeros_like(surrogate.R_sqr))
+    R_u = prior.prior_u.stationary_cov_sqr()
+    J = np.array([[0.7, -0.4], [0.2, 0.5]])
+    P_0_sqr = np.block([[np.zeros((2, 2)), np.zeros((2, 2))], [R_u @ J.T, R_u]])
+    _, expected = _oracle(prior, surrogate, m_0, P_0_sqr, obs)
+    criteria = information_criteria(m_0, P_0_sqr, prior, surrogate, TS, obs)
+    for name in InformationCriteria._fields:
+        assert_close(getattr(criteria, name), getattr(expected, name), rtol=1e-9)
+
+
+def _noise_free_prior(log_xi, log_length_scale):
+    return JointPrior(
+        IWP(q=2, d=8, Xi=np.exp(log_xi) * np.eye(8)),
+        MaternPrior(q=2, d=1, length_scale=np.exp(log_length_scale)),
+    )
+
+
+def test_informations_are_differentiable_with_noise_free_ode_rows():
+    """Eight ODE rows without noise, each tying a derivative to the values and the
+    input, leave a singular covariance after every update; the state starts exact,
+    so its covariance given the input is singular as well. The gradients in the
+    state diffusion and in the input's length scale match finite differences."""
+    n_steps, d = 10, 8
+    ts = np.linspace(0.0, 2.0, n_steps + 1)
+    prior = _noise_free_prior(0.0, 0.0)
+    keys = jax.random.split(jax.random.PRNGKey(0), 4)
+    J = jax.random.normal(keys[0], (n_steps, d, d))
+    b = jax.random.normal(keys[1], (n_steps, d, 1))
+    H = np.concatenate(
+        [prior.prior_x.E1[None] - J @ prior.prior_x.E0, -b @ prior.prior_u.E0], axis=2
+    )
+    c = jax.random.normal(keys[2], (n_steps, d))
+    surrogate = AffineSurrogate(H, c, np.zeros((n_steps, d, d)))
+    y = jax.random.normal(keys[3], (n_steps, d))
+    obs = prepare_observations(
+        [Measurement(np.eye(d), y, ts[1:], noise=0.05)], prior.E0_x, ts
+    )
+    m_0 = np.zeros(prior.state_dim)
+
+    def criterion(name, wrt):
+        def f(theta):
+            log_xi, log_length_scale = (
+                (theta, np.log(0.5)) if wrt == "xi" else (2.0, theta)
+            )
+            prior = _noise_free_prior(log_xi, log_length_scale)
+            D_x = prior.prior_x.state_dim
+            P_0_sqr = (
+                np.zeros((prior.state_dim, prior.state_dim))
+                .at[D_x:, D_x:]
+                .set(prior.prior_u.stationary_cov_sqr())
+            )
+            return getattr(
+                information_criteria(m_0, P_0_sqr, prior, surrogate, ts, obs), name
+            )
+
+        return f
+
+    for name in ("I_UY_given_Z", "D"):
+        assert_grad_matches_fd(criterion(name, "xi"), np.array(2.0))
+        assert_grad_matches_fd(criterion(name, "length_scale"), np.array(np.log(0.5)))
+
+
 def test_invalid_arguments_raise():
     prior, surrogate, m_0, P_0_sqr, obs = _setup()
     data = affine_filter(m_0, P_0_sqr, prior, surrogate, TS, obs_model=obs)

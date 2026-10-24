@@ -108,17 +108,25 @@ CI (`.github/workflows/`) runs, on every push to and pull request against
 - **Benchmark smoke run**: `benchmarks/work_precision.py --quick`, which keeps
   the benchmark running against the current API:
   `uv run --extra benchmarks python benchmarks/work_precision.py --quick --out-dir /tmp/bench`.
-- **Latest dependencies** (`latest-deps.yml`; weekly, on demand, and on pull
-  requests that touch `pyproject.toml` or `uv.lock`): the suite against the
-  newest versions `pyproject.toml` allows, since `uv.lock` pins `jax` at its
-  lower bound. It is not a required check. A failure there that the main tests
-  do not show comes from a new upstream release. To reproduce it locally, then
-  return to the lock:
 
-  ```bash
-  uv sync --upgrade --group dev && uv run pytest --no-cov
-  git checkout uv.lock && uv sync --group dev
-  ```
+Each test mode runs in four shards on separate runners;
+`ODE_FILTERS_TEST_SHARD=i/4 uv run pytest` runs shard `i` locally. A test
+function goes to a shard by a hash of its id, so adding a test moves no other.
+A run whose tree already passed CI in a push run -- the pull request from
+`development` into `main` and the merge into `main` -- skips the work and
+passes its checks.
+
+**Latest dependencies** (`latest-deps.yml`; weekly, on demand, and on pull
+requests that touch `pyproject.toml` or `uv.lock`) runs the suite against the
+newest versions `pyproject.toml` allows, since `uv.lock` pins `jax` at its
+lower bound. It is not a required check. A failure there that the main tests do
+not show comes from a new upstream release. To reproduce it locally, then
+return to the lock:
+
+```bash
+uv sync --upgrade --group dev && uv run pytest --no-cov
+git checkout uv.lock && uv sync --group dev
+```
 
 ## Changelog and versioning
 
