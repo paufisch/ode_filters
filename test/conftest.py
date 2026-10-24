@@ -1,6 +1,7 @@
 """Pytest configuration for ode_filters tests."""
 
 import os
+import zlib
 
 # Opt-in runtime type/shape checking via jaxtyping + beartype.
 #
@@ -48,11 +49,27 @@ def _standard_promotion_for_marked_tests(request):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Under runtime type checking, skip the tests of wrongly typed input.
+    """Keep one shard of the suite, and skip the tests of wrongly typed input
+    under runtime type checking.
 
-    The checker rejects such input before the library's own validation runs,
-    so these tests cannot see the error they check for.
+    ``ODE_FILTERS_TEST_SHARD=i/n`` keeps the ``i``-th of ``n`` shards (CI runs
+    the shards on separate runners). A test function goes to a shard by a hash
+    of its id, all its parametrizations with it, which often share compiled
+    programs; adding a test moves no other.
+
+    The type checker rejects wrongly typed input before the library's own
+    validation runs, so those tests cannot see the error they check for.
     """
+    shard = os.environ.get("ODE_FILTERS_TEST_SHARD")
+    if shard:
+        i, n = (int(part) for part in shard.split("/"))
+        keep, drop = [], []
+        for item in items:
+            function = item.nodeid.split("[")[0]
+            in_shard = zlib.crc32(function.encode()) % n == i - 1
+            (keep if in_shard else drop).append(item)
+        config.hook.pytest_deselected(items=drop)
+        items[:] = keep
     if os.environ.get("ODE_FILTERS_TYPECHECK") != "1":
         return
     skip = pytest.mark.skip(reason="the runtime type checker rejects the input first")
