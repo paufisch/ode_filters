@@ -7,6 +7,14 @@ minor bump, non-breaking changes in a patch bump).
 
 ## [Unreleased]
 
+### Changed
+
+- Tooling: CI runs each test mode in four shards on separate runners
+  (`ODE_FILTERS_TEST_SHARD=i/n`) and combines the shards' coverage for the
+  100% gate; it no longer keeps a JAX compilation cache. A run of a tree that
+  already passed -- the pull request from `development` into `main` and the
+  merge into `main` -- skips the work.
+
 ### Fixed
 
 - The gradient of `information_criteria` could come out `NaN` when the ODE

@@ -84,18 +84,13 @@ docs = [
 testpaths = ["test"]
 # -n auto runs the tests in parallel (pytest-xdist, one worker per core; pass
 # -n 0 to run in one process, e.g. for --pdb). --cov-fail-under=100 gates the
-# suite at full line coverage, combined over the workers by pytest-cov (local +
-# CI; the CI command appends its own --cov-report=xml on top of these defaults).
+# suite at full line coverage, combined over the workers by pytest-cov. CI runs
+# the suite in shards with --cov-fail-under=0 and gates their combined coverage.
 addopts = "-n auto --dist worksteal --cov=ode_filters --cov-report=term-missing --cov-fail-under=100"
 # Every warning fails the test. Ignore a dependency's warning here only when it
 # cannot be fixed on this side, with a comment saying why.
 filterwarnings = [
     "error",
-    # With a persistent compilation cache (JAX_COMPILATION_CACHE_DIR, as in CI),
-    # one xdist worker can read an entry that another is still writing. JAX then
-    # warns and compiles the function anew, so the result is unaffected.
-    "ignore:Error reading persistent compilation cache entry:UserWarning",
-    "ignore:Error writing persistent compilation cache entry:UserWarning",
     # The deprecated DiagonalCalibration(jacobian="ek0") stays tested until its
     # removal in 0.9; test_policies.py checks that it warns.
     'ignore:DiagonalCalibration\(jacobian="ek0"\):FutureWarning',
