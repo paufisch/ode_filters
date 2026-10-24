@@ -334,7 +334,7 @@ def test_informations_are_differentiable_with_noise_free_ode_rows():
     J = jax.random.normal(keys[0], (n_steps, d, d))
     b = jax.random.normal(keys[1], (n_steps, d, 1))
     H = np.concatenate(
-        [prior.prior_x.E1 - J @ prior.prior_x.E0, -b @ prior.prior_u.E0], axis=2
+        [prior.prior_x.E1[None] - J @ prior.prior_x.E0, -b @ prior.prior_u.E0], axis=2
     )
     c = jax.random.normal(keys[2], (n_steps, d))
     surrogate = AffineSurrogate(H, c, np.zeros((n_steps, d, d)))
